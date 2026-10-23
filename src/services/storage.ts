@@ -17,6 +17,7 @@ import {
   LeaveType,
   LeaveStatus,
   AssignmentStatus,
+  DailyAttendancePair,
 } from '../types';
 import { hashPassword, verifyPassword } from './crypto';
 
@@ -1229,6 +1230,40 @@ export function getAllAttendanceRecords(): AttendanceRecord[] {
 export function getAttendanceForUser(userId: string): AttendanceRecord[] {
   const records = getAllAttendanceRecords();
   return records.filter((r) => r.userId === userId).sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+}
+
+/**
+ * Mengelompokkan catatan presensi per tanggal & per pengguna
+ * sehingga setiap baris/hari memuat informasi lengkap Absen Masuk dan Absen Pulang
+ */
+export function groupAttendanceByDateAndUser(records: AttendanceRecord[]): DailyAttendancePair[] {
+  const map = new Map<string, DailyAttendancePair>();
+
+  for (const r of records) {
+    const key = `${r.date}_${r.userId}`;
+    if (!map.has(key)) {
+      map.set(key, {
+        date: r.date,
+        userId: r.userId,
+        userName: r.userName,
+        nip: r.nip,
+        role: r.role,
+      });
+    }
+    const item = map.get(key)!;
+    if (r.type === 'masuk') {
+      item.masukRecord = r;
+    } else if (r.type === 'pulang') {
+      item.pulangRecord = r;
+    }
+  }
+
+  return Array.from(map.values()).sort((a, b) => {
+    // Sort by date descending
+    const dateComp = b.date.localeCompare(a.date);
+    if (dateComp !== 0) return dateComp;
+    return a.userName.localeCompare(b.userName);
+  });
 }
 
 export function recordAttendance(

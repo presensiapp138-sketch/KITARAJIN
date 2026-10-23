@@ -18,9 +18,20 @@ import {
   ArrowRight,
   ClipboardList,
   Sparkles,
+  CheckCircle,
+  AlertCircle,
+  Calendar,
+  Eye,
+  X,
 } from 'lucide-react';
-import { User, UserRole } from '../../types';
-import { getAllUsers, getAuditLogs } from '../../services/storage';
+import { User, UserRole, DailyAttendancePair } from '../../types';
+import {
+  getAllUsers,
+  getAuditLogs,
+  getAttendanceForUser,
+  getAllAttendanceRecords,
+  groupAttendanceByDateAndUser,
+} from '../../services/storage';
 
 interface OverviewDashboardProps {
   currentUser: User;
@@ -38,6 +49,26 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     totalUsers: users.length,
     totalAdmins: users.filter((u) => u.role === 'admin').length,
     totalStaff: users.filter((u) => u.role === 'karyawan').length,
+  };
+
+  const todayStr = new Date().toISOString().split('T')[0];
+  const userRecords = getAttendanceForUser(currentUser.id);
+  const todayMasuk = userRecords.find((r) => r.date === todayStr && r.type === 'masuk');
+  const todayPulang = userRecords.find((r) => r.date === todayStr && r.type === 'pulang');
+
+  const displayRecords = currentUser.role === 'karyawan' ? userRecords : getAllAttendanceRecords();
+  const recentPairs = groupAttendanceByDateAndUser(displayRecords).slice(0, 5);
+  const [previewPhoto, setPreviewPhoto] = React.useState<{ url: string; title: string; subtitle: string } | null>(null);
+
+  const getWorkDuration = (masukTimestamp?: string, pulangTimestamp?: string) => {
+    if (!masukTimestamp || !pulangTimestamp) return null;
+    const tMasuk = new Date(masukTimestamp).getTime();
+    const tPulang = new Date(pulangTimestamp).getTime();
+    const diffMs = tPulang - tMasuk;
+    if (diffMs <= 0) return null;
+    const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    return `${diffHrs}j ${diffMins}m`;
   };
 
   return (
@@ -79,6 +110,218 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
             <strong>Aturan Presensi:</strong> Seluruh pengguna (Kepala Sekolah, Admin, dan Karyawan)
             wajib melakukan verifikasi wajah dan GPS saat masuk & pulang.
           </span>
+        </div>
+      </div>
+
+      {/* Status Presensi Hari Ini: DUA KARTU ABSEN MASUK & ABSEN PULANG */}
+      <div className="bg-white rounded-3xl border border-slate-200/80 p-5 sm:p-6 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-800">
+              <CalendarCheck className="w-4 h-4 text-emerald-600" />
+              <span>Presensi Hari Ini &bull; {new Date().toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</span>
+            </div>
+            <h2 className="text-base font-extrabold text-slate-900 mt-0.5">
+              Status Presensi Masuk &amp; Pulang Anda
+            </h2>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onNavigateTo('presensi')}
+            className="px-3.5 py-1.5 rounded-xl bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 text-xs font-bold flex items-center gap-1.5 transition-colors self-start sm:self-auto cursor-pointer"
+          >
+            <Camera className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Buka Kamera Presensi</span>
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* KARTU 1: ABSEN MASUK */}
+          <div
+            className={`p-4 rounded-2xl border transition-all ${
+              todayMasuk
+                ? 'bg-gradient-to-br from-emerald-50/70 to-white border-emerald-200/90'
+                : 'bg-amber-50/50 border-amber-200/70'
+            }`}
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-slate-200/60">
+              <div className="flex items-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full ${todayMasuk ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                <span className="font-extrabold text-xs text-slate-900 uppercase tracking-wider">
+                  1. Absen Masuk
+                </span>
+              </div>
+              {todayMasuk ? (
+                <span
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    todayMasuk.status === 'tepat_waktu'
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-amber-100 text-amber-800'
+                  }`}
+                >
+                  {todayMasuk.status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}
+                </span>
+              ) : (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800">
+                  Belum Presensi
+                </span>
+              )}
+            </div>
+
+            {todayMasuk ? (
+              <div className="mt-3 flex items-start gap-3">
+                {todayMasuk.photoRef ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPreviewPhoto({
+                        url: todayMasuk.photoRef,
+                        title: `Absen Masuk - ${currentUser.name}`,
+                        subtitle: `Hari Ini &bull; ${new Date(todayMasuk.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB`,
+                      })
+                    }
+                    className="relative group shrink-0 cursor-pointer"
+                    title="Klik untuk memperbesar foto wajah"
+                  >
+                    <img
+                      src={todayMasuk.photoRef}
+                      alt="Foto Masuk"
+                      className="w-14 h-14 rounded-xl object-cover border-2 border-emerald-300 shadow-2xs group-hover:opacity-85"
+                    />
+                    <div className="absolute inset-0 bg-black/30 rounded-xl opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white">
+                      <Eye className="w-3.5 h-3.5" />
+                    </div>
+                  </button>
+                ) : null}
+
+                <div className="space-y-1 text-xs flex-1">
+                  <div className="flex items-center gap-1.5 font-mono font-bold text-slate-900 text-sm">
+                    <Clock className="w-4 h-4 text-emerald-600" />
+                    <span>
+                      {new Date(todayMasuk.timestamp).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}{' '}
+                      WIB
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 flex items-center gap-1">
+                    <MapPin className="w-3 h-3 text-slate-400" />
+                    <span>Jarak: <strong>{todayMasuk.distanceFromLocationMeters}m</strong> (Sah)</span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 flex items-center gap-1">
+                    <Camera className="w-3 h-3 text-slate-400" />
+                    <span>Kecocokan Wajah: <strong className="text-emerald-700">{Math.round(todayMasuk.faceSimilarityScore * 100)}%</strong></span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 py-2 flex items-center justify-between">
+                <span className="text-xs text-amber-800 font-medium">Anda belum melakukan presensi masuk hari ini.</span>
+                <button
+                  type="button"
+                  onClick={() => onNavigateTo('presensi')}
+                  className="px-3 py-1 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Presensi Masuk
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* KARTU 2: ABSEN PULANG */}
+          <div
+            className={`p-4 rounded-2xl border transition-all ${
+              todayPulang
+                ? 'bg-gradient-to-br from-indigo-50/70 to-white border-indigo-200/90'
+                : 'bg-slate-50 border-slate-200'
+            }`}
+          >
+            <div className="flex items-center justify-between pb-2 border-b border-slate-200/60">
+              <div className="flex items-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full ${todayPulang ? 'bg-indigo-600' : 'bg-slate-400'}`} />
+                <span className="font-extrabold text-xs text-slate-900 uppercase tracking-wider">
+                  2. Absen Pulang
+                </span>
+              </div>
+              {todayPulang ? (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800">
+                  Pulang Sah
+                </span>
+              ) : (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">
+                  {todayMasuk ? 'Belum Pulang' : 'Menunggu Masuk'}
+                </span>
+              )}
+            </div>
+
+            {todayPulang ? (
+              <div className="mt-3 flex items-start gap-3">
+                {todayPulang.photoRef ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPreviewPhoto({
+                        url: todayPulang.photoRef,
+                        title: `Absen Pulang - ${currentUser.name}`,
+                        subtitle: `Hari Ini &bull; ${new Date(todayPulang.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB`,
+                      })
+                    }
+                    className="relative group shrink-0 cursor-pointer"
+                    title="Klik untuk memperbesar foto wajah"
+                  >
+                    <img
+                      src={todayPulang.photoRef}
+                      alt="Foto Pulang"
+                      className="w-14 h-14 rounded-xl object-cover border-2 border-indigo-300 shadow-2xs group-hover:opacity-85"
+                    />
+                    <div className="absolute inset-0 bg-black/30 rounded-xl opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white">
+                      <Eye className="w-3.5 h-3.5" />
+                    </div>
+                  </button>
+                ) : null}
+
+                <div className="space-y-1 text-xs flex-1">
+                  <div className="flex items-center gap-1.5 font-mono font-bold text-slate-900 text-sm">
+                    <Clock className="w-4 h-4 text-indigo-600" />
+                    <span>
+                      {new Date(todayPulang.timestamp).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}{' '}
+                      WIB
+                    </span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 flex items-center gap-1">
+                    <MapPin className="w-3 h-3 text-slate-400" />
+                    <span>Jarak: <strong>{todayPulang.distanceFromLocationMeters}m</strong> (Sah)</span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 flex items-center gap-1">
+                    <Camera className="w-3 h-3 text-slate-400" />
+                    <span>Kecocokan Wajah: <strong className="text-indigo-700">{Math.round(todayPulang.faceSimilarityScore * 100)}%</strong></span>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-3 py-2 flex items-center justify-between">
+                <span className="text-xs text-slate-500 font-medium">
+                  {todayMasuk
+                    ? 'Anda telah presensi masuk. Ingat lakukan presensi pulang di akhir jam kerja.'
+                    : 'Lakukan presensi masuk terlebih dahulu sebelum sesi pulang.'}
+                </span>
+                {todayMasuk && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigateTo('presensi')}
+                    className="px-3 py-1 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer shrink-0 ml-2"
+                  >
+                    Presensi Pulang
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -278,6 +521,262 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
           )}
         </div>
       </div>
+
+      {/* Riwayat Presensi Terbaru: PAIRED ABSEN MASUK & ABSEN PULANG */}
+      <div className="bg-white rounded-3xl border border-slate-200/80 p-5 sm:p-6 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          <div>
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-800">
+              <ClipboardList className="w-4 h-4 text-emerald-600" />
+              <span>Aktivitas Kehadiran Terakhir</span>
+            </div>
+            <h2 className="text-base font-extrabold text-slate-900 mt-0.5">
+              Riwayat Presensi Masuk &amp; Pulang Terbaru
+            </h2>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onNavigateTo('riwayat')}
+            className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center gap-2 transition-all self-start sm:self-auto cursor-pointer"
+          >
+            <span>Buka Semua Riwayat Presensi</span>
+            <ArrowRight className="w-3.5 h-3.5 text-slate-300" />
+          </button>
+        </div>
+
+        {recentPairs.length === 0 ? (
+          <div className="py-12 text-center text-slate-400 text-xs">
+            Belum ada catatan presensi yang tersimpan di sistem.
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {recentPairs.map((pair) => {
+              const hasMasuk = Boolean(pair.masukRecord);
+              const hasPulang = Boolean(pair.pulangRecord);
+              const duration = getWorkDuration(pair.masukRecord?.timestamp, pair.pulangRecord?.timestamp);
+
+              return (
+                <div
+                  key={`${pair.date}_${pair.userId}`}
+                  className="p-4 rounded-2xl border border-slate-200/80 bg-slate-50/50 hover:bg-slate-50 transition-colors space-y-3"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200/60">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-xs shrink-0">
+                        <Calendar className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <div className="font-bold text-slate-900 text-xs">
+                          {pair.date} &bull; <span className="text-slate-700">{pair.userName}</span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 font-mono">
+                          NIP: {pair.nip} &bull; <span className="capitalize">{pair.role.replace('_', ' ')}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 self-start sm:self-auto">
+                      {duration && (
+                        <span className="text-[10px] font-bold text-slate-600 bg-white px-2 py-0.5 rounded-lg border border-slate-200">
+                          Durasi: {duration}
+                        </span>
+                      )}
+                      <span
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                          hasMasuk && hasPulang
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : hasMasuk
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        {hasMasuk && hasPulang
+                          ? 'Selesai (Masuk & Pulang)'
+                          : hasMasuk
+                          ? 'Belum Absen Pulang'
+                          : 'Belum Presensi'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Dua Kolom Berdampingan: Absen Masuk & Pulang */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {/* Absen Masuk */}
+                    <div
+                      className={`p-3 rounded-xl border text-xs ${
+                        hasMasuk
+                          ? 'bg-emerald-50/60 border-emerald-200/80 text-emerald-950'
+                          : 'bg-white border-dashed border-slate-200 text-slate-400'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between font-bold text-[11px] mb-2">
+                        <span className="flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                          Absen Masuk
+                        </span>
+                        {hasMasuk && (
+                          <span
+                            className={`text-[9px] px-1.5 py-0.2 rounded font-semibold ${
+                              pair.masukRecord?.status === 'tepat_waktu'
+                                ? 'bg-emerald-200 text-emerald-900'
+                                : 'bg-amber-200 text-amber-900'
+                            }`}
+                          >
+                            {pair.masukRecord?.status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}
+                          </span>
+                        )}
+                      </div>
+
+                      {hasMasuk && pair.masukRecord ? (
+                        <div className="flex items-start gap-2.5">
+                          {pair.masukRecord.photoRef && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewPhoto({
+                                  url: pair.masukRecord!.photoRef,
+                                  title: `Absen Masuk - ${pair.userName}`,
+                                  subtitle: `${pair.date} &bull; ${new Date(pair.masukRecord!.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB`,
+                                })
+                              }
+                              className="shrink-0 group relative cursor-pointer"
+                              title="Klik untuk perbesar"
+                            >
+                              <img
+                                src={pair.masukRecord.photoRef}
+                                alt="Foto Masuk"
+                                className="w-11 h-11 rounded-xl object-cover border border-emerald-300 group-hover:opacity-85"
+                              />
+                            </button>
+                          )}
+                          <div className="text-[11px] space-y-0.5">
+                            <div className="font-bold font-mono">
+                              {new Date(pair.masukRecord.timestamp).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}{' '}
+                              WIB
+                            </div>
+                            <div className="text-slate-600 text-[10px]">
+                              Jarak: {pair.masukRecord.distanceFromLocationMeters}m &bull; Wajah: {Math.round(pair.masukRecord.faceSimilarityScore * 100)}%
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-slate-400 italic">Tidak ada presensi masuk</div>
+                      )}
+                    </div>
+
+                    {/* Absen Pulang */}
+                    <div
+                      className={`p-3 rounded-xl border text-xs ${
+                        hasPulang
+                          ? 'bg-indigo-50/60 border-indigo-200/80 text-indigo-950'
+                          : 'bg-white border-dashed border-slate-200 text-slate-400'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between font-bold text-[11px] mb-2">
+                        <span className="flex items-center gap-1.5">
+                          <span className={`w-2 h-2 rounded-full ${hasPulang ? 'bg-indigo-600' : 'bg-slate-300'}`} />
+                          Absen Pulang
+                        </span>
+                        {hasPulang ? (
+                          <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold bg-indigo-200 text-indigo-900">
+                            Pulang Sah
+                          </span>
+                        ) : (
+                          <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold bg-slate-200 text-slate-600">
+                            Belum Pulang
+                          </span>
+                        )}
+                      </div>
+
+                      {hasPulang && pair.pulangRecord ? (
+                        <div className="flex items-start gap-2.5">
+                          {pair.pulangRecord.photoRef && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewPhoto({
+                                  url: pair.pulangRecord!.photoRef,
+                                  title: `Absen Pulang - ${pair.userName}`,
+                                  subtitle: `${pair.date} &bull; ${new Date(pair.pulangRecord!.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB`,
+                                })
+                              }
+                              className="shrink-0 group relative cursor-pointer"
+                              title="Klik untuk perbesar"
+                            >
+                              <img
+                                src={pair.pulangRecord.photoRef}
+                                alt="Foto Pulang"
+                                className="w-11 h-11 rounded-xl object-cover border border-indigo-300 group-hover:opacity-85"
+                              />
+                            </button>
+                          )}
+                          <div className="text-[11px] space-y-0.5">
+                            <div className="font-bold font-mono">
+                              {new Date(pair.pulangRecord.timestamp).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}{' '}
+                              WIB
+                            </div>
+                            <div className="text-slate-600 text-[10px]">
+                              Jarak: {pair.pulangRecord.distanceFromLocationMeters}m &bull; Wajah: {Math.round(pair.pulangRecord.faceSimilarityScore * 100)}%
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-slate-400 italic">Belum melakukan presensi pulang</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Modal Preview Foto Snapshot */}
+      {previewPhoto && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-sm w-full overflow-hidden shadow-2xl border border-slate-100">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-slate-900 text-xs">{previewPhoto.title}</h3>
+                <p className="text-[10px] text-slate-500">{previewPhoto.subtitle}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewPhoto(null)}
+                className="p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 flex justify-center bg-slate-950">
+              <img
+                src={previewPhoto.url}
+                alt="Bukti Foto Presensi"
+                className="max-h-72 w-auto rounded-xl object-contain border border-slate-700"
+              />
+            </div>
+
+            <div className="p-3 bg-slate-50 text-right">
+              <button
+                type="button"
+                onClick={() => setPreviewPhoto(null)}
+                className="px-3.5 py-1.5 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

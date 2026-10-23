@@ -20,6 +20,7 @@ import { LocationManager } from './components/master/LocationManager';
 import { SettingsManager } from './components/master/SettingsManager';
 import { FaceRegistryManager } from './components/attendance/FaceRegistryManager';
 import { AttendanceSelfService } from './components/attendance/AttendanceSelfService';
+import { AttendanceHistoryView } from './components/attendance/AttendanceHistoryView';
 import { LeaveManager } from './components/operations/LeaveManager';
 import { AssignmentManager } from './components/operations/AssignmentManager';
 import { ReportManager } from './components/reports/ReportManager';
@@ -84,8 +85,15 @@ export default function App() {
         );
 
       case 'presensi':
+        return <AttendanceSelfService currentUser={currentUser} initialTab="presensi" />;
+
       case 'riwayat':
-        return <AttendanceSelfService currentUser={currentUser} />;
+        return (
+          <AttendanceHistoryView
+            currentUser={currentUser}
+            onNavigateTo={(menu) => setActiveMenuId(menu)}
+          />
+        );
 
       case 'database_wajah':
         // Perekaman & Database Wajah dapat diakses oleh Admin dan Kepala Sekolah

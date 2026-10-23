@@ -30,6 +30,7 @@ import {
   Department,
   UserRole,
   LeaveRequest,
+  DailyAttendancePair,
 } from '../../types';
 import {
   getAllAttendanceRecords,
@@ -38,6 +39,7 @@ import {
   getAllDepartments,
   getAllLeaveRequests,
   getAppSettings,
+  groupAttendanceByDateAndUser,
 } from '../../services/storage';
 
 interface ReportManagerProps {

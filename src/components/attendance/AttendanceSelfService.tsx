@@ -36,11 +36,13 @@ import {
   recordAttendance,
   getAttendanceForUser,
   getAppSettings,
+  groupAttendanceByDateAndUser,
 } from '../../services/storage';
 import { analyzeFaceFromCanvas, calculateFaceSimilarity } from '../../services/faceService';
 
 interface AttendanceSelfServiceProps {
   currentUser: User;
+  initialTab?: 'presensi' | 'riwayat';
 }
 
 // Rumus Haversine untuk kalkulasi jarak GPS
@@ -64,12 +66,16 @@ function calculateHaversineDistance(
   return Math.round(R * c);
 }
 
-export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({ currentUser }) => {
+export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
+  currentUser,
+  initialTab = 'presensi',
+}) => {
   const [attendanceType, setAttendanceType] = useState<AttendanceType>('masuk');
   const [activeLocation, setActiveLocation] = useState<LocationConfig | null>(null);
   const [userSchedule, setUserSchedule] = useState<Schedule | null>(null);
   const [userRecords, setUserRecords] = useState<AttendanceRecord[]>([]);
-  const [activeTab, setActiveTab] = useState<'presensi' | 'riwayat'>('presensi');
+  const [activeTab, setActiveTab] = useState<'presensi' | 'riwayat'>(initialTab);
+  const [previewPhoto, setPreviewPhoto] = useState<{ url: string; title: string } | null>(null);
 
   // GPS State
   const [deviceCoords, setDeviceCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
@@ -518,6 +524,63 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({ cu
           {/* Kolom Kiri: Kamera Live Viewport (7 Kolom) */}
           <div className="lg:col-span-7 space-y-4">
             <div className="bg-white rounded-3xl border border-slate-200/80 p-5 shadow-xs space-y-4">
+              {/* Ringkasan Status Presensi Hari Ini: Absen Masuk & Pulang */}
+              {(() => {
+                const todayIso = currentNow.toISOString().split('T')[0];
+                const recMasuk = userRecords.find((r) => r.date === todayIso && r.type === 'masuk');
+                const recPulang = userRecords.find((r) => r.date === todayIso && r.type === 'pulang');
+
+                return (
+                  <div className="grid grid-cols-2 gap-3 p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 text-xs">
+                    {/* Status Absen Masuk */}
+                    <div className="space-y-1">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                        Absen Masuk Hari Ini
+                      </span>
+                      {recMasuk ? (
+                        <div className="flex items-center gap-1.5 text-emerald-800 font-bold">
+                          <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span className="font-mono">
+                            {new Date(recMasuk.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB
+                          </span>
+                          <span className="text-[10px] px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded font-normal">
+                            {recMasuk.status === 'tepat_waktu' ? 'Tepat' : 'Terlambat'}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-slate-500 font-medium">
+                          <Clock className="w-4 h-4 text-slate-400 shrink-0" />
+                          <span>Belum Absen Masuk</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Status Absen Pulang */}
+                    <div className="space-y-1 pl-3 border-l border-slate-200">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                        Absen Pulang Hari Ini
+                      </span>
+                      {recPulang ? (
+                        <div className="flex items-center gap-1.5 text-indigo-800 font-bold">
+                          <CheckCircle className="w-4 h-4 text-indigo-600 shrink-0" />
+                          <span className="font-mono">
+                            {new Date(recPulang.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB
+                          </span>
+                          <span className="text-[10px] px-1.5 py-0.2 bg-indigo-100 text-indigo-800 rounded font-normal">
+                            Sah
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-slate-500 font-medium">
+                          <Clock className="w-4 h-4 text-slate-400 shrink-0" />
+                          <span>Belum Absen Pulang</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="flex items-center justify-between">
                 {/* Selector: Masuk vs Pulang */}
                 <div className="flex items-center bg-slate-100 p-1 rounded-2xl border border-slate-200">
@@ -855,58 +918,201 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({ cu
               Belum ada riwayat presensi yang tercatat untuk akun Anda.
             </div>
           ) : (
-            <div className="divide-y divide-slate-100">
-              {userRecords.map((rec) => (
-                <div key={rec.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-start gap-3">
-                    {rec.photoRef ? (
-                      <img
-                        src={rec.photoRef}
-                        alt="Foto Presensi"
-                        className="w-12 h-12 rounded-xl object-cover border border-slate-200 shadow-2xs"
-                      />
-                    ) : (
-                      <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center text-slate-400">
-                        <Camera className="w-5 h-5" />
-                      </div>
-                    )}
+            <div className="space-y-4">
+              {groupAttendanceByDateAndUser(userRecords).map((pair) => {
+                const hasMasuk = Boolean(pair.masukRecord);
+                const hasPulang = Boolean(pair.pulangRecord);
 
-                    <div>
+                return (
+                  <div
+                    key={pair.date}
+                    className="p-4 rounded-2xl border border-slate-200/80 bg-slate-50/50 space-y-3"
+                  >
+                    <div className="flex items-center justify-between pb-2 border-b border-slate-200/60">
                       <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-900 text-sm capitalize">
-                          Presensi {rec.type}
-                        </span>
-                        <span
-                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                            rec.status === 'tepat_waktu'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {rec.status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}
-                        </span>
+                        <span className="font-bold text-slate-900 text-xs">{pair.date}</span>
+                        {pair.date === currentNow.toISOString().split('T')[0] && (
+                          <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-100 text-emerald-800">
+                            Hari Ini
+                          </span>
+                        )}
                       </div>
-                      <div className="text-xs text-slate-500 mt-0.5">
-                        {rec.date} &bull; {new Date(rec.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB
+                      <span className="text-[10px] font-bold text-slate-600 bg-white px-2 py-0.5 rounded-md border border-slate-200">
+                        {hasMasuk && hasPulang
+                          ? 'Selesai (Masuk & Pulang)'
+                          : hasMasuk
+                          ? 'Belum Absen Pulang'
+                          : 'Belum Presensi'}
+                      </span>
+                    </div>
+
+                    {/* DUA KOLOM BERDAMPINGAN: ABSEN MASUK & ABSEN PULANG */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {/* Absen Masuk */}
+                      <div
+                        className={`p-3 rounded-xl border text-xs ${
+                          hasMasuk
+                            ? 'bg-emerald-50/70 border-emerald-200 text-emerald-950'
+                            : 'bg-white border-dashed border-slate-200 text-slate-400'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between font-bold text-[11px] mb-2">
+                          <span className="flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                            Absen Masuk
+                          </span>
+                          {hasMasuk && (
+                            <span
+                              className={`text-[9px] px-1.5 py-0.2 rounded font-semibold ${
+                                pair.masukRecord?.status === 'tepat_waktu'
+                                  ? 'bg-emerald-200 text-emerald-900'
+                                  : 'bg-amber-200 text-amber-900'
+                              }`}
+                            >
+                              {pair.masukRecord?.status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}
+                            </span>
+                          )}
+                        </div>
+
+                        {hasMasuk && pair.masukRecord ? (
+                          <div className="flex items-start gap-2.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewPhoto({
+                                  url: pair.masukRecord!.photoRef,
+                                  title: `Foto Absen Masuk - ${pair.date}`,
+                                })
+                              }
+                              className="shrink-0 group relative cursor-pointer"
+                              title="Klik untuk perbesar"
+                            >
+                              <img
+                                src={pair.masukRecord.photoRef}
+                                alt="Foto Masuk"
+                                className="w-12 h-12 rounded-xl object-cover border border-emerald-300 group-hover:opacity-85"
+                              />
+                            </button>
+                            <div className="text-[11px] space-y-0.5">
+                              <div className="font-bold font-mono">
+                                {new Date(pair.masukRecord.timestamp).toLocaleTimeString([], {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}{' '}
+                                WIB
+                              </div>
+                              <div className="text-slate-600 text-[10px]">
+                                Jarak: {pair.masukRecord.distanceFromLocationMeters}m &bull; Wajah:{' '}
+                                {Math.round(pair.masukRecord.faceSimilarityScore * 100)}%
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="py-2 text-center text-[11px] text-slate-400">
+                            Belum absen masuk
+                          </div>
+                        )}
                       </div>
-                      <div className="text-[11px] text-slate-400 flex items-center gap-2 mt-1">
-                        <span>Jarak: {rec.distanceFromLocationMeters}m</span>
-                        <span>&bull;</span>
-                        <span>Kecocokan Wajah: {Math.round(rec.faceSimilarityScore * 100)}%</span>
+
+                      {/* Absen Pulang */}
+                      <div
+                        className={`p-3 rounded-xl border text-xs ${
+                          hasPulang
+                            ? 'bg-indigo-50/70 border-indigo-200 text-indigo-950'
+                            : 'bg-white border-dashed border-slate-200 text-slate-400'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between font-bold text-[11px] mb-2">
+                          <span className="flex items-center gap-1.5">
+                            <span className={`w-2 h-2 rounded-full ${hasPulang ? 'bg-indigo-600' : 'bg-slate-300'}`} />
+                            Absen Pulang
+                          </span>
+                          {hasPulang && (
+                            <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold bg-indigo-200 text-indigo-900">
+                              Pulang Sah
+                            </span>
+                          )}
+                        </div>
+
+                        {hasPulang && pair.pulangRecord ? (
+                          <div className="flex items-start gap-2.5">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewPhoto({
+                                  url: pair.pulangRecord!.photoRef,
+                                  title: `Foto Absen Pulang - ${pair.date}`,
+                                })
+                              }
+                              className="shrink-0 group relative cursor-pointer"
+                              title="Klik untuk perbesar"
+                            >
+                              <img
+                                src={pair.pulangRecord.photoRef}
+                                alt="Foto Pulang"
+                                className="w-12 h-12 rounded-xl object-cover border border-indigo-300 group-hover:opacity-85"
+                              />
+                            </button>
+                            <div className="text-[11px] space-y-0.5">
+                              <div className="font-bold font-mono">
+                                {new Date(pair.pulangRecord.timestamp).toLocaleTimeString([], {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}{' '}
+                                WIB
+                              </div>
+                              <div className="text-slate-600 text-[10px]">
+                                Jarak: {pair.pulangRecord.distanceFromLocationMeters}m &bull; Wajah:{' '}
+                                {Math.round(pair.pulangRecord.faceSimilarityScore * 100)}%
+                              </div>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="py-2 text-center text-[11px] text-slate-400">
+                            Belum absen pulang
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
-
-                  <div className="text-right sm:self-center">
-                    <span className="inline-flex items-center gap-1 text-emerald-700 text-xs font-semibold">
-                      <FileCheck className="w-3.5 h-3.5" />
-                      Tercatat Sah
-                    </span>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Modal Preview Foto Wajah */}
+      {previewPhoto && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-sm w-full overflow-hidden shadow-2xl border border-slate-100">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+              <h3 className="font-bold text-slate-900 text-xs">{previewPhoto.title}</h3>
+              <button
+                type="button"
+                onClick={() => setPreviewPhoto(null)}
+                className="p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 bg-slate-950 flex justify-center">
+              <img
+                src={previewPhoto.url}
+                alt="Foto Bukti"
+                className="max-h-72 rounded-2xl object-contain border border-slate-700"
+              />
+            </div>
+            <div className="p-3 bg-slate-50 text-right">
+              <button
+                type="button"
+                onClick={() => setPreviewPhoto(null)}
+                className="px-3 py-1.5 bg-slate-900 text-white rounded-xl text-xs font-bold"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

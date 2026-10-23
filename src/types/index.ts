@@ -105,6 +105,17 @@ export interface AttendanceRecord {
   notes?: string;
 }
 
+// Pasangan Riwayat Presensi Harian (Absen Masuk & Pulang)
+export interface DailyAttendancePair {
+  date: string; // 'YYYY-MM-DD'
+  userId: string;
+  userName: string;
+  nip: string;
+  role: UserRole;
+  masukRecord?: AttendanceRecord;
+  pulangRecord?: AttendanceRecord;
+}
+
 // 7. LeaveRequests Table Schema (Pengajuan Izin, Sakit, Dinas)
 export interface LeaveRequest {
   id: string;
