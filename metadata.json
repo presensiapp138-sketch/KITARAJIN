@@ -1,0 +1,9 @@
+{
+  "name": "KITARAJIN - Sistem Presensi & Penugasan Sekolah",
+  "description": "Aplikasi presensi kehadiran berbasis verifikasi wajah dan GPS serta manajemen penugasan untuk Kepala Sekolah, Admin, dan Karyawan/Tendik.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
