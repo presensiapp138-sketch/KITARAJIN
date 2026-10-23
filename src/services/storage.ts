@@ -432,7 +432,7 @@ export function getAuditLogs(): AuditLog[] {
 }
 
 /**
- * Mencatat aktivitas ke tabel AuditLogs (Tahap 3 & 7)
+ * Mencatat aktivitas ke tabel AuditLogs
  */
 export function logAuditAction(
   actor: User,
@@ -973,8 +973,9 @@ export function createLocation(
     address: string;
   }
 ): { success: boolean; location?: LocationConfig; message: string } {
-  if (actor.role === 'karyawan') {
-    return { success: false, message: 'Karyawan tidak memiliki wewenang mengatur lokasi presensi.' };
+  // Hanya Kepala Sekolah yang berwenang mengatur lokasi & radius
+  if (actor.role !== 'kepala_sekolah') {
+    return { success: false, message: 'Hanya Kepala Sekolah yang memiliki wewenang mengatur lokasi dan radius presensi.' };
   }
 
   const locations = getAllLocations();
@@ -1007,8 +1008,9 @@ export function updateLocation(
   id: string,
   data: Partial<Omit<LocationConfig, 'id'>>
 ): { success: boolean; message: string } {
-  if (actor.role === 'karyawan') {
-    return { success: false, message: 'Karyawan tidak memiliki wewenang.' };
+  // Hanya Kepala Sekolah yang berwenang mengatur lokasi & radius
+  if (actor.role !== 'kepala_sekolah') {
+    return { success: false, message: 'Hanya Kepala Sekolah yang memiliki wewenang mengubah lokasi presensi.' };
   }
 
   const locations = getAllLocations();
@@ -1038,8 +1040,9 @@ export function updateLocation(
 }
 
 export function deleteLocation(actor: User, id: string): { success: boolean; message: string } {
-  if (actor.role === 'karyawan') {
-    return { success: false, message: 'Karyawan tidak memiliki wewenang.' };
+  // Hanya Kepala Sekolah yang berwenang menghapus lokasi
+  if (actor.role !== 'kepala_sekolah') {
+    return { success: false, message: 'Hanya Kepala Sekolah yang memiliki wewenang menghapus lokasi presensi.' };
   }
 
   const locations = getAllLocations();
@@ -1124,11 +1127,11 @@ export function registerOrUpdateFace(
     qualityScore: number;
   }
 ): { success: boolean; item?: FaceRegistryItem; message: string } {
-  // Hanya Kepala Sekolah yang berwenang
-  if (actor.role !== 'kepala_sekolah') {
+  // Admin dan Kepala Sekolah berwenang mengelola perekaman & database wajah
+  if (actor.role !== 'kepala_sekolah' && actor.role !== 'admin') {
     return {
       success: false,
-      message: 'Hanya Kepala Sekolah yang memiliki wewenang mengelola Database Wajah civitas sekolah.',
+      message: 'Hanya Admin atau Kepala Sekolah yang memiliki wewenang mengelola Perekaman & Database Wajah.',
     };
   }
 
@@ -1169,7 +1172,7 @@ export function registerOrUpdateFace(
     'REGISTER_FACE',
     'FaceRegistry',
     registryItem.id,
-    `Mendaftarkan data biometrik wajah untuk ${targetUser.name} (${targetUser.role}, NIP: ${targetUser.nip}).`
+    `Mendaftarkan data biometrik wajah untuk ${targetUser.name} (${targetUser.role}, NIP: ${targetUser.nip}) oleh ${actor.name} (${actor.role}).`
   );
 
   return {
@@ -1180,8 +1183,8 @@ export function registerOrUpdateFace(
 }
 
 export function toggleFaceStatus(actor: User, registryId: string): { success: boolean; message: string } {
-  if (actor.role !== 'kepala_sekolah') {
-    return { success: false, message: 'Hanya Kepala Sekolah yang berwenang.' };
+  if (actor.role !== 'kepala_sekolah' && actor.role !== 'admin') {
+    return { success: false, message: 'Hanya Admin atau Kepala Sekolah yang berwenang.' };
   }
 
   const registry = getAllFaceRegistry();
@@ -1199,8 +1202,8 @@ export function toggleFaceStatus(actor: User, registryId: string): { success: bo
 }
 
 export function deleteFaceRegistry(actor: User, registryId: string): { success: boolean; message: string } {
-  if (actor.role !== 'kepala_sekolah') {
-    return { success: false, message: 'Hanya Kepala Sekolah yang berwenang.' };
+  if (actor.role !== 'kepala_sekolah' && actor.role !== 'admin') {
+    return { success: false, message: 'Hanya Admin atau Kepala Sekolah yang berwenang.' };
   }
 
   const registry = getAllFaceRegistry();
@@ -1245,6 +1248,45 @@ export function recordAttendance(
       success: false,
       message: `Anda sudah melakukan presensi ${recordData.type.toUpperCase()} hari ini pada pukul ${timeFormatted} WIB.`,
     };
+  }
+
+  // Validasi ketat aturan jam presensi sesuai jadwal aktif user
+  const users = getAllUsers();
+  const user = users.find((u) => u.id === recordData.userId);
+  const schedules = getAllSchedules();
+  const schedule = (user?.scheduleId ? schedules.find((s) => s.id === user.scheduleId) : null) || schedules[0];
+
+  if (schedule) {
+    const now = new Date();
+    const curTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    if (recordData.type === 'masuk') {
+      if (curTime < schedule.checkInStart) {
+        return {
+          success: false,
+          message: `Presensi MASUK belum dibuka. Jadwal presensi masuk baru dibuka pukul ${schedule.checkInStart} WIB (Waktu sekarang: ${curTime} WIB).`,
+        };
+      }
+      if (curTime >= schedule.checkOutStart) {
+        return {
+          success: false,
+          message: `Waktu presensi MASUK sudah ditutup. Saat ini sudah memasuki jam kepulangan (mulai ${schedule.checkOutStart} WIB).`,
+        };
+      }
+    } else if (recordData.type === 'pulang') {
+      if (curTime < schedule.checkOutStart) {
+        return {
+          success: false,
+          message: `Presensi PULANG belum dibuka. Jam presensi pulang baru dibuka pukul ${schedule.checkOutStart} WIB (Waktu sekarang: ${curTime} WIB).`,
+        };
+      }
+      if (schedule.checkOutEnd && curTime > schedule.checkOutEnd) {
+        return {
+          success: false,
+          message: `Batas waktu presensi PULANG telah berakhir pada pukul ${schedule.checkOutEnd} WIB (Waktu sekarang: ${curTime} WIB).`,
+        };
+      }
+    }
   }
 
   const newRecord: AttendanceRecord = {

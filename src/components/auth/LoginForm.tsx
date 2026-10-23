@@ -23,10 +23,9 @@ import { User as UserType } from '../../types';
 
 interface LoginFormProps {
   onLoginSuccess: (user: UserType) => void;
-  onExploreDesignDocs?: () => void;
 }
 
-export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess, onExploreDesignDocs }) => {
+export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -204,18 +203,6 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess, onExploreD
               </button>
             </div>
           </div>
-
-          {onExploreDesignDocs && (
-            <div className="mt-4 text-center">
-              <button
-                type="button"
-                onClick={onExploreDesignDocs}
-                className="text-xs text-emerald-600 hover:text-emerald-700 font-semibold"
-              >
-                &larr; Lihat Kembali Spesifikasi Desain Tahap 2
-              </button>
-            </div>
-          )}
         </div>
       </div>
     </div>

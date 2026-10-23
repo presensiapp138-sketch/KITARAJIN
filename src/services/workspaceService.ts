@@ -28,7 +28,7 @@ import {
 } from './storage';
 import { User } from '../types';
 
-// Inisialisasi Firebase App secara aman (reuse jika sudah pernah ada)
+// Inisialisasi Firebase App secara aman
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 
@@ -41,7 +41,7 @@ provider.setCustomParameters({
   access_type: 'offline',
 });
 
-// Cache token di memori (tidak di localStorage demi keamanan)
+// Cache token di memori
 let cachedAccessToken: string | null = null;
 let cachedGoogleUser: FirebaseUser | null = null;
 let isSigningIn = false;
@@ -56,7 +56,6 @@ export const initAuth = (
       if (cachedAccessToken) {
         if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
       } else if (!isSigningIn) {
-        // Token mungkin perlu diambil ulang lewat interaksi pengguna
         if (onAuthFailure) onAuthFailure();
       }
     } else {
@@ -76,7 +75,7 @@ export const signInWithGoogle = async (): Promise<{
     const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
-      throw new Error('Gagal mendapatkan token akses dari Google.');
+      throw new Error('Gagal memperoleh token akses dari Google.');
     }
     cachedAccessToken = credential.accessToken;
     cachedGoogleUser = result.user;
@@ -103,6 +102,21 @@ export const signOutGoogle = async (): Promise<void> => {
   cachedGoogleUser = null;
 };
 
+/**
+ * Pembersih ID Google Spreadsheet / Folder Drive dari URL lengkap
+ */
+export const cleanGoogleId = (val: string): string => {
+  if (!val) return '';
+  const trimmed = val.trim();
+  const sheetMatch = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  if (sheetMatch) return sheetMatch[1];
+  const dMatch = trimmed.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (dMatch) return dMatch[1];
+  const folderMatch = trimmed.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  if (folderMatch) return folderMatch[1];
+  return trimmed.split('?')[0].split('#')[0];
+};
+
 // ==========================================
 // Struktur 10 Tabel KITARAJIN
 // ==========================================
@@ -127,29 +141,31 @@ export const TAB_DEFINITIONS = [
   },
   {
     name: 'Departments',
-    headers: ['ID', 'Kode', 'Nama Departemen', 'Deskripsi', 'Total Anggota', 'Dibuat'],
+    headers: ['ID', 'Kode', 'Nama Departemen', 'Deskripsi', 'Kepala Divisi', 'Dibuat'],
     getData: () =>
-      getAllDepartments().map((d) => [d.id, d.code, d.name, d.description, d.memberCount || 0, d.createdAt]),
+      getAllDepartments().map((d) => [d.id, d.code, d.name, d.description || '', d.headName || '', d.createdAt]),
   },
   {
     name: 'Schedules',
-    headers: ['ID', 'Nama Jadwal', 'Jam Mulai Masuk', 'Jam Selesai Masuk', 'Toleransi Terlambat (Mnt)', 'Jam Mulai Pulang', 'Jam Selesai Pulang', 'Hari Kerja', 'Dibuat'],
+    headers: ['ID', 'Nama Jadwal', 'Sesi', 'Target Role', 'Buka Masuk', 'Batas Masuk', 'Toleransi (Mnt)', 'Mulai Pulang', 'Batas Pulang', 'Hari Kerja', 'Status'],
     getData: () =>
       getAllSchedules().map((s) => [
         s.id,
         s.name,
+        s.sessionName || '',
+        s.targetRole || 'semua',
         s.checkInStart,
-        s.checkInEnd,
+        s.checkInDeadline,
         s.lateToleranceMinutes,
         s.checkOutStart,
-        s.checkOutEnd,
+        s.checkOutEnd || '',
         (s.workDays || []).join(', '),
-        s.createdAt,
+        s.isActive ? 'AKTIF' : 'NONAKTIF',
       ]),
   },
   {
     name: 'Locations',
-    headers: ['ID', 'Nama Lokasi', 'Latitude', 'Longitude', 'Radius (Meter)', 'Alamat', 'Status Aktif', 'Dibuat'],
+    headers: ['ID', 'Nama Lokasi', 'Latitude', 'Longitude', 'Radius (Meter)', 'Alamat', 'Status Aktif'],
     getData: () =>
       getAllLocations().map((l) => [
         l.id,
@@ -159,71 +175,79 @@ export const TAB_DEFINITIONS = [
         l.radiusMeters,
         l.address,
         l.isActive ? 'AKTIF' : 'NONAKTIF',
-        l.createdAt,
       ]),
   },
   {
     name: 'FaceRegistry',
-    headers: ['ID', 'User ID', 'Nama Pengguna', 'Status Registrasi', 'Panjang Fitur Vektor', 'Terdaftar Pada'],
+    headers: ['ID', 'User ID', 'NIP', 'Nama Pengguna', 'Peran', 'Kamera', 'Skor Kualitas', 'Pendaftar', 'Status'],
     getData: () =>
       getAllFaceRegistry().map((f) => [
         f.id,
         f.userId,
+        f.nip,
         f.userName,
-        f.isRegistered ? 'TERDAFTAR' : 'BELUM',
-        f.faceFeatures ? f.faceFeatures.length : 0,
-        f.registeredAt,
+        f.role,
+        f.cameraUsed,
+        f.qualityScore,
+        f.registeredBy,
+        f.isActive ? 'AKTIF' : 'NONAKTIF',
       ]),
   },
   {
     name: 'Attendance',
-    headers: ['ID', 'User ID', 'Nama', 'Departemen', 'Tanggal', 'Tipe Presensi', 'Waktu', 'Status', 'Jarak GPS (Meter)', 'Skor Wajah (%)', 'Catatan'],
+    headers: ['ID', 'User ID', 'NIP', 'Nama', 'Peran', 'Tanggal', 'Tipe', 'Waktu', 'Status', 'Jarak GPS (M)', 'Lokasi Valid', 'Wajah Valid', 'Skor Wajah (%)', 'Catatan'],
     getData: () =>
       getAllAttendanceRecords().map((a) => [
         a.id,
         a.userId,
+        a.nip,
         a.userName,
-        a.departmentName || '',
+        a.role,
         a.date,
-        a.type === 'in' ? 'MASUK' : 'PULANG',
+        a.type.toUpperCase(),
         a.timestamp,
         a.status,
-        a.gpsDistanceMeters !== undefined ? Math.round(a.gpsDistanceMeters) : '',
-        a.faceMatchScore !== undefined ? Math.round(a.faceMatchScore * 100) : '',
+        Math.round(a.distanceFromLocationMeters),
+        a.isLocationValid ? 'VALID' : 'LUAR RADIUS',
+        a.isFaceValid ? 'VALID' : 'TIDAK COCOK',
+        Math.round(a.faceSimilarityScore * 100),
         a.notes || '',
       ]),
   },
   {
     name: 'LeaveRequests',
-    headers: ['ID', 'User ID', 'Nama', 'Tipe Cuti/Izin', 'Mulai', 'Selesai', 'Alasan', 'Status', 'Disetujui Oleh', 'Catatan Review', 'Diajukan Pada'],
+    headers: ['ID', 'User ID', 'NIP', 'Nama', 'Tipe Izin', 'Mulai', 'Selesai', 'Durasi (Hari)', 'Alasan', 'Status', 'Direview Oleh', 'Catatan Review', 'Waktu Pengajuan'],
     getData: () =>
       getAllLeaveRequests().map((l) => [
         l.id,
         l.userId,
+        l.nip,
         l.userName,
-        l.leaveType,
+        l.type,
         l.startDate,
         l.endDate,
+        l.durationDays,
         l.reason,
         l.status,
-        l.approvedByName || '',
+        l.reviewedBy || '',
         l.reviewNotes || '',
         l.createdAt,
       ]),
   },
   {
     name: 'Assignments',
-    headers: ['ID', 'Judul Penugasan', 'Deskripsi', 'Lokasi Target', 'Ditugaskan Kepada', 'Batas Waktu', 'Status', 'Foto Bukti Geotag', 'Dibuat'],
+    headers: ['ID', 'Judul Penugasan', 'Deskripsi', 'Ditugaskan Kepada', 'Pemberi Tugas', 'Batas Waktu', 'Status', 'Foto Bukti Geotag', 'Catatan', 'Dibuat'],
     getData: () =>
       getAllAssignments().map((asg) => [
         asg.id,
         asg.title,
         asg.description,
-        asg.targetLocationName || '',
-        (asg.assignedUserNames || []).join(', '),
-        asg.deadline,
+        asg.assignedToName,
+        asg.assignedByName,
+        asg.dueDate,
         asg.status,
-        asg.documentationPhoto ? 'ADA BUKTI FOTO' : 'BELUM ADA',
+        asg.documentationPhotoRef ? 'ADA FOTO BUKTI' : 'BELUM ADA',
+        asg.documentationNotes || '',
         asg.createdAt,
       ]),
   },
@@ -238,14 +262,14 @@ export const TAB_DEFINITIONS = [
         log.actorRole,
         log.action,
         log.targetEntity,
-        log.targetId,
+        log.targetId || '',
         log.details,
         log.timestamp,
       ]),
   },
   {
     name: 'Settings',
-    headers: ['Nama Sekolah', 'Alamat Sekolah', 'Judul Aplikasi', 'Ambang Wajah (%)', 'Ketat GPS', 'Ketat Wajah', 'Mode Penyimpanan', 'ID Spreadsheet', 'ID Folder Drive', 'Terakhir Diperbarui'],
+    headers: ['Nama Sekolah', 'Alamat Sekolah', 'Judul Aplikasi', 'Ambang Wajah (%)', 'Ketat GPS', 'Ketat Wajah', 'Mode Penyimpanan', 'ID Spreadsheet', 'ID Folder Drive', 'Sinkron Terakhir'],
     getData: () => {
       const s = getAppSettings();
       return [
@@ -259,7 +283,7 @@ export const TAB_DEFINITIONS = [
           s.storageMode,
           s.googleSheetSpreadsheetId || '',
           s.googleDriveFolderId || '',
-          s.updatedAt,
+          s.lastSyncTimestamp || new Date().toISOString(),
         ],
       ];
     },
@@ -281,16 +305,51 @@ export interface CreateDatabaseResult {
 }
 
 /**
+ * Buat Folder khusus di Google Drive untuk foto presensi & berkas tugas
+ */
+export async function createGoogleDriveFolder(
+  accessToken: string,
+  schoolName: string
+): Promise<{ folderId: string; folderUrl: string }> {
+  const folderName = `KITARAJIN - Berkas Presensi & Foto (${schoolName})`;
+
+  const res = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      name: folderName,
+      mimeType: 'application/vnd.google-apps.folder',
+      description: 'Folder penyimpanan foto presensi, verifikasi wajah, dan bukti penugasan sekolah aplikasi KITARAJIN',
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error?.message || `Gagal membuat folder di Google Drive (${res.status})`);
+  }
+
+  const data = await res.json();
+  const folderId = data.id;
+  const folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
+
+  return { folderId, folderUrl };
+}
+
+/**
  * Buat Spreadsheet baru di Google Sheets dengan 10 tab
  */
 export async function createGoogleSpreadsheetWithTabs(
   accessToken: string,
-  schoolName: string
+  schoolName: string,
+  parentFolderId?: string
 ): Promise<{ spreadsheetId: string; spreadsheetUrl: string }> {
   const title = `KITARAJIN - Database Presensi (${schoolName})`;
-  const sheetsPayload = TAB_DEFINITIONS.map((tab, idx) => ({
+  // Biarkan Google Sheets menugaskan sheetId secara otomatis agar tidak terjadi tabrakan
+  const sheetsPayload = TAB_DEFINITIONS.map((tab) => ({
     properties: {
-      sheetId: idx + 1,
       title: tab.name,
       gridProperties: {
         frozenRowCount: 1,
@@ -319,14 +378,32 @@ export async function createGoogleSpreadsheetWithTabs(
   const spreadsheetId = data.spreadsheetId;
   const spreadsheetUrl = data.spreadsheetUrl || `https://docs.google.com/spreadsheets/d/${spreadsheetId}`;
 
-  // Sekarang isi setiap tab dengan header dan data awal
+  // Jika ada folder tujuan, pindahkan file spreadsheet ke dalam folder Google Drive tersebut
+  if (parentFolderId) {
+    try {
+      await fetch(
+        `https://www.googleapis.com/drive/v3/files/${spreadsheetId}?addParents=${parentFolderId}&fields=id,parents`,
+        {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+    } catch (e) {
+      console.warn('Gagal memindahkan spreadsheet ke folder:', e);
+    }
+  }
+
+  // Isi setiap tab dengan header dan data awal
   await writeAllTabsData(accessToken, spreadsheetId);
 
   return { spreadsheetId, spreadsheetUrl };
 }
 
 /**
- * Buat atau lengkapi 10 tab pada Spreadsheet yang sudah ada (berdasarkan ID yang ditempel user)
+ * Buat atau lengkapi 10 tab pada Spreadsheet yang sudah ada
  */
 export async function ensureSpreadsheetHas10Tabs(
   accessToken: string,
@@ -402,7 +479,7 @@ export async function writeAllTabsData(accessToken: string, spreadsheetId: strin
   const valueRanges = TAB_DEFINITIONS.map((tab) => {
     const rows = [tab.headers, ...tab.getData()];
     return {
-      range: `${tab.name}!A1`,
+      range: `'${tab.name}'!A1`,
       values: rows,
     };
   });
@@ -429,74 +506,36 @@ export async function writeAllTabsData(accessToken: string, spreadsheetId: strin
 }
 
 /**
- * Buat Folder khusus di Google Drive untuk foto presensi & berkas tugas
- */
-export async function createGoogleDriveFolder(
-  accessToken: string,
-  schoolName: string
-): Promise<{ folderId: string; folderUrl: string }> {
-  const folderName = `KITARAJIN - Berkas Presensi & Foto (${schoolName})`;
-
-  const res = await fetch('https://www.googleapis.com/drive/v3/files', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      name: folderName,
-      mimeType: 'application/vnd.google-apps.folder',
-      description: 'Folder penyimpanan foto presensi, verifikasi wajah, dan bukti penugasan sekolah aplikasi KITARAJIN',
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error?.message || 'Gagal membuat folder di Google Drive.');
-  }
-
-  const data = await res.json();
-  const folderId = data.id;
-  const folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
-
-  return { folderId, folderUrl };
-}
-
-/**
  * Eksekusi Pembuatan Lengkap Otomatis (Drive + Sheets 10 Tab)
  */
 export async function executeAutoCreateDatabase(
   currentUser: User,
   customSheetId?: string,
-  customDriveId?: string
+  customDriveId?: string,
+  onStepProgress?: (step: string) => void
 ): Promise<CreateDatabaseResult> {
-  const token = await getAccessToken();
+  let token = await getAccessToken();
   if (!token) {
-    throw new Error('Anda belum masuk dengan akun Google atau sesi telah berakhir. Silakan login terlebih dahulu.');
+    if (onStepProgress) onStepProgress('Menghubungkan akun Google...');
+    const authResult = await signInWithGoogle();
+    if (!authResult) {
+      throw new Error('Autentikasi Google diperlukan untuk membuat database di Google Drive & Sheets.');
+    }
+    token = authResult.accessToken;
   }
 
   const settings = getAppSettings();
   const schoolName = settings.schoolName || 'Sekolah';
 
-  let spreadsheetId = customSheetId?.trim() || settings.googleSheetSpreadsheetId;
+  let spreadsheetId = cleanGoogleId(customSheetId?.trim() || settings.googleSheetSpreadsheetId || '');
   let spreadsheetUrl = '';
-  let folderId = customDriveId?.trim() || settings.googleDriveFolderId;
+  let folderId = cleanGoogleId(customDriveId?.trim() || settings.googleDriveFolderId || '');
   let folderUrl = '';
   const tabsCreated: string[] = TAB_DEFINITIONS.map((t) => t.name);
 
-  // 1. Google Sheets: Buat baru atau tambahkan 10 tab ke ID yang ditempel
-  if (spreadsheetId) {
-    const res = await ensureSpreadsheetHas10Tabs(token, spreadsheetId);
-    spreadsheetId = res.spreadsheetId;
-    spreadsheetUrl = res.spreadsheetUrl;
-  } else {
-    const res = await createGoogleSpreadsheetWithTabs(token, schoolName);
-    spreadsheetId = res.spreadsheetId;
-    spreadsheetUrl = res.spreadsheetUrl;
-  }
-
-  // 2. Google Drive: Buat folder jika belum ada
+  // 1. Google Drive: Buat folder jika belum ada
   if (!folderId) {
+    if (onStepProgress) onStepProgress('Membuat Folder di Google Drive...');
     const driveRes = await createGoogleDriveFolder(token, schoolName);
     folderId = driveRes.folderId;
     folderUrl = driveRes.folderUrl;
@@ -504,7 +543,25 @@ export async function executeAutoCreateDatabase(
     folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
   }
 
-  // 3. Simpan ID ke AppSettings aplikasi
+  // 2. Google Sheets: Buat baru atau tambahkan 10 tab ke ID yang ditempel
+  if (spreadsheetId) {
+    if (onStepProgress) onStepProgress(`Memeriksa & melengkapi 10 Tab di Spreadsheet (${spreadsheetId})...`);
+    const res = await ensureSpreadsheetHas10Tabs(token, spreadsheetId);
+    spreadsheetId = res.spreadsheetId;
+    spreadsheetUrl = res.spreadsheetUrl;
+  } else {
+    if (onStepProgress) onStepProgress('Membuat Spreadsheet baru & mengonfigurasi 10 Tab...');
+    const res = await createGoogleSpreadsheetWithTabs(token, schoolName, folderId);
+    spreadsheetId = res.spreadsheetId;
+    spreadsheetUrl = res.spreadsheetUrl;
+  }
+
+  // 3. Tulis data awal
+  if (onStepProgress) onStepProgress('Menyinkronkan data civitas sekolah ke 10 Tab...');
+  await writeAllTabsData(token, spreadsheetId);
+
+  // 4. Simpan ke AppSettings
+  if (onStepProgress) onStepProgress('Menyimpan ID database ke sistem KITARAJIN...');
   updateAppSettings(currentUser, {
     googleSheetSpreadsheetId: spreadsheetId,
     googleDriveFolderId: folderId,
@@ -544,7 +601,7 @@ export async function checkRealGoogleDatabaseHealth(
     };
   }
 
-  const sId = spreadsheetId?.trim() || getAppSettings().googleSheetSpreadsheetId;
+  const sId = cleanGoogleId(spreadsheetId?.trim() || getAppSettings().googleSheetSpreadsheetId || '');
   if (!sId) {
     return {
       isOnline: false,
@@ -554,7 +611,6 @@ export async function checkRealGoogleDatabaseHealth(
   }
 
   try {
-    // Cek Spreadsheet
     const res = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${sId}?fields=properties.title,sheets.properties`,
       {
@@ -578,9 +634,8 @@ export async function checkRealGoogleDatabaseHealth(
       rowCount: s.properties?.gridProperties?.rowCount || 0,
     }));
 
-    // Cek Folder Drive jika ada ID
     let driveFolderName: string | undefined;
-    const fId = folderId?.trim() || getAppSettings().googleDriveFolderId;
+    const fId = cleanGoogleId(folderId?.trim() || getAppSettings().googleDriveFolderId || '');
     if (fId) {
       try {
         const driveRes = await fetch(`https://www.googleapis.com/drive/v3/files/${fId}?fields=id,name`, {

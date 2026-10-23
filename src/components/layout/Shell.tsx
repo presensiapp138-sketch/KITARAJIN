@@ -24,7 +24,6 @@ import {
   UserCheck,
   LogOut,
   Sparkles,
-  Layers,
   ChevronDown,
   Edit3,
   Mail,
@@ -36,14 +35,13 @@ import {
 import { User, UserRole } from '../../types';
 import { getNavItemsForRole, NavItem } from '../../config/navigation';
 import { updateUser } from '../../services/storage';
+import { PWAInstallButton } from '../pwa/PWAInstallButton';
 
 interface ShellProps {
   currentUser: User;
   onLogout: () => void;
   activeMenuId: string;
   onSelectMenu: (menuId: string) => void;
-  onToggleDesignSpec: () => void;
-  isShowingDesignSpec: boolean;
   onUpdateCurrentUser?: (user: User) => void;
   children: React.ReactNode;
 }
@@ -70,8 +68,6 @@ export const Shell: React.FC<ShellProps> = ({
   onLogout,
   activeMenuId,
   onSelectMenu,
-  onToggleDesignSpec,
-  isShowingDesignSpec,
   onUpdateCurrentUser,
   children,
 }) => {
@@ -179,62 +175,57 @@ export const Shell: React.FC<ShellProps> = ({
                     <span className="font-extrabold text-xl tracking-tight text-slate-900">
                       KITA<span className="text-emerald-600">RAJIN</span>
                     </span>
-                    <span className="hidden sm:inline-block px-2 py-0.5 text-[10px] font-bold bg-emerald-100 text-emerald-800 rounded-full">
-                      Tahap 3 Aktif
-                    </span>
                   </div>
                   <p className="text-[11px] text-slate-500 hidden sm:block">
-                    Presensi Wajah & GPS &bull; Pengelolaan Akun
+                    Presensi Wajah &amp; GPS &bull; Pengelolaan Akun
                   </p>
                 </div>
               </button>
             </div>
 
-            {/* Right Controls: Stage Spec Toggle & Current User Info & Logout */}
+            {/* Right Controls: PWA Install Button & Current User Info & Logout */}
             <div className="flex items-center gap-2 sm:gap-4">
-              {/* Button to toggle Tahap 2 Design Blueprint */}
-              <button
-                type="button"
-                onClick={onToggleDesignSpec}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-xl border transition-all flex items-center gap-1.5 ${
-                  isShowingDesignSpec
-                    ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border-slate-200'
-                }`}
-                title="Buka / Tutup Blueprint Rancangan Sistem"
-              >
-                <Layers className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">
-                  {isShowingDesignSpec ? 'Tutup Spesifikasi Desain' : 'Spesifikasi Desain Tahap 2'}
-                </span>
-                <span className="sm:hidden">Desain</span>
-              </button>
+              <PWAInstallButton variant="header" />
 
-              {/* User Profile Summary */}
+              {/* User Profile Summary - Clickable to edit Name & Email */}
               <div className="flex items-center gap-3 pl-2 sm:pl-3 border-l border-slate-200">
-                <div className="text-right hidden sm:block">
-                  <div className="text-xs sm:text-sm font-bold text-slate-900 leading-tight">
-                    {currentUser.name}
-                  </div>
-                  <div className="flex items-center justify-end gap-1.5 mt-0.5">
-                    <span
-                      className={`inline-block px-1.5 py-0.2 rounded text-[10px] font-bold uppercase tracking-wider ${meta.color}`}
-                    >
-                      {meta.badge}
-                    </span>
-                  </div>
-                </div>
-
-                <div
-                  className="w-9 h-9 rounded-full bg-emerald-100 border-2 border-emerald-500 text-emerald-800 flex items-center justify-center font-bold text-xs shadow-2xs"
-                  title={`${currentUser.name} (${currentUser.role})`}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditName(currentUser.name);
+                    setEditEmail(currentUser.email || '');
+                    setEditPhone(currentUser.phone || '');
+                    setProfileMsg(null);
+                    setProfileModalOpen(true);
+                  }}
+                  className="flex items-center gap-2.5 text-right hover:opacity-85 transition-opacity cursor-pointer group"
+                  title="Klik untuk ubah nama & email profil Anda"
                 >
-                  {currentUser.role === 'kepala_sekolah'
-                    ? 'KS'
-                    : currentUser.role === 'admin'
-                    ? 'AD'
-                    : 'KR'}
-                </div>
+                  <div className="text-right hidden sm:block">
+                    <div className="text-xs sm:text-sm font-bold text-slate-900 leading-tight group-hover:text-emerald-700 transition-colors flex items-center justify-end gap-1">
+                      <span>{currentUser.name}</span>
+                      <Edit3 className="w-3 h-3 text-slate-400 group-hover:text-emerald-600" />
+                    </div>
+                    <div className="flex items-center justify-end gap-1.5 mt-0.5">
+                      <span
+                        className={`inline-block px-1.5 py-0.2 rounded text-[10px] font-bold uppercase tracking-wider ${meta.color}`}
+                      >
+                        {meta.badge}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div
+                    className="w-9 h-9 rounded-full bg-emerald-100 border-2 border-emerald-500 text-emerald-800 flex items-center justify-center font-bold text-xs shadow-2xs group-hover:ring-2 group-hover:ring-emerald-400 transition-all"
+                    title={`${currentUser.name} (${currentUser.role})`}
+                  >
+                    {currentUser.role === 'kepala_sekolah'
+                      ? 'KS'
+                      : currentUser.role === 'admin'
+                      ? 'AD'
+                      : 'KR'}
+                  </div>
+                </button>
 
                 {/* Logout Button */}
                 <button
@@ -266,7 +257,7 @@ export const Shell: React.FC<ShellProps> = ({
             <nav className="space-y-1">
               {navItems.map((item) => {
                 const IconComponent = ICON_MAP[item.iconName] || LayoutDashboard;
-                const isActive = activeMenuId === item.id && !isShowingDesignSpec;
+                const isActive = activeMenuId === item.id;
                 return (
                   <button
                     key={item.id}
@@ -352,10 +343,14 @@ export const Shell: React.FC<ShellProps> = ({
                 </span>
               </div>
 
+              <div className="mt-3">
+                <PWAInstallButton variant="drawer" className="mb-3" />
+              </div>
+
               <div className="space-y-1 mt-2">
                 {navItems.map((item) => {
                   const IconComponent = ICON_MAP[item.iconName] || LayoutDashboard;
-                  const isActive = activeMenuId === item.id && !isShowingDesignSpec;
+                  const isActive = activeMenuId === item.id;
                   return (
                     <button
                       key={item.id}
@@ -410,7 +405,7 @@ export const Shell: React.FC<ShellProps> = ({
           type="button"
           onClick={() => onSelectMenu('dashboard')}
           className={`flex flex-col items-center py-1 px-2 text-[10px] font-medium transition-colors ${
-            activeMenuId === 'dashboard' && !isShowingDesignSpec ? 'text-emerald-600 font-bold' : 'text-slate-500'
+            activeMenuId === 'dashboard' ? 'text-emerald-600 font-bold' : 'text-slate-500'
           }`}
         >
           <LayoutDashboard className="w-5 h-5 mb-0.5" />
@@ -433,7 +428,7 @@ export const Shell: React.FC<ShellProps> = ({
           type="button"
           onClick={() => onSelectMenu('riwayat')}
           className={`flex flex-col items-center py-1 px-2 text-[10px] font-medium transition-colors ${
-            activeMenuId === 'riwayat' && !isShowingDesignSpec ? 'text-emerald-600 font-bold' : 'text-slate-500'
+            activeMenuId === 'riwayat' ? 'text-emerald-600 font-bold' : 'text-slate-500'
           }`}
         >
           <CalendarCheck className="w-5 h-5 mb-0.5" />
@@ -449,6 +444,132 @@ export const Shell: React.FC<ShellProps> = ({
           <span>Menu Lain</span>
         </button>
       </nav>
+
+      {/* Modal Cepat Ubah Profil (Nama & Email) */}
+      {profileModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                  <UserIcon className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-sm">
+                    Ubah Profil {meta.badge}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">Perbarui Nama Lengkap dan Alamat Email Anda</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProfileModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {profileMsg && (
+              <div
+                className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
+                  profileMsg.type === 'success'
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                    : 'bg-rose-50 text-rose-800 border border-rose-200'
+                }`}
+              >
+                <CheckCircle className="w-4 h-4 shrink-0 text-emerald-600" />
+                <span>{profileMsg.text}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveProfile} className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Nama Lengkap <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <UserIcon className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                  <input
+                    type="text"
+                    required
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    placeholder="Nama Lengkap"
+                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Alamat Email <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <Mail className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                  <input
+                    type="email"
+                    required
+                    value={editEmail}
+                    onChange={(e) => setEditEmail(e.target.value)}
+                    placeholder="nama@sekolah.sch.id"
+                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Nomor Telepon / WhatsApp
+                </label>
+                <div className="relative">
+                  <Phone className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                  <input
+                    type="text"
+                    value={editPhone}
+                    onChange={(e) => setEditPhone(e.target.value)}
+                    placeholder="081234567890"
+                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between pt-2">
+                {currentUser.role === 'kepala_sekolah' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfileModalOpen(false);
+                      onSelectMenu('pengaturan');
+                    }}
+                    className="text-[11px] text-emerald-700 hover:underline font-semibold"
+                  >
+                    Buka Pengaturan Lengkap
+                  </button>
+                ) : <span />}
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setProfileModalOpen(false)}
+                    className="px-3.5 py-2 rounded-xl border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSaving}
+                    className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md flex items-center gap-1.5 disabled:opacity-50"
+                  >
+                    <Save className="w-3.5 h-3.5" />
+                    <span>{isSaving ? 'Menyimpan...' : 'Simpan Perubahan'}</span>
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

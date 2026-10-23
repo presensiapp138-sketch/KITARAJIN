@@ -81,6 +81,18 @@ export const LocationManager: React.FC<LocationManagerProps> = ({ currentUser })
     detectDeviceLocation(false);
   }, []);
 
+  if (currentUser.role !== 'kepala_sekolah') {
+    return (
+      <div className="bg-rose-50 border border-rose-200 rounded-3xl p-8 text-center max-w-lg mx-auto text-rose-800 space-y-3 my-8">
+        <AlertCircle className="w-10 h-10 text-rose-600 mx-auto" />
+        <h2 className="text-lg font-bold">Wewenang Khusus Kepala Sekolah</h2>
+        <p className="text-xs text-rose-700 leading-relaxed">
+          Admin dan pengguna lainnya tidak diperkenankan mengatur titik lokasi koordinat maupun radius presensi sekolah. Pengaturan ini sepenuhnya berada di bawah otoritas Kepala Sekolah.
+        </p>
+      </div>
+    );
+  }
+
   const detectDeviceLocation = (applyToForm: boolean = false) => {
     if (!('geolocation' in navigator)) {
       setGpsError('Browser tidak mendukung Geolocation GPS.');

@@ -131,7 +131,7 @@ export const LeaveManager: React.FC<LeaveManagerProps> = ({ currentUser }) => {
         <div>
           <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-700">
             <FileText className="w-4 h-4" />
-            <span>Tahap 6 &bull; Layanan Perizinan &amp; Sakit</span>
+            <span>Layanan Perizinan &amp; Sakit</span>
           </div>
           <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">
             {currentUser.role === 'karyawan' ? 'Pengajuan Izin, Sakit &amp; Dinas' : 'Peninjauan Izin Civitas Sekolah'}

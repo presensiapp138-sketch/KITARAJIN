@@ -218,7 +218,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
         <div>
           <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-700">
             <Users className="w-4 h-4" />
-            <span>Tahap 3 &bull; Manajemen Pengguna & Otoritas</span>
+            <span>Manajemen Pengguna &amp; Otoritas</span>
           </div>
           <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">
             Pengelolaan Akun Sekolah

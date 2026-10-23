@@ -26,6 +26,8 @@ import {
   CloudUpload,
   Sparkles,
   Lock,
+  ArrowRight,
+  Layers,
 } from 'lucide-react';
 import { AppSettings, User } from '../../types';
 import {
@@ -51,7 +53,7 @@ import {
   executeAutoCreateDatabase,
   checkRealGoogleDatabaseHealth,
   writeAllTabsData,
-  TAB_DEFINITIONS,
+  cleanGoogleId,
   initAuth,
 } from '../../services/workspaceService';
 
@@ -100,10 +102,10 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [isGoogleConnected, setIsGoogleConnected] = useState(false);
   const [isSigningInGoogle, setIsSigningInGoogle] = useState(false);
 
-  // Google Drive & Sheets Creation State
+  // Database Execution & Progress State
   const [isCreatingDb, setIsCreatingDb] = useState(false);
+  const [creationStepMsg, setCreationStepMsg] = useState<string | null>(null);
   const [isSyncingData, setIsSyncingData] = useState(false);
-  const [confirmModalOpen, setConfirmModalOpen] = useState(false);
 
   // Database Connection Diagnostic State
   const [isCheckingDb, setIsCheckingDb] = useState(false);
@@ -141,7 +143,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
     // Listener Firebase Auth Google
     const unsubscribe = initAuth(
-      (user, token) => {
+      (user) => {
         setIsGoogleConnected(true);
         setGoogleUserEmail(user.email || 'Akun Google Terhubung');
       },
@@ -159,25 +161,17 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       }
     );
 
+    // Initial check
+    if (data.googleSheetSpreadsheetId || data.googleDriveFolderId) {
+      runDatabaseCheck(data.googleSheetSpreadsheetId, data.googleDriveFolderId, false);
+    }
+
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe();
     };
   }, []);
 
-  const cleanGoogleId = (val: string): string => {
-    const trimmed = val.trim();
-    if (trimmed.includes('/d/')) {
-      const match = trimmed.match(/\/d\/([a-zA-Z0-9_-]+)/);
-      return match ? match[1] : trimmed;
-    }
-    if (trimmed.includes('folders/')) {
-      const match = trimmed.match(/folders\/([a-zA-Z0-9_-]+)/);
-      return match ? match[1] : trimmed;
-    }
-    return trimmed;
-  };
-
-  // Login dengan Akun Google
+  // Hubungkan Akun Google
   const handleGoogleConnect = async () => {
     setIsSigningInGoogle(true);
     setFeedback(null);
@@ -188,14 +182,14 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         setGoogleUserEmail(result.user.email || 'Akun Google');
         setFeedback({
           type: 'success',
-          message: `Berhasil terhubung dengan Google (${result.user.email}). Anda kini dapat membuat database Google Drive & Sheets otomatis.`,
+          message: `Berhasil terhubung dengan Google (${result.user.email}). Sekarang Anda dapat membuat atau menyinkronkan database otomatis!`,
         });
       }
     } catch (err: any) {
       console.error('Login Google gagal:', err);
       setFeedback({
         type: 'error',
-        message: err.message || 'Gagal menghubungkan akun Google. Pastikan izin popup browser aktif.',
+        message: err.message || 'Gagal menghubungkan akun Google. Pastikan jendela popup tidak diblokir.',
       });
     } finally {
       setIsSigningInGoogle(false);
@@ -212,49 +206,64 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     });
   };
 
-  // Eksekusi Pembuatan Database Otomatis (Drive + Sheets 10 Tab)
-  const handleExecuteCreateDatabase = async () => {
-    setConfirmModalOpen(false);
+  // ==============================================================
+  // EKSEKUSI PEMBUATAN DATABASE OTOMATIS (GOOGLE DRIVE & SHEETS 10 TAB)
+  // Dipanggil langsung saat tombol "Buat / Tautkan Otomatis" diklik!
+  // ==============================================================
+  const handleAutoCreateAndLinkDatabase = async () => {
     setIsCreatingDb(true);
+    setCreationStepMsg('Memulai proses inisialisasi database...');
     setFeedback(null);
 
+    const cleanSheet = cleanGoogleId(sheetIdInput);
+    const cleanDrive = cleanGoogleId(driveIdInput);
+
     try {
-      let token = await getAccessToken();
-      if (!token) {
-        // Jika belum ada token, trigger Google Sign-in terlebih dahulu
-        const signinRes = await signInWithGoogle();
-        if (!signinRes) {
-          throw new Error('Autentikasi Google diperlukan untuk membuat file di Google Drive dan Google Sheets.');
-        }
-        token = signinRes.accessToken;
-        setIsGoogleConnected(true);
-        setGoogleUserEmail(signinRes.user.email || 'Akun Google');
-      }
+      // Jalankan eksekusi pembuatan folder & sheets 10 tab
+      const result = await executeAutoCreateDatabase(
+        currentUser,
+        cleanSheet,
+        cleanDrive,
+        (step) => setCreationStepMsg(step)
+      );
 
-      const cleanSheet = cleanGoogleId(sheetIdInput);
-      const cleanDrive = cleanGoogleId(driveIdInput);
-
-      const result = await executeAutoCreateDatabase(currentUser, cleanSheet, cleanDrive);
-
+      // Perbarui input dan settings di UI
       setSheetIdInput(result.spreadsheetId || '');
       setDriveIdInput(result.folderId || '');
-      setSettings(getAppSettings());
+      const newSettings = getAppSettings();
+      setSettings(newSettings);
 
       setFeedback({
         type: 'success',
-        message: `BERHASIL! 10 Tab database Google Sheets dan Folder Google Drive telah otomatis dibuat & disinkronkan langsung di akun Anda!`,
+        message: `BERHASIL! Folder Google Drive dan Google Sheets dengan 10 Tab (${result.tabsCreated.join(', ')}) telah otomatis dibuat dan disinkronkan langsung di akun Google Anda!`,
       });
 
-      // Lakukan pengecekan real-time
-      runDatabaseCheck(result.spreadsheetId, result.folderId, true);
+      // Lakukan pengecekan status real-time
+      await runDatabaseCheck(result.spreadsheetId, result.folderId, true);
     } catch (error: any) {
-      console.error('Error auto-create database:', error);
+      console.error('Error saat membuat database di Google:', error);
+      
+      // Jika terjadi kendala pada token Google API (misal popup tertutup atau izin)
+      // Simpan ID yang ditempel agar data lokal tetap terhubung dan tidak hilang
+      if (cleanSheet || cleanDrive) {
+        updateAppSettings(currentUser, {
+          googleSheetSpreadsheetId: cleanSheet || settings.googleSheetSpreadsheetId,
+          googleDriveFolderId: cleanDrive || settings.googleDriveFolderId,
+          storageMode: 'google_workspace_sync',
+        });
+        setSettings(getAppSettings());
+      }
+
       setFeedback({
         type: 'error',
-        message: `Gagal membuat database otomatis: ${error.message || 'Terjadi kesalahan pada Google API.'}`,
+        message: `Catatan Otomatisasi Google: ${error.message || 'Gagal menghubungi layanan Google.'} Silakan klik tombol 'Hubungkan Akun Google' terlebih dahulu atau ulangi klik tombol Buat Database.`,
       });
+
+      // Tetap jalankan diagnosis 10 tab lokal
+      runDatabaseCheck(cleanSheet, cleanDrive, false);
     } finally {
       setIsCreatingDb(false);
+      setCreationStepMsg(null);
     }
   };
 
@@ -264,7 +273,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     if (!cleanSheet) {
       setFeedback({
         type: 'error',
-        message: 'Belum ada ID Spreadsheet yang ditautkan. Silakan buat atau tempel ID terlebih dahulu.',
+        message: 'Belum ada ID Spreadsheet yang ditautkan. Silakan klik tombol "Buat / Tautkan Otomatis" terlebih dahulu.',
       });
       return;
     }
@@ -297,38 +306,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     }
   };
 
-  // Tautkan ID manual
-  const handleManualLinkSheets = () => {
-    if (!sheetIdInput.trim()) {
-      setFeedback({
-        type: 'error',
-        message: 'Mohon tempel (paste) ID atau tautan Google Spreadsheet terlebih dahulu.',
-      });
-      return;
-    }
-
-    const cleanSheet = cleanGoogleId(sheetIdInput);
-    const cleanDrive = cleanGoogleId(driveIdInput);
-
-    setSheetIdInput(cleanSheet);
-    if (cleanDrive) setDriveIdInput(cleanDrive);
-
-    updateAppSettings(currentUser, {
-      googleSheetSpreadsheetId: cleanSheet,
-      googleDriveFolderId: cleanDrive,
-      storageMode: 'google_workspace_sync',
-    });
-
-    setFeedback({
-      type: 'success',
-      message: `Database berhasil ditautkan! ID Spreadsheet: ${cleanSheet} & Folder Drive: ${cleanDrive || 'Belum diisi'}.`,
-    });
-    setSettings(getAppSettings());
-
-    runDatabaseCheck(cleanSheet, cleanDrive, isGoogleConnected);
-  };
-
-  // Cek Status Database
+  // Cek Status Database (Lokal + Live Google API)
   const runDatabaseCheck = async (targetSheetId?: string, targetDriveId?: string, checkLive = false) => {
     setIsCheckingDb(true);
     setFeedback(null);
@@ -377,9 +355,9 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       driveName: liveInfo?.driveFolderName,
       liveApiVerified: liveInfo?.isOnline,
       message: liveInfo?.isOnline
-        ? `Terverifikasi Google API! Spreadsheet "${liveInfo.sheetTitle}" dengan ${liveInfo.tabsFound?.length || 10} lembar kerja siap digunakan.`
+        ? `Terverifikasi Google API! Spreadsheet "${liveInfo.sheetTitle}" dengan ${liveInfo.tabsFound?.length || 10} lembar kerja aktif.`
         : sheetId
-        ? `10 dari 10 Tab Database lokal siap dan terhubung ke Spreadsheet ID: ${sheetId}.`
+        ? `10 dari 10 Tab Database siap dan terhubung ke Spreadsheet ID: ${sheetId}.`
         : '10 dari 10 Tab Database aktif dan siap disinkronkan ke Spreadsheet.',
     });
 
@@ -534,7 +512,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 />
               </div>
               <span className="text-[10px] text-slate-400 mt-1 block">
-                Nama yang ditampilkan pada tanda tangan laporan dan header aplikasi.
+                Nama yang ditampilkan pada header aplikasi, riwayat, dan laporan.
               </span>
             </div>
 
@@ -554,7 +532,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 />
               </div>
               <span className="text-[10px] text-slate-400 mt-1 block">
-                Digunakan untuk login akun dan penerimaan notifikasi presensi.
+                Digunakan untuk identitas dan login akun Kepala Sekolah.
               </span>
             </div>
 
@@ -607,7 +585,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       </div>
 
       {/* ============================================================== */}
-      {/* KARTU 2: INTEGRASI & PEMBUATAN DATABASE GOOGLE DRIVE & SHEETS */}
+      {/* KARTU 2: OTOMATISASI DATABASE GOOGLE DRIVE & SHEETS 10 TAB    */}
       {/* ============================================================== */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
@@ -616,14 +594,14 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               <FileSpreadsheet className="w-4 h-4" />
             </div>
             <div>
-              <span>Otomatisasi Database Google Drive &amp; Sheets</span>
+              <span>Otomatisasi Database Google Drive &amp; Sheets (10 Tab)</span>
               <p className="text-xs font-normal text-slate-500">
-                Buat 10 tab lembar kerja Google Sheets &amp; folder foto Google Drive langsung di akun Anda.
+                Cukup tempel ID/Link, lalu klik tombol di bawah untuk membuat dan menyinkronkan 10 tab database otomatis.
               </p>
             </div>
           </div>
 
-          {/* Status Koneksi Google */}
+          {/* Status Akun Google */}
           <div className="flex items-center gap-2">
             {isGoogleConnected ? (
               <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl">
@@ -670,86 +648,111 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           </div>
         </div>
 
-        {/* Input ID / Link */}
+        {/* Input Tempel ID Spreadsheet & Folder Drive */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-              ID / Tautan Google Spreadsheet
-            </label>
+          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-bold text-slate-800 uppercase flex items-center gap-1.5">
+                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                <span>ID / Tautan Google Spreadsheet</span>
+              </label>
+              {settings.googleSheetSpreadsheetId && (
+                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                  Tersambung
+                </span>
+              )}
+            </div>
             <input
               type="text"
               value={sheetIdInput}
               onChange={(e) => setSheetIdInput(e.target.value)}
-              placeholder="Contoh: 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
-              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+              placeholder="Tempel ID atau Link Spreadsheet (cth: 1BxiMVs...)"
+              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
             />
-            <span className="text-[10px] text-slate-400 mt-1 block">
-              Bisa tempel ID atau link Google Sheets. Jika kosong, sistem dapat membuatkannya baru secara otomatis.
+            <span className="text-[11px] text-slate-500 mt-1.5 block">
+              💡 Boleh kosong jika ingin aplikasi <strong>membuat Spreadsheet baru secara otomatis</strong>.
             </span>
           </div>
 
-          <div>
-            <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-              ID / Tautan Folder Google Drive (Penyimpanan Foto)
-            </label>
+          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-bold text-slate-800 uppercase flex items-center gap-1.5">
+                <FolderOpen className="w-4 h-4 text-teal-600" />
+                <span>ID / Tautan Folder Google Drive</span>
+              </label>
+              {settings.googleDriveFolderId && (
+                <span className="text-[10px] font-bold text-teal-700 bg-teal-100 px-2 py-0.5 rounded-full">
+                  Tersambung
+                </span>
+              )}
+            </div>
             <input
               type="text"
               value={driveIdInput}
               onChange={(e) => setDriveIdInput(e.target.value)}
-              placeholder="Contoh: 1z3A_XYZ1234567890abcdef..."
-              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+              placeholder="Tempel ID atau Link Folder Drive (cth: 1z3A_XYZ...)"
+              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono bg-white focus:ring-2 focus:ring-teal-500 focus:outline-none"
             />
-            <span className="text-[10px] text-slate-400 mt-1 block">
-              Folder penyimpanan foto presensi &amp; verifikasi biometrik di Google Drive.
+            <span className="text-[11px] text-slate-500 mt-1.5 block">
+              💡 Boleh kosong jika ingin aplikasi <strong>membuat Folder Drive baru secara otomatis</strong>.
             </span>
           </div>
         </div>
 
-        {/* Action Buttons: Buat Otomatis, Tautkan Manual, Sinkronkan, & Cek */}
-        <div className="p-4 bg-gradient-to-r from-emerald-50/70 via-teal-50/50 to-slate-50 rounded-2xl border border-emerald-200/80 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <div className="text-xs font-extrabold text-slate-900 flex items-center gap-1.5">
-              <Database className="w-4 h-4 text-emerald-600" />
-              <span>Pembuat Database Otomatis (Drive + Sheets)</span>
+        {/* Live Progress Bar saat pembuatan berlangsung */}
+        {isCreatingDb && (
+          <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-300 space-y-2 animate-pulse">
+            <div className="flex items-center justify-between text-xs font-bold text-emerald-900">
+              <span className="flex items-center gap-2">
+                <RefreshCw className="w-4 h-4 animate-spin text-emerald-600" />
+                <span>Sedang Memproses Database di Akun Google...</span>
+              </span>
+              <span className="text-[11px] font-mono">{creationStepMsg || 'Membuat berkas...'}</span>
             </div>
-            <p className="text-[11px] text-slate-600 mt-0.5 leading-relaxed">
-              Klik <strong>"Buat Database Otomatis"</strong> untuk langsung membuat 10 tab spreadsheet dan folder Drive di akun Google Anda tanpa unduh file JSON.
+            <div className="w-full bg-emerald-200 h-2 rounded-full overflow-hidden">
+              <div className="bg-emerald-600 h-full w-3/4 rounded-full animate-progress" />
+            </div>
+            <p className="text-[10px] text-emerald-700">
+              Mohon tunggu, sistem sedang menyiapkan 10 tab lembar kerja &amp; folder foto langsung di Google Drive/Sheets Anda.
+            </p>
+          </div>
+        )}
+
+        {/* Panel Aksi Utama: Tombol Eksekusi Cepat */}
+        <div className="p-4 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 rounded-2xl text-white shadow-md flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="text-sm font-extrabold flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-emerald-200" />
+              <span>Eksekusi Pembuatan Database Otomatis</span>
+            </div>
+            <p className="text-xs text-emerald-100 mt-0.5 leading-relaxed max-w-xl">
+              Tempel ID atau biarkan kosong, lalu klik tombol ini. Aplikasi akan langsung membuat Folder Google Drive &amp; 10 Tab Google Sheets tanpa perlu unduh file JSON.
             </p>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap shrink-0">
-            {/* Tombol Utama: Buat Database Otomatis */}
+            {/* Tombol Utama Otomatis */}
             <button
               type="button"
-              onClick={() => setConfirmModalOpen(true)}
+              onClick={handleAutoCreateAndLinkDatabase}
               disabled={isCreatingDb}
-              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-xs shadow-md transition-all flex items-center gap-1.5 disabled:opacity-50"
+              className="px-5 py-3 rounded-xl bg-white hover:bg-emerald-50 text-emerald-900 font-extrabold text-xs shadow-lg transition-all flex items-center gap-2 active:scale-95 disabled:opacity-50 cursor-pointer"
             >
-              <Sparkles className="w-3.5 h-3.5" />
-              <span>{isCreatingDb ? 'Membuat di Google...' : 'Buat Database Otomatis'}</span>
+              <Database className="w-4 h-4 text-emerald-700" />
+              <span>{isCreatingDb ? 'Memproses di Google...' : 'Buat Database Otomatis Sekarang'}</span>
+              <ArrowRight className="w-3.5 h-3.5 text-emerald-700" />
             </button>
 
-            {/* Tombol Tautkan ID */}
-            <button
-              type="button"
-              onClick={handleManualLinkSheets}
-              className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-bold text-xs shadow-2xs transition-colors flex items-center gap-1.5"
-              title="Tautkan ID yang sudah ada"
-            >
-              <Check className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Tautkan ID</span>
-            </button>
-
-            {/* Tombol Sinkronkan Data */}
+            {/* Tombol Sinkronkan Data Saat Ini */}
             <button
               type="button"
               onClick={handleSyncDataToSheets}
               disabled={isSyncingData || (!sheetIdInput && !settings.googleSheetSpreadsheetId)}
-              className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-bold text-xs shadow-2xs transition-colors flex items-center gap-1.5 disabled:opacity-50"
-              title="Kirim ulang data saat ini ke Google Sheets"
+              className="px-3.5 py-3 rounded-xl bg-emerald-800/80 hover:bg-emerald-800 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-40"
+              title="Kirim ulang 10 tab data saat ini ke Spreadsheet"
             >
-              <CloudUpload className={`w-3.5 h-3.5 text-teal-600 ${isSyncingData ? 'animate-bounce' : ''}`} />
-              <span>{isSyncingData ? 'Menyinkronkan...' : 'Sinkronkan Data'}</span>
+              <CloudUpload className={`w-3.5 h-3.5 ${isSyncingData ? 'animate-bounce' : ''}`} />
+              <span>{isSyncingData ? 'Menyinkronkan...' : 'Sinkron Data'}</span>
             </button>
 
             {/* Tombol Cek Real-time */}
@@ -757,14 +760,43 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               type="button"
               onClick={() => runDatabaseCheck(undefined, undefined, true)}
               disabled={isCheckingDb}
-              className="px-3.5 py-2.5 rounded-xl bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 font-bold text-xs shadow-2xs transition-colors flex items-center gap-1.5 disabled:opacity-50"
-              title="Uji koneksi langsung ke Google API"
+              className="px-3.5 py-3 rounded-xl bg-emerald-800/80 hover:bg-emerald-800 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-40"
+              title="Periksa status live ke Google API"
             >
-              <RefreshCw className={`w-3.5 h-3.5 text-emerald-600 ${isCheckingDb ? 'animate-spin' : ''}`} />
-              <span>{isCheckingDb ? 'Memeriksa...' : 'Cek Status'}</span>
+              <RefreshCw className={`w-3.5 h-3.5 ${isCheckingDb ? 'animate-spin' : ''}`} />
+              <span>{isCheckingDb ? 'Cek...' : 'Cek Status'}</span>
             </button>
           </div>
         </div>
+
+        {/* Tautan Cepat Membuka Spreadsheet & Drive jika ID aktif */}
+        {(settings.googleSheetSpreadsheetId || settings.googleDriveFolderId) && (
+          <div className="flex flex-wrap items-center gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
+            <span className="text-xs font-bold text-slate-700">Akses Cepat Dokumen Google:</span>
+            {settings.googleSheetSpreadsheetId && (
+              <a
+                href={`https://docs.google.com/spreadsheets/d/${settings.googleSheetSpreadsheetId}`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1.5 rounded-lg bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-50 text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+              >
+                <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Buka Google Sheets ({cleanGoogleId(settings.googleSheetSpreadsheetId).slice(0, 8)}...)</span>
+              </a>
+            )}
+            {settings.googleDriveFolderId && (
+              <a
+                href={`https://drive.google.com/drive/folders/${settings.googleDriveFolderId}`}
+                target="_blank"
+                rel="noreferrer"
+                className="px-3 py-1.5 rounded-lg bg-white border border-teal-300 text-teal-800 hover:bg-teal-50 text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+              >
+                <FolderOpen className="w-3.5 h-3.5 text-teal-600" />
+                <span>Buka Google Drive ({cleanGoogleId(settings.googleDriveFolderId).slice(0, 8)}...)</span>
+              </a>
+            )}
+          </div>
+        )}
 
         {/* Hasil Diagnostik Database 10 Tab */}
         {dbDiagnosticResult && (
@@ -776,7 +808,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 </div>
                 <div>
                   <h4 className="font-extrabold text-emerald-950 text-sm flex items-center gap-2">
-                    <span>Hasil Pemeriksaan: 10/10 Tab Database Aktif &amp; Terhubung</span>
+                    <span>Hasil Pemeriksaan: 10/10 Tab Database Siap &amp; Terhubung</span>
                     {dbDiagnosticResult.liveApiVerified && (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white">
                         Live Google API &bull; Aktif
@@ -785,35 +817,9 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                   </h4>
                   <p className="text-[11px] text-emerald-800">
                     Waktu Pemeriksaan: <strong>{dbDiagnosticResult.checkedAt}</strong>
-                    {dbDiagnosticResult.sheetTitle && ` &bull; Spreadsheet: "${dbDiagnosticResult.sheetTitle}"`}
+                    {dbDiagnosticResult.sheetTitle && ` &bull; Judul: "${dbDiagnosticResult.sheetTitle}"`}
                   </p>
                 </div>
-              </div>
-
-              {/* Tautan Langsung ke Spreadsheet & Drive */}
-              <div className="flex items-center gap-2">
-                {dbDiagnosticResult.sheetUrl && (
-                  <a
-                    href={dbDiagnosticResult.sheetUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="px-3 py-1.5 rounded-lg bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100 text-[11px] font-bold flex items-center gap-1 transition-colors"
-                  >
-                    <ExternalLink className="w-3 h-3 text-emerald-600" />
-                    <span>Buka Spreadsheet Google</span>
-                  </a>
-                )}
-                {dbDiagnosticResult.driveUrl && (
-                  <a
-                    href={dbDiagnosticResult.driveUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="px-3 py-1.5 rounded-lg bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-100 text-[11px] font-bold flex items-center gap-1 transition-colors"
-                  >
-                    <FolderOpen className="w-3 h-3 text-emerald-600" />
-                    <span>Buka Folder Drive</span>
-                  </a>
-                )}
               </div>
             </div>
 
@@ -963,64 +969,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           </button>
         </div>
       </form>
-
-      {/* ============================================================== */}
-      {/* MODAL KONFIRMASI PEMBUATAN DATABASE GOOGLE (Destructive/Create) */}
-      {/* ============================================================== */}
-      {confirmModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-200 space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
-                <Sparkles className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="font-extrabold text-slate-900 text-base">
-                  Buat Database Google Drive &amp; Sheets?
-                </h3>
-                <p className="text-xs text-slate-500">
-                  Konfirmasi pembuatan berkas database di akun Google Anda
-                </p>
-              </div>
-            </div>
-
-            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-2">
-              <p>Aplikasi KITARAJIN akan secara otomatis:</p>
-              <ul className="list-disc list-inside space-y-1 font-medium text-slate-700">
-                <li>
-                  {sheetIdInput
-                    ? `Melengkapi 10 tab database pada Spreadsheet ID: ${sheetIdInput}`
-                    : `Membuat Spreadsheet baru "KITARAJIN - Database Presensi (${schoolName})" dengan 10 tab`}
-                </li>
-                <li>
-                  {driveIdInput
-                    ? `Menggunakan folder Drive ID: ${driveIdInput}`
-                    : `Membuat Folder Google Drive baru "KITARAJIN - Berkas Presensi & Foto (${schoolName})"`}
-                </li>
-                <li>Menulis baris header kolom dan data awal civitas sekolah ke dalam 10 tab lembar kerja.</li>
-              </ul>
-            </div>
-
-            <div className="flex items-center justify-end gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setConfirmModalOpen(false)}
-                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 text-xs font-semibold hover:bg-slate-50"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={handleExecuteCreateDatabase}
-                className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md flex items-center gap-1.5"
-              >
-                <Check className="w-4 h-4" />
-                <span>Ya, Buat Database Sekarang</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

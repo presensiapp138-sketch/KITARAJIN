@@ -20,6 +20,7 @@ import {
   Info,
   History,
   FileCheck,
+  Lock,
 } from 'lucide-react';
 import {
   User,
@@ -94,6 +95,97 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({ cu
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+
+  // Live Clock Ticker untuk validasi aturan jam presensi real-time
+  const [currentNow, setCurrentNow] = useState<Date>(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentNow(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Evaluasi kepatuhan jam presensi terhadap jadwal kerja
+  const getScheduleStatus = () => {
+    if (!userSchedule) {
+      return {
+        allowed: true,
+        statusType: 'open',
+        badge: 'Jadwal Reguler',
+        color: 'emerald',
+        reason: 'Jadwal presensi terbuka.',
+      };
+    }
+
+    const hours = String(currentNow.getHours()).padStart(2, '0');
+    const mins = String(currentNow.getMinutes()).padStart(2, '0');
+    const curTime = `${hours}:${mins}`;
+
+    if (attendanceType === 'masuk') {
+      if (curTime < userSchedule.checkInStart) {
+        return {
+          allowed: false,
+          statusType: 'early_in',
+          badge: `Belum Dibuka (Buka: ${userSchedule.checkInStart} WIB)`,
+          color: 'rose',
+          reason: `Presensi MASUK belum dibuka. Jam masuk resmi dimulai pukul ${userSchedule.checkInStart} WIB. Waktu saat ini: ${curTime} WIB.`,
+        };
+      }
+      if (curTime >= userSchedule.checkOutStart) {
+        return {
+          allowed: false,
+          statusType: 'closed_in',
+          badge: `Sesi Masuk Berakhir (Pukul ${userSchedule.checkOutStart})`,
+          color: 'rose',
+          reason: `Waktu presensi MASUK sudah ditutup. Saat ini sudah memasuki sesi presensi pulang (mulai pukul ${userSchedule.checkOutStart} WIB).`,
+        };
+      }
+      if (curTime <= userSchedule.checkInDeadline) {
+        return {
+          allowed: true,
+          statusType: 'on_time',
+          badge: `Sesi Masuk Tepat Waktu (s/d ${userSchedule.checkInDeadline} WIB)`,
+          color: 'emerald',
+          reason: `Presensi masuk sedang dibuka dan memenuhi kriteria tepat waktu (batas pukul ${userSchedule.checkInDeadline} WIB).`,
+        };
+      }
+      return {
+        allowed: true,
+        statusType: 'late',
+        badge: `Sesi Masuk: Terlambat (Batas: ${userSchedule.checkInDeadline} WIB)`,
+        color: 'amber',
+        reason: `Presensi masuk di luar batas tepat waktu (${userSchedule.checkInDeadline} WIB). Kehadiran akan dicatat sebagai TERLAMBAT.`,
+      };
+    } else {
+      // Presensi Pulang
+      if (curTime < userSchedule.checkOutStart) {
+        return {
+          allowed: false,
+          statusType: 'early_out',
+          badge: `Belum Dibuka (Buka: ${userSchedule.checkOutStart} WIB)`,
+          color: 'rose',
+          reason: `Presensi PULANG belum dibuka. Jam kepulangan resmi dimulai pukul ${userSchedule.checkOutStart} WIB. Waktu saat ini: ${curTime} WIB.`,
+        };
+      }
+      if (userSchedule.checkOutEnd && curTime > userSchedule.checkOutEnd) {
+        return {
+          allowed: false,
+          statusType: 'closed_out',
+          badge: `Sesi Pulang Berakhir (${userSchedule.checkOutEnd} WIB)`,
+          color: 'rose',
+          reason: `Batas akhir waktu presensi PULANG telah berakhir pada pukul ${userSchedule.checkOutEnd} WIB. Waktu saat ini: ${curTime} WIB.`,
+        };
+      }
+      return {
+        allowed: true,
+        statusType: 'open_out',
+        badge: `Sesi Pulang Aktif (s/d ${userSchedule.checkOutEnd || '18:00'} WIB)`,
+        color: 'indigo',
+        reason: `Presensi pulang sah dan dapat diajukan sekarang.`,
+      };
+    }
+  };
 
   const loadData = () => {
     const locations = getAllLocations();
@@ -200,6 +292,21 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({ cu
   const handleSubmitAttendance = async () => {
     setResultMessage(null);
     setIsProcessing(true);
+
+    // 0. Validasi Ketat Aturan Jam Presensi (Mulai Absen & Pulang)
+    const scheduleCheck = getScheduleStatus();
+    if (!scheduleCheck.allowed) {
+      setIsProcessing(false);
+      setResultMessage({
+        type: 'error',
+        title: `Presensi ${attendanceType.toUpperCase()} Ditolak: Di Luar Aturan Jam`,
+        description: scheduleCheck.reason,
+        details: userSchedule
+          ? `Ketentuan Jadwal: Masuk (${userSchedule.checkInStart} - ${userSchedule.checkInDeadline} WIB) &bull; Pulang (${userSchedule.checkOutStart} - ${userSchedule.checkOutEnd || '18:00'} WIB).`
+          : undefined,
+      });
+      return;
+    }
 
     const appSettings = getAppSettings();
     const threshold = appSettings.minFaceMatchThreshold || 0.75;
@@ -449,6 +556,51 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({ cu
                 </button>
               </div>
 
+              {/* Real-time Schedule Window Status Pill */}
+              {(() => {
+                const schedStatus = getScheduleStatus();
+                return (
+                  <>
+                    <div
+                      className={`p-3 rounded-2xl border text-xs flex items-center justify-between transition-all ${
+                        schedStatus.allowed
+                          ? schedStatus.color === 'emerald'
+                            ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                            : 'bg-amber-50 border-amber-200 text-amber-900'
+                          : 'bg-rose-50 border-rose-200 text-rose-900'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 font-bold">
+                        {schedStatus.allowed ? (
+                          <Clock className={`w-4 h-4 ${schedStatus.color === 'emerald' ? 'text-emerald-600' : 'text-amber-600'}`} />
+                        ) : (
+                          <Lock className="w-4 h-4 text-rose-600" />
+                        )}
+                        <span>{schedStatus.badge}</span>
+                      </div>
+                      <span className="font-mono text-[11px] font-bold text-slate-700 bg-white/70 px-2 py-0.5 rounded-lg border border-slate-200/50">
+                        {currentNow.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} WIB
+                      </span>
+                    </div>
+
+                    {!schedStatus.allowed && (
+                      <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 flex items-start gap-3 text-xs animate-in fade-in">
+                        <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                        <div>
+                          <div className="font-bold text-rose-900">
+                            Aturan Jam Presensi: {attendanceType.toUpperCase()} Belum / Tidak Diizinkan
+                          </div>
+                          <p className="mt-0.5 text-rose-700 leading-relaxed">{schedStatus.reason}</p>
+                          <p className="mt-1 text-[11px] text-rose-600/80 font-medium">
+                            Tombol presensi terkunci otomatis demi mematuhi ketentuan jam kehadiran sekolah.
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+
               {/* Viewport Video */}
               <div className="relative aspect-4/3 bg-slate-950 rounded-2xl overflow-hidden shadow-inner flex items-center justify-center border-2 border-emerald-500/30">
                 <video
@@ -477,7 +629,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({ cu
                 </div>
 
                 <div className="absolute bottom-3 right-3 px-2 py-1 bg-slate-900/70 backdrop-blur-xs text-white rounded-lg text-[10px] font-mono">
-                  {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} WIB
+                  {currentNow.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} WIB
                 </div>
               </div>
 
@@ -489,25 +641,39 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({ cu
               )}
 
               {/* Primary Action Button */}
-              <button
-                type="button"
-                onClick={handleSubmitAttendance}
-                disabled={isProcessing}
-                className={`w-full py-3.5 px-4 rounded-2xl text-white font-extrabold text-sm shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-50 ${
-                  attendanceType === 'masuk'
-                    ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 shadow-emerald-600/30'
-                    : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-indigo-600/30'
-                }`}
-              >
-                {isProcessing ? (
-                  <span>Memverifikasi Wajah &amp; GPS...</span>
-                ) : (
-                  <>
-                    <Camera className="w-5 h-5" />
-                    <span>Lakukan Presensi {attendanceType.toUpperCase()} Sekarang</span>
-                  </>
-                )}
-              </button>
+              {(() => {
+                const schedStatus = getScheduleStatus();
+                const isDisabled = isProcessing || !schedStatus.allowed;
+
+                return (
+                  <button
+                    type="button"
+                    onClick={handleSubmitAttendance}
+                    disabled={isDisabled}
+                    className={`w-full py-3.5 px-4 rounded-2xl text-white font-extrabold text-sm shadow-lg transition-all flex items-center justify-center gap-2 disabled:cursor-not-allowed ${
+                      isDisabled
+                        ? 'bg-slate-400 text-slate-100 shadow-none opacity-80 cursor-not-allowed'
+                        : attendanceType === 'masuk'
+                        ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 shadow-emerald-600/30'
+                        : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 shadow-indigo-600/30'
+                    }`}
+                  >
+                    {isProcessing ? (
+                      <span>Memverifikasi Wajah &amp; GPS...</span>
+                    ) : !schedStatus.allowed ? (
+                      <div className="flex items-center gap-2">
+                        <Lock className="w-4 h-4 text-slate-200" />
+                        <span>Presensi {attendanceType.toUpperCase()} Terkunci (Di Luar Jadwal)</span>
+                      </div>
+                    ) : (
+                      <>
+                        <Camera className="w-5 h-5" />
+                        <span>Lakukan Presensi {attendanceType.toUpperCase()} Sekarang</span>
+                      </>
+                    )}
+                  </button>
+                );
+              })()}
             </div>
           </div>
 
@@ -610,27 +776,53 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({ cu
 
             {/* Jadwal Saya Card */}
             <div className="bg-white rounded-3xl border border-slate-200/80 p-5 shadow-xs space-y-3">
-              <div className="flex items-center gap-2 pb-3 border-b border-slate-100 text-xs font-bold uppercase tracking-wider text-slate-700">
-                <Clock className="w-4 h-4 text-emerald-600" />
-                <span>Aturan Jadwal Kerja Anda</span>
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-700">
+                  <Clock className="w-4 h-4 text-emerald-600" />
+                  <span>Aturan Jam &amp; Sesi Kerja</span>
+                </div>
+                {userSchedule && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                    {userSchedule.sessionName || 'Sesi Reguler'}
+                  </span>
+                )}
               </div>
 
               {userSchedule ? (
-                <div className="space-y-2 text-xs">
-                  <div className="font-bold text-slate-900">{userSchedule.name}</div>
-                  <div className="grid grid-cols-2 gap-2 text-[11px]">
-                    <div className="p-2 rounded-xl bg-slate-50">
-                      <span className="text-slate-400 block">Batas Tepat Waktu</span>
-                      <span className="font-bold text-slate-800">{userSchedule.checkInDeadline}</span>
+                <div className="space-y-3 text-xs">
+                  <div className="font-bold text-slate-900 text-sm">{userSchedule.name}</div>
+
+                  <div className="space-y-1.5">
+                    {/* Sesi Masuk */}
+                    <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-100 text-[11px] space-y-1">
+                      <div className="font-bold text-emerald-900 flex items-center justify-between">
+                        <span>Sesi Presensi Masuk</span>
+                        <span className="font-mono text-emerald-700">{userSchedule.checkInStart} - {userSchedule.checkInDeadline}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-slate-600 text-[10px]">
+                        <span>Buka Presensi: <strong>{userSchedule.checkInStart} WIB</strong></span>
+                        <span>Toleransi: <strong className="text-amber-700">+{userSchedule.lateToleranceMinutes} mnt</strong></span>
+                      </div>
                     </div>
-                    <div className="p-2 rounded-xl bg-slate-50">
-                      <span className="text-slate-400 block">Toleransi Terlambat</span>
-                      <span className="font-bold text-amber-700">+{userSchedule.lateToleranceMinutes} Menit</span>
+
+                    {/* Sesi Pulang */}
+                    <div className="p-2.5 rounded-xl bg-indigo-50/70 border border-indigo-100 text-[11px] space-y-1">
+                      <div className="font-bold text-indigo-900 flex items-center justify-between">
+                        <span>Sesi Presensi Pulang</span>
+                        <span className="font-mono text-indigo-700">{userSchedule.checkOutStart} - {userSchedule.checkOutEnd || '18:00'}</span>
+                      </div>
+                      <div className="flex items-center justify-between text-slate-600 text-[10px]">
+                        <span>Mulai Pulang: <strong>{userSchedule.checkOutStart} WIB</strong></span>
+                        <span>Batas Akhir: <strong>{userSchedule.checkOutEnd || '18:00'} WIB</strong></span>
+                      </div>
                     </div>
                   </div>
-                  <div className="text-[11px] text-slate-500 pt-1">
-                    Presensi pulang dapat dilakukan mulai pukul <strong>{userSchedule.checkOutStart} WIB</strong>.
-                  </div>
+
+                  {userSchedule.ruleNotes && (
+                    <p className="text-[10px] text-slate-500 italic bg-slate-50 p-2 rounded-lg border border-slate-200/50">
+                      &bull; {userSchedule.ruleNotes}
+                    </p>
+                  )}
                 </div>
               ) : (
                 <div className="text-xs text-slate-400">Jadwal belum ditentukan.</div>

@@ -211,19 +211,19 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
 
   return (
     <div className="space-y-6">
-      {/* Header Banner Khusus Kepala Sekolah */}
+      {/* Header Banner Perekaman & Database Wajah */}
       <div className="bg-gradient-to-r from-purple-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-6 sm:p-8 shadow-xl relative overflow-hidden">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 relative z-10">
           <div>
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-500/20 border border-purple-400/30 text-purple-300 text-xs font-semibold mb-3">
               <ScanFace className="w-3.5 h-3.5" />
-              <span>Menu Eksklusif Kepala Sekolah</span>
+              <span>Menu Admin &amp; Kepala Sekolah</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-              Database Wajah Terpusat
+              Perekaman &amp; Database Wajah
             </h1>
             <p className="text-purple-100/80 text-xs sm:text-sm mt-1 max-w-xl leading-relaxed">
-              Pendaftaran &amp; pembaruan data biometrik wajah Kepala Sekolah, Admin, dan seluruh Karyawan/Tendik sekolah.
+              Perekaman biometrik wajah langsung dari kamera peramban untuk pendaftaran dan pembaruan dataset wajah civitas sekolah.
             </p>
           </div>
 
@@ -235,12 +235,11 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
           </div>
         </div>
 
-        {/* Notice of Exclusivity */}
+        {/* Notice of Security */}
         <div className="mt-6 pt-4 border-t border-white/10 flex items-start gap-2.5 text-xs text-purple-200/90">
           <ShieldCheck className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
           <span>
-            <strong>Otoritas Keamanan:</strong> Hanya Kepala Sekolah yang berwenang mengelola database ini.
-            Admin tidak dapat mengubah data biometrik dirinya sendiri maupun Kepala Sekolah.
+            <strong>Hak Kelola Admin:</strong> Admin dan Kepala Sekolah dapat melakukan perekaman wajah baru, memverifikasi kemiripan, dan mengaktifkan dataset untuk presensi mandiri.
           </span>
         </div>
       </div>

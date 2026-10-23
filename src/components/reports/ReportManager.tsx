@@ -245,7 +245,7 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
         <div>
           <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-700">
             <BarChart3 className="w-4 h-4" />
-            <span>Tahap 7 &bull; Rekapitulasi Presensi &amp; Ekspor</span>
+            <span>Rekapitulasi Presensi &amp; Ekspor</span>
           </div>
           <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">
             {currentUser.role === 'karyawan' ? 'Laporan Presensi Pribadi' : 'Laporan Kehadiran Civitas Sekolah'}

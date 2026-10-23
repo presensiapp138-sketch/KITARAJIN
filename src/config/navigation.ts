@@ -69,22 +69,14 @@ export const NAVIGATION_ITEMS: NavItem[] = [
     group: 'operasional',
   },
 
-  // Manajemen (Khusus Kepala Sekolah & Admin)
+  // Manajemen
   {
     id: 'database_wajah',
     label: 'Database Wajah',
     iconName: 'ScanFace',
-    badge: 'Khusus KS',
-    description: 'Menu eksklusif Kepala Sekolah untuk mendaftarkan dan memvalidasi wajah seluruh pengguna.',
-    roles: ['kepala_sekolah'],
-    group: 'manajemen',
-  },
-  {
-    id: 'admin_users',
-    label: 'Kelola Admin',
-    iconName: 'ShieldCheck',
-    description: 'Manajemen akun admin sekolah dan wewenang operasional.',
-    roles: ['kepala_sekolah'],
+    badge: 'Admin & KS',
+    description: 'Perekaman biometrik wajah dan validasi dataset wajah seluruh staf/karyawan sekolah.',
+    roles: ['admin', 'kepala_sekolah'],
     group: 'manajemen',
   },
   {
@@ -115,8 +107,18 @@ export const NAVIGATION_ITEMS: NavItem[] = [
     id: 'lokasi',
     label: 'Lokasi & Radius',
     iconName: 'MapPin',
-    description: 'Titik koordinat GPS sekolah dan batas radius presensi dalam meter.',
-    roles: ['kepala_sekolah', 'admin'],
+    badge: 'Khusus KS',
+    description: 'Titik koordinat GPS sekolah dan batas radius presensi (Wewenang eksklusif Kepala Sekolah).',
+    roles: ['kepala_sekolah'], // Admin DILARANG atur lokasi & radius
+    group: 'manajemen',
+  },
+  {
+    id: 'admin_users',
+    label: 'Kelola Admin',
+    iconName: 'ShieldCheck',
+    badge: 'Khusus KS',
+    description: 'Manajemen akun admin sekolah dan wewenang operasional.',
+    roles: ['kepala_sekolah'],
     group: 'manajemen',
   },
 
@@ -133,7 +135,7 @@ export const NAVIGATION_ITEMS: NavItem[] = [
     id: 'pengaturan',
     label: 'Pengaturan & Sheets',
     iconName: 'Settings',
-    description: 'Sinkronisasi 10 tab Google Sheets, nama sekolah, dan opsi sistem.',
+    description: 'Sinkronisasi 10 tab Google Sheets, profil sekolah, dan opsi sistem.',
     roles: ['kepala_sekolah'],
     group: 'pengaturan',
   },

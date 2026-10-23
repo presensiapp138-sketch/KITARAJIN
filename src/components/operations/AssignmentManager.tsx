@@ -236,7 +236,7 @@ export const AssignmentManager: React.FC<AssignmentManagerProps> = ({ currentUse
         <div>
           <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-700">
             <ClipboardList className="w-4 h-4" />
-            <span>Tahap 6 &bull; Penugasan &amp; Dokumentasi Lapangan</span>
+            <span>Penugasan &amp; Dokumentasi Lapangan</span>
           </div>
           <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">
             {currentUser.role === 'karyawan' ? 'Daftar Tugas Saya' : 'Distribusi &amp; Verifikasi Tugas Staf'}

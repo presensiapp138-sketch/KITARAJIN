@@ -104,10 +104,10 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
               <Camera className="w-5 h-5 text-indigo-600" />
             </div>
             <div className="text-2xl font-extrabold text-indigo-700 mt-2">
-              Menu Eksklusif KS
+              Perekaman Wajah
             </div>
             <div className="text-xs text-slate-500 mt-1">
-              Registrasi & pembaruan wajah seluruh civitas sekolah
+              Dikelola oleh Admin &amp; Kepala Sekolah
             </div>
           </div>
 
@@ -141,11 +141,11 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
 
           <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
             <div className="flex items-center justify-between text-slate-400">
-              <span className="text-xs font-bold uppercase tracking-wider">Titik Presensi GPS</span>
-              <MapPin className="w-5 h-5 text-emerald-600" />
+              <span className="text-xs font-bold uppercase tracking-wider">Perekaman Wajah</span>
+              <Camera className="w-5 h-5 text-purple-600" />
             </div>
-            <div className="text-2xl font-extrabold text-emerald-800 mt-2">Radius 50 Meter</div>
-            <div className="text-xs text-slate-500 mt-1">Kampus SMA Negeri 1 Prestasi</div>
+            <div className="text-2xl font-extrabold text-purple-900 mt-2">Database Wajah</div>
+            <div className="text-xs text-slate-500 mt-1">Perekaman &amp; validasi biometrik staf</div>
           </div>
 
           <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">

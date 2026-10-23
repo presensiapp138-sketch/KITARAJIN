@@ -96,7 +96,7 @@ export const AuditLogManager: React.FC<AuditLogManagerProps> = ({ currentUser })
         <div>
           <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-700">
             <ShieldAlert className="w-4 h-4" />
-            <span>Tahap 7 &bull; Log Audit Admin &amp; Transparansi Sistem</span>
+            <span>Log Audit Admin &amp; Transparansi Sistem</span>
           </div>
           <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">
             Rekam Jejak Aktivitas Sistem
