@@ -22,6 +22,14 @@ import {
   UserCheck,
   RefreshCw,
   X,
+  Clock,
+  Plus,
+  Trash2,
+  Calendar,
+  Layers,
+  Sparkles,
+  Save,
+  Check,
 } from 'lucide-react';
 import { User, UserRole, Department, Schedule } from '../../types';
 import {
@@ -31,31 +39,50 @@ import {
   createUser,
   updateUser,
   toggleUserStatus,
+  createDepartment,
+  updateDepartment,
+  deleteDepartment,
+  createSchedule,
+  updateSchedule,
+  deleteSchedule,
+  updateUserSessions,
   getAuditLogs,
 } from '../../services/storage';
 
 interface UserManagerProps {
   currentUser: User;
   initialRoleFilter?: 'admin' | 'karyawan' | 'all';
+  initialTab?: 'users' | 'departments' | 'sessions';
 }
+
+const DAY_OPTIONS = [
+  { id: 1, label: 'Senin' },
+  { id: 2, label: 'Selasa' },
+  { id: 3, label: 'Rabu' },
+  { id: 4, label: 'Kamis' },
+  { id: 5, label: 'Jumat' },
+  { id: 6, label: 'Sabtu' },
+  { id: 0, label: 'Minggu' },
+];
 
 export const UserManager: React.FC<UserManagerProps> = ({
   currentUser,
   initialRoleFilter = 'all',
+  initialTab = 'users',
 }) => {
+  const [activeTab, setActiveTab] = useState<'users' | 'departments' | 'sessions'>(initialTab);
   const [users, setUsers] = useState<User[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'admin' | 'karyawan'>(initialRoleFilter);
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+  const [selectedDeptFilter, setSelectedDeptFilter] = useState<string>('all');
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  // User Modal State
+  const [isUserModalOpen, setIsUserModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
-
-  // Form State
   const [formNip, setFormNip] = useState('');
   const [formName, setFormName] = useState('');
   const [formUsername, setFormUsername] = useState('');
@@ -63,81 +90,154 @@ export const UserManager: React.FC<UserManagerProps> = ({
   const [formRole, setFormRole] = useState<'admin' | 'karyawan'>('karyawan');
   const [formDepartmentId, setFormDepartmentId] = useState('');
   const [formScheduleId, setFormScheduleId] = useState('');
+  const [formAssignedSessionIds, setFormAssignedSessionIds] = useState<string[]>(['sesi-1', 'sesi-2', 'sesi-3']);
   const [formPosition, setFormPosition] = useState('');
   const [formEmail, setFormEmail] = useState('');
   const [formPhone, setFormPhone] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isSubmittingUser, setIsSubmittingUser] = useState(false);
 
-  // Load data
+  // Department Modal State
+  const [isDeptModalOpen, setIsDeptModalOpen] = useState(false);
+  const [editingDept, setEditingDept] = useState<Department | null>(null);
+  const [deptFormName, setDeptFormName] = useState('');
+  const [deptFormCode, setDeptFormCode] = useState('');
+  const [deptFormDescription, setDeptFormDescription] = useState('');
+  const [deptFormHeadName, setDeptFormHeadName] = useState('');
+  const [isSubmittingDept, setIsSubmittingDept] = useState(false);
+
+  // Session / Schedule Modal State (Tambah/Edit Sesi Baru)
+  const [isSessionModalOpen, setIsSessionModalOpen] = useState(false);
+  const [editingSession, setEditingSession] = useState<Schedule | null>(null);
+  const [sessionFormName, setSessionFormName] = useState('');
+  const [sessionFormSessionName, setSessionFormSessionName] = useState('Sesi 1');
+  const [sessionCheckInStart, setSessionCheckInStart] = useState('06:00');
+  const [sessionCheckInDeadline, setSessionCheckInDeadline] = useState('07:30');
+  const [sessionLateTolerance, setSessionLateTolerance] = useState(15);
+  const [sessionCheckOutStart, setSessionCheckOutStart] = useState('11:30');
+  const [sessionCheckOutEnd, setSessionCheckOutEnd] = useState('13:00');
+  const [sessionWorkDays, setSessionWorkDays] = useState<number[]>([1, 2, 3, 4, 5, 6]);
+  const [sessionRuleNotes, setSessionRuleNotes] = useState('');
+  const [isSubmittingSession, setIsSubmittingSession] = useState(false);
+
+  // Quick Inline Session Edit State
+  const [savingSessionId, setSavingSessionId] = useState<string | null>(null);
+  const [sessionTimeInputs, setSessionTimeInputs] = useState<
+    Record<string, { checkInStart: string; checkInDeadline: string; checkOutStart: string; checkOutEnd: string }>
+  >({});
+
+  // Load all data
   const loadData = () => {
     setUsers(getAllUsers());
     setDepartments(getAllDepartments());
-    setSchedules(getAllSchedules());
+    const schedList = getAllSchedules();
+    setSchedules(schedList);
+
+    setSessionTimeInputs((prev) => {
+      const next = { ...prev };
+      schedList.forEach((s) => {
+        if (!next[s.id]) {
+          next[s.id] = {
+            checkInStart: s.checkInStart || '06:00',
+            checkInDeadline: s.checkInDeadline || '07:30',
+            checkOutStart: s.checkOutStart || '11:30',
+            checkOutEnd: s.checkOutEnd || '13:00',
+          };
+        }
+      });
+      return next;
+    });
   };
 
   useEffect(() => {
     loadData();
+
+    const handleSync = () => {
+      loadData();
+    };
+    window.addEventListener('kitarajin_cloud_sync', handleSync);
+    return () => {
+      window.removeEventListener('kitarajin_cloud_sync', handleSync);
+    };
   }, []);
 
-  // Filter list
+  // Filtered Users List
   const filteredUsers = users.filter((u) => {
-    // Role filter
     if (roleFilter !== 'all' && u.role !== roleFilter) return false;
-    // Status filter
     if (statusFilter === 'active' && !u.isActive) return false;
     if (statusFilter === 'inactive' && u.isActive) return false;
-    // Search query
+    if (selectedDeptFilter !== 'all' && u.departmentId !== selectedDeptFilter) return false;
+
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchName = u.name.toLowerCase().includes(q);
       const matchNip = u.nip.toLowerCase().includes(q);
       const matchUsername = u.username.toLowerCase().includes(q);
-      const matchPosition = u.position.toLowerCase().includes(q);
+      const matchPosition = u.position?.toLowerCase().includes(q);
       if (!matchName && !matchNip && !matchUsername && !matchPosition) return false;
     }
     return true;
   });
 
-  const openCreateModal = (presetRole?: 'admin' | 'karyawan') => {
+  // ==============================================================
+  // USER HANDLERS
+  // ==============================================================
+  const openCreateUserModal = (presetRole?: 'admin' | 'karyawan') => {
     setEditingUser(null);
     setFormNip('');
     setFormName('');
     setFormUsername('');
     setFormPassword('');
-    setFormRole(presetRole || (currentUser.role === 'admin' ? 'karyawan' : 'karyawan'));
+    setFormRole(presetRole || 'karyawan');
     setFormDepartmentId(departments[0]?.id || '');
     setFormScheduleId(schedules[0]?.id || '');
+    setFormAssignedSessionIds(['sesi-1', 'sesi-2', 'sesi-3']);
     setFormPosition('');
     setFormEmail('');
     setFormPhone('');
     setFeedback(null);
-    setIsModalOpen(true);
+    setIsUserModalOpen(true);
   };
 
-  const openEditModal = (user: User) => {
+  const openEditUserModal = (user: User) => {
     setEditingUser(user);
     setFormNip(user.nip);
     setFormName(user.name);
     setFormUsername(user.username);
-    setFormPassword(''); // Password dikosongkan jika tidak ingin direset
+    setFormPassword('');
     setFormRole(user.role === 'admin' ? 'admin' : 'karyawan');
     setFormDepartmentId(user.departmentId || departments[0]?.id || '');
     setFormScheduleId(user.scheduleId || schedules[0]?.id || '');
+    setFormAssignedSessionIds(
+      user.assignedSessionIds && user.assignedSessionIds.length > 0
+        ? user.assignedSessionIds
+        : ['sesi-1', 'sesi-2', 'sesi-3']
+    );
     setFormPosition(user.position);
     setFormEmail(user.email || '');
     setFormPhone(user.phone || '');
     setFeedback(null);
-    setIsModalOpen(true);
+    setIsUserModalOpen(true);
   };
 
-  const handleSubmitForm = async (e: React.FormEvent) => {
+  const toggleSessionInUserForm = (schedId: string) => {
+    if (formAssignedSessionIds.includes(schedId)) {
+      if (formAssignedSessionIds.length === 1) {
+        setFeedback({ type: 'error', message: 'Karyawan harus memiliki minimal 1 sesi presensi.' });
+        return;
+      }
+      setFormAssignedSessionIds(formAssignedSessionIds.filter((id) => id !== schedId));
+    } else {
+      setFormAssignedSessionIds([...formAssignedSessionIds, schedId]);
+    }
+  };
+
+  const handleSubmitUserForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsSubmitting(true);
+    setIsSubmittingUser(true);
     setFeedback(null);
 
     try {
       if (editingUser) {
-        // Edit existing user
         const res = await updateUser(currentUser, editingUser.id, {
           nip: formNip,
           name: formName,
@@ -145,6 +245,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
           position: formPosition,
           departmentId: formDepartmentId,
           scheduleId: formScheduleId,
+          assignedSessionIds: formAssignedSessionIds,
           email: formEmail || undefined,
           phone: formPhone || undefined,
           rawPassword: formPassword.trim() ? formPassword.trim() : undefined,
@@ -152,16 +253,15 @@ export const UserManager: React.FC<UserManagerProps> = ({
 
         if (res.success) {
           setFeedback({ type: 'success', message: res.message });
-          setIsModalOpen(false);
+          setIsUserModalOpen(false);
           loadData();
         } else {
           setFeedback({ type: 'error', message: res.message });
         }
       } else {
-        // Create new user
         if (!formPassword.trim()) {
           setFeedback({ type: 'error', message: 'Password wajib diisi untuk akun baru.' });
-          setIsSubmitting(false);
+          setIsSubmittingUser(false);
           return;
         }
 
@@ -173,6 +273,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
           role: formRole,
           departmentId: formDepartmentId,
           scheduleId: formScheduleId,
+          assignedSessionIds: formAssignedSessionIds,
           position: formPosition,
           email: formEmail || undefined,
           phone: formPhone || undefined,
@@ -180,20 +281,20 @@ export const UserManager: React.FC<UserManagerProps> = ({
 
         if (res.success) {
           setFeedback({ type: 'success', message: res.message });
-          setIsModalOpen(false);
+          setIsUserModalOpen(false);
           loadData();
         } else {
           setFeedback({ type: 'error', message: res.message });
         }
       }
     } catch {
-      setFeedback({ type: 'error', message: 'Terjadi kesalahan sistem saat menyimpan.' });
+      setFeedback({ type: 'error', message: 'Terjadi kesalahan sistem saat menyimpan data pegawai.' });
     } finally {
-      setIsSubmitting(false);
+      setIsSubmittingUser(false);
     }
   };
 
-  const handleToggleStatus = (targetUser: User) => {
+  const handleToggleUserStatus = (targetUser: User) => {
     const res = toggleUserStatus(currentUser, targetUser.id);
     if (res.success) {
       setFeedback({ type: 'success', message: res.message });
@@ -203,61 +304,324 @@ export const UserManager: React.FC<UserManagerProps> = ({
     }
   };
 
-  const stats = {
-    total: users.length,
-    admins: users.filter((u) => u.role === 'admin').length,
-    karyawan: users.filter((u) => u.role === 'karyawan').length,
-    active: users.filter((u) => u.isActive).length,
-    inactive: users.filter((u) => !u.isActive).length,
+  // Toggle Sesi langsung per karyawan di tabel Sesi
+  const handleToggleUserSessionQuick = (targetUser: User, sessionId: string) => {
+    const currentSessions = targetUser.assignedSessionIds && targetUser.assignedSessionIds.length > 0
+      ? targetUser.assignedSessionIds
+      : ['sesi-1', 'sesi-2', 'sesi-3'];
+
+    let updated: string[];
+    if (currentSessions.includes(sessionId)) {
+      if (currentSessions.length === 1) {
+        setFeedback({ type: 'error', message: `Karyawan ${targetUser.name} minimal harus memiliki 1 sesi presensi aktif.` });
+        return;
+      }
+      updated = currentSessions.filter((s) => s !== sessionId);
+    } else {
+      updated = [...currentSessions, sessionId];
+    }
+
+    const res = updateUserSessions(currentUser, targetUser.id, updated);
+    if (res.success) {
+      setFeedback({ type: 'success', message: res.message });
+      loadData();
+    } else {
+      setFeedback({ type: 'error', message: res.message });
+    }
+  };
+
+  // ==============================================================
+  // DEPARTMENT HANDLERS
+  // ==============================================================
+  const openCreateDeptModal = () => {
+    setEditingDept(null);
+    setDeptFormName('');
+    setDeptFormCode('');
+    setDeptFormDescription('');
+    setDeptFormHeadName('');
+    setFeedback(null);
+    setIsDeptModalOpen(true);
+  };
+
+  const openEditDeptModal = (dept: Department) => {
+    setEditingDept(dept);
+    setDeptFormName(dept.name);
+    setDeptFormCode(dept.code);
+    setDeptFormDescription(dept.description || '');
+    setDeptFormHeadName(dept.headName || '');
+    setFeedback(null);
+    setIsDeptModalOpen(true);
+  };
+
+  const handleSubmitDept = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!deptFormName.trim() || !deptFormCode.trim()) {
+      setFeedback({ type: 'error', message: 'Nama dan kode departemen wajib diisi.' });
+      return;
+    }
+
+    setIsSubmittingDept(true);
+    setFeedback(null);
+
+    if (editingDept) {
+      const res = updateDepartment(currentUser, editingDept.id, {
+        name: deptFormName,
+        code: deptFormCode,
+        description: deptFormDescription,
+        headName: deptFormHeadName,
+      });
+      if (res.success) {
+        setFeedback({ type: 'success', message: res.message });
+        setIsDeptModalOpen(false);
+        loadData();
+      } else {
+        setFeedback({ type: 'error', message: res.message });
+      }
+    } else {
+      const res = createDepartment(currentUser, {
+        name: deptFormName,
+        code: deptFormCode,
+        description: deptFormDescription,
+        headName: deptFormHeadName,
+      });
+      if (res.success) {
+        setFeedback({ type: 'success', message: res.message });
+        setIsDeptModalOpen(false);
+        loadData();
+        if (res.department) {
+          setFormDepartmentId(res.department.id);
+        }
+      } else {
+        setFeedback({ type: 'error', message: res.message });
+      }
+    }
+    setIsSubmittingDept(false);
+  };
+
+  const handleDeleteDept = (dept: Department) => {
+    if (!window.confirm(`Yakin ingin menghapus departemen "${dept.name}"?`)) return;
+    const res = deleteDepartment(currentUser, dept.id);
+    if (res.success) {
+      setFeedback({ type: 'success', message: res.message });
+      loadData();
+    } else {
+      setFeedback({ type: 'error', message: res.message });
+    }
+  };
+
+  // ==============================================================
+  // SESSION / SCHEDULE HANDLERS
+  // ==============================================================
+  const openCreateSessionModal = () => {
+    setEditingSession(null);
+    setSessionFormName('');
+    setSessionFormSessionName('Sesi ' + (schedules.length + 1));
+    setSessionCheckInStart('06:00');
+    setSessionCheckInDeadline('07:30');
+    setSessionLateTolerance(15);
+    setSessionCheckOutStart('11:30');
+    setSessionCheckOutEnd('13:00');
+    setSessionWorkDays([1, 2, 3, 4, 5, 6]);
+    setSessionRuleNotes('');
+    setFeedback(null);
+    setIsSessionModalOpen(true);
+  };
+
+  const openEditSessionModal = (sched: Schedule) => {
+    setEditingSession(sched);
+    setSessionFormName(sched.name);
+    setSessionFormSessionName(sched.sessionName || sched.name);
+    setSessionCheckInStart(sched.checkInStart);
+    setSessionCheckInDeadline(sched.checkInDeadline);
+    setSessionLateTolerance(sched.lateToleranceMinutes);
+    setSessionCheckOutStart(sched.checkOutStart);
+    setSessionCheckOutEnd(sched.checkOutEnd || '18:00');
+    setSessionWorkDays(sched.workDays || [1, 2, 3, 4, 5, 6]);
+    setSessionRuleNotes(sched.ruleNotes || '');
+    setFeedback(null);
+    setIsSessionModalOpen(true);
+  };
+
+  const updateSessionTimeField = (
+    schedId: string,
+    field: 'checkInStart' | 'checkInDeadline' | 'checkOutStart' | 'checkOutEnd',
+    val: string
+  ) => {
+    setSessionTimeInputs((prev) => {
+      const current = prev[schedId] || {
+        checkInStart: '06:00',
+        checkInDeadline: '07:30',
+        checkOutStart: '11:30',
+        checkOutEnd: '13:00',
+      };
+      return {
+        ...prev,
+        [schedId]: {
+          ...current,
+          [field]: val,
+        },
+      };
+    });
+  };
+
+  // Simpan perubahan jam sesi cepat dari kartu sesi
+  const handleQuickSaveSessionTimes = (sched: Schedule) => {
+    const times = sessionTimeInputs[sched.id] || {
+      checkInStart: sched.checkInStart,
+      checkInDeadline: sched.checkInDeadline,
+      checkOutStart: sched.checkOutStart,
+      checkOutEnd: sched.checkOutEnd || '18:00',
+    };
+
+    setSavingSessionId(sched.id);
+    const res = updateSchedule(currentUser, sched.id, {
+      checkInStart: times.checkInStart,
+      checkInDeadline: times.checkInDeadline,
+      checkOutStart: times.checkOutStart,
+      checkOutEnd: times.checkOutEnd,
+    });
+    setSavingSessionId(null);
+    if (res.success) {
+      setFeedback({
+        type: 'success',
+        message: `Jam ${sched.sessionName || sched.name} berhasil disimpan! Buka Masuk: ${times.checkInStart} WIB, Batas Masuk: ${times.checkInDeadline} WIB, Buka Pulang: ${times.checkOutStart} WIB, Batas Pulang: ${times.checkOutEnd} WIB. Terhubung langsung ke HP seluruh karyawan.`,
+      });
+      loadData();
+    } else {
+      setFeedback({ type: 'error', message: res.message });
+    }
+  };
+
+  const handleSubmitSession = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sessionFormName.trim()) {
+      setFeedback({ type: 'error', message: 'Nama sesi wajib diisi.' });
+      return;
+    }
+
+    setIsSubmittingSession(true);
+    setFeedback(null);
+
+    if (editingSession) {
+      const res = updateSchedule(currentUser, editingSession.id, {
+        name: sessionFormName,
+        sessionName: sessionFormSessionName,
+        checkInStart: sessionCheckInStart,
+        checkInDeadline: sessionCheckInDeadline,
+        lateToleranceMinutes: sessionLateTolerance,
+        checkOutStart: sessionCheckOutStart,
+        checkOutEnd: sessionCheckOutEnd,
+        workDays: sessionWorkDays,
+        ruleNotes: sessionRuleNotes,
+      });
+
+      if (res.success) {
+        setFeedback({ type: 'success', message: res.message });
+        setIsSessionModalOpen(false);
+        loadData();
+      } else {
+        setFeedback({ type: 'error', message: res.message });
+      }
+    } else {
+      const res = createSchedule(currentUser, {
+        name: sessionFormName,
+        sessionName: sessionFormSessionName,
+        checkInStart: sessionCheckInStart,
+        checkInDeadline: sessionCheckInDeadline,
+        lateToleranceMinutes: sessionLateTolerance,
+        checkOutStart: sessionCheckOutStart,
+        checkOutEnd: sessionCheckOutEnd,
+        workDays: sessionWorkDays,
+        ruleNotes: sessionRuleNotes,
+      });
+
+      if (res.success) {
+        setFeedback({ type: 'success', message: res.message });
+        setIsSessionModalOpen(false);
+        loadData();
+        if (res.schedule) {
+          setFormScheduleId(res.schedule.id);
+        }
+      } else {
+        setFeedback({ type: 'error', message: res.message });
+      }
+    }
+    setIsSubmittingSession(false);
+  };
+
+  const handleDeleteSession = (sched: Schedule) => {
+    if (!window.confirm(`Yakin ingin menghapus sesi "${sched.name}"?`)) return;
+    const res = deleteSchedule(currentUser, sched.id);
+    if (res.success) {
+      setFeedback({ type: 'success', message: res.message });
+      loadData();
+    } else {
+      setFeedback({ type: 'error', message: res.message });
+    }
   };
 
   return (
     <div className="space-y-6">
-      {/* Header Banner */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+      {/* Header Halaman */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-700">
             <Users className="w-4 h-4" />
-            <span>Manajemen Pengguna &amp; Otoritas</span>
+            <span>Manajemen Civitas Sekolah</span>
           </div>
           <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">
-            Pengelolaan Akun Sekolah
+            Kelola Karyawan, Departemen &amp; Fleksibilitas Sesi
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-            {currentUser.role === 'kepala_sekolah'
-              ? 'Kepala Sekolah memiliki hak mengelola akun Admin dan seluruh Karyawan/Tendik.'
-              : 'Admin berwenang mengelola data dan kredensial Karyawan/Tendik sekolah.'}
+            Admin dan Kepala Sekolah dapat mengatur departemen secara manual, mengonfigurasi jam masuk/pulang Sesi 1, 2, dan 3, serta menentukan sesi aktif fleksibel per masing-masing karyawan.
           </p>
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex flex-wrap items-center gap-2">
-          {currentUser.role === 'kepala_sekolah' && (
-            <button
-              type="button"
-              onClick={() => openCreateModal('admin')}
-              className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs shadow-xs transition-colors flex items-center gap-1.5"
-            >
-              <ShieldCheck className="w-4 h-4" />
-              <span>+ Buat Akun Admin</span>
-            </button>
-          )}
-
+        {/* Tab Switcher */}
+        <div className="flex items-center bg-slate-100 p-1 rounded-xl self-start sm:self-auto border border-slate-200/60">
           <button
             type="button"
-            onClick={() => openCreateModal('karyawan')}
-            className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs shadow-xs transition-colors flex items-center gap-1.5"
+            onClick={() => setActiveTab('users')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'users'
+                ? 'bg-white text-emerald-700 shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
           >
-            <UserPlus className="w-4 h-4" />
-            <span>+ Tambah Karyawan / Tendik</span>
+            <Users className="w-3.5 h-3.5" />
+            <span>Data Pegawai ({users.length})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('departments')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'departments'
+                ? 'bg-white text-emerald-700 shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Building2 className="w-3.5 h-3.5" />
+            <span>Departemen ({departments.length})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('sessions')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'sessions'
+                ? 'bg-white text-emerald-700 shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Clock className="w-3.5 h-3.5" />
+            <span>Aturan Sesi 1, 2, 3 ({schedules.length})</span>
           </button>
         </div>
       </div>
 
-      {/* Feedback Message */}
+      {/* Feedback Banner */}
       {feedback && (
         <div
-          className={`p-4 rounded-xl border flex items-start justify-between text-xs sm:text-sm ${
+          className={`p-4 rounded-xl border flex items-center justify-between text-xs sm:text-sm ${
             feedback.type === 'success'
               ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
               : 'bg-rose-50 border-rose-200 text-rose-900'
@@ -281,322 +645,672 @@ export const UserManager: React.FC<UserManagerProps> = ({
         </div>
       )}
 
-      {/* Metrics Row */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-          <span className="text-[11px] font-bold text-slate-400 uppercase">Total Pengguna</span>
-          <div className="text-xl font-extrabold text-slate-900 mt-1">{stats.total} Orang</div>
-        </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-          <span className="text-[11px] font-bold text-indigo-600 uppercase">Akun Admin</span>
-          <div className="text-xl font-extrabold text-indigo-700 mt-1">{stats.admins} Akun</div>
-        </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-          <span className="text-[11px] font-bold text-emerald-600 uppercase">Karyawan / Guru</span>
-          <div className="text-xl font-extrabold text-emerald-700 mt-1">{stats.karyawan} Orang</div>
-        </div>
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-          <span className="text-[11px] font-bold text-amber-600 uppercase">Status Aktif</span>
-          <div className="text-xl font-extrabold text-slate-800 mt-1">
-            {stats.active} <span className="text-xs font-normal text-slate-400">/ {stats.inactive} nonaktif</span>
+      {/* ============================================================== */}
+      {/* TAB 1: KELOLA DATA PEGAWAI & AKUN                              */}
+      {/* ============================================================== */}
+      {activeTab === 'users' && (
+        <div className="space-y-4">
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <div className="relative min-w-[220px]">
+                <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Cari nama, NIP, username..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-9 pr-3 py-1.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              {/* Filter Role */}
+              <select
+                value={roleFilter}
+                onChange={(e) => setRoleFilter(e.target.value as any)}
+                className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white font-medium"
+              >
+                <option value="all">Semua Peran</option>
+                <option value="karyawan">Karyawan / Guru</option>
+                <option value="admin">Admin Operasional</option>
+              </select>
+
+              {/* Filter Departemen */}
+              <select
+                value={selectedDeptFilter}
+                onChange={(e) => setSelectedDeptFilter(e.target.value)}
+                className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white font-medium"
+              >
+                <option value="all">Semua Departemen</option>
+                {departments.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+
+              {/* Filter Status */}
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as any)}
+                className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white font-medium"
+              >
+                <option value="all">Semua Status</option>
+                <option value="active">Aktif</option>
+                <option value="inactive">Nonaktif</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => openCreateUserModal('karyawan')}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer"
+              >
+                <UserPlus className="w-3.5 h-3.5" />
+                <span>Tambah Pegawai Baru</span>
+              </button>
+            </div>
           </div>
-        </div>
-      </div>
 
-      {/* Filter and Search Bar */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-        <div className="relative flex-1">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Cari berdasarkan nama, NIP, username, atau posisi..."
-            className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
-          />
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* Role Filter */}
-          <select
-            value={roleFilter}
-            onChange={(e) => setRoleFilter(e.target.value as any)}
-            className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-700 bg-white"
-          >
-            <option value="all">Semua Peran</option>
-            {currentUser.role === 'kepala_sekolah' && <option value="admin">Khusus Admin</option>}
-            <option value="karyawan">Khusus Karyawan</option>
-          </select>
-
-          {/* Status Filter */}
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as any)}
-            className="px-3 py-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-700 bg-white"
-          >
-            <option value="all">Semua Status</option>
-            <option value="active">Hanya Aktif</option>
-            <option value="inactive">Hanya Nonaktif</option>
-          </select>
-
-          <button
-            type="button"
-            onClick={loadData}
-            title="Refresh Data"
-            className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-
-      {/* Users Table */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs sm:text-sm">
-            <thead className="bg-slate-50 text-slate-700 text-xs font-bold uppercase tracking-wider border-b border-slate-200">
-              <tr>
-                <th className="py-3.5 px-4">Pengguna</th>
-                <th className="py-3.5 px-4">NIP / ID</th>
-                <th className="py-3.5 px-3">Peran & Departemen</th>
-                <th className="py-3.5 px-3">Status</th>
-                <th className="py-3.5 px-4 text-right">Tindakan</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filteredUsers.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="py-8 text-center text-slate-400">
-                    Tidak ditemukan data pengguna yang cocok dengan kriteria filter.
-                  </td>
-                </tr>
-              ) : (
-                filteredUsers.map((u) => {
-                  const dept = departments.find((d) => d.id === u.departmentId);
-                  const canEdit =
-                    currentUser.role === 'kepala_sekolah' ||
-                    (currentUser.role === 'admin' && u.role === 'karyawan');
-                  const canToggle =
-                    u.role !== 'kepala_sekolah' &&
-                    (currentUser.role === 'kepala_sekolah' ||
-                      (currentUser.role === 'admin' && u.role === 'karyawan'));
-
-                  return (
-                    <tr key={u.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="py-3.5 px-4">
-                        <div className="font-bold text-slate-900">{u.name}</div>
-                        <div className="text-[11px] text-slate-500 font-mono">@{u.username}</div>
-                        {u.email && (
-                          <div className="text-[11px] text-slate-400 flex items-center gap-1 mt-0.5">
-                            <Mail className="w-3 h-3" />
-                            <span>{u.email}</span>
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4 font-mono font-medium text-slate-700 text-xs">
-                        {u.nip}
-                      </td>
-                      <td className="py-3.5 px-3">
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            className={`px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider ${
-                              u.role === 'kepala_sekolah'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : u.role === 'admin'
-                                ? 'bg-indigo-100 text-indigo-800'
-                                : 'bg-amber-100 text-amber-800'
-                            }`}
-                          >
-                            {u.role.replace('_', ' ')}
-                          </span>
-                        </div>
-                        <div className="text-xs font-semibold text-slate-800 mt-1">{u.position}</div>
-                        {dept && (
-                          <div className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
-                            <Building2 className="w-3 h-3 text-slate-400" />
-                            <span>{dept.name}</span>
-                          </div>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-3">
-                        {u.isActive ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            <CheckCircle className="w-3 h-3" /> Aktif
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200">
-                            <XCircle className="w-3 h-3" /> Nonaktif
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3.5 px-4 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          {canEdit && (
-                            <button
-                              type="button"
-                              onClick={() => openEditModal(u)}
-                              className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-700 transition-colors"
-                              title="Edit Data & Reset Password"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-
-                          {canToggle && (
-                            <button
-                              type="button"
-                              onClick={() => handleToggleStatus(u)}
-                              className={`p-1.5 rounded-lg border transition-colors ${
-                                u.isActive
-                                  ? 'border-rose-200 hover:bg-rose-50 text-rose-600'
-                                  : 'border-emerald-200 hover:bg-emerald-50 text-emerald-600'
-                              }`}
-                              title={u.isActive ? 'Nonaktifkan Akun' : 'Aktifkan Akun'}
-                            >
-                              <Power className="w-3.5 h-3.5" />
-                            </button>
-                          )}
-                        </div>
+          {/* Tabel Pegawai */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200/80 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-4">Pegawai / NIP</th>
+                    <th className="py-3 px-4">Jabatan &amp; Unit</th>
+                    <th className="py-3 px-4">Sesi Presensi Ditugaskan</th>
+                    <th className="py-3 px-4">Peran</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4 text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredUsers.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-slate-400">
+                        Tidak ada data pegawai yang sesuai dengan filter pencarian.
                       </td>
                     </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                  ) : (
+                    filteredUsers.map((u) => {
+                      const dept = departments.find((d) => d.id === u.departmentId);
+                      const userSessions = u.assignedSessionIds && u.assignedSessionIds.length > 0
+                        ? u.assignedSessionIds
+                        : ['sesi-1', 'sesi-2', 'sesi-3'];
+
+                      return (
+                        <tr key={u.id} className="hover:bg-slate-50/60 transition-colors">
+                          <td className="py-3 px-4">
+                            <div className="font-bold text-slate-900">{u.name}</div>
+                            <div className="text-[11px] text-slate-500 font-mono">
+                              NIP: {u.nip} &bull; @{u.username}
+                            </div>
+                            {u.email && (
+                              <div className="text-[10px] text-emerald-700 flex items-center gap-1 mt-0.5">
+                                <Mail className="w-3 h-3" />
+                                <span>{u.email}</span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="font-semibold text-slate-800">{u.position || '-'}</div>
+                            <div className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
+                              <Building2 className="w-3 h-3 text-slate-400" />
+                              <span>{dept ? dept.name : 'Belum Ditentukan'}</span>
+                            </div>
+                          </td>
+                          <td className="py-3 px-4">
+                            <div className="flex flex-wrap gap-1">
+                              {schedules.map((sch) => {
+                                const isAssigned = userSessions.includes(sch.id);
+                                return (
+                                  <span
+                                    key={sch.id}
+                                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                      isAssigned
+                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                        : 'bg-slate-50 text-slate-400 border-slate-200 line-through opacity-60'
+                                    }`}
+                                  >
+                                    {sch.sessionName || sch.name}
+                                  </span>
+                                );
+                              })}
+                            </div>
+                            <span className="text-[10px] text-slate-400 mt-1 block">
+                              Fleksibel &bull; Karyawan memilih di layar presensi
+                            </span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                u.role === 'kepala_sekolah'
+                                  ? 'bg-purple-100 text-purple-800'
+                                  : u.role === 'admin'
+                                  ? 'bg-indigo-100 text-indigo-800'
+                                  : 'bg-emerald-100 text-emerald-800'
+                              }`}
+                            >
+                              {u.role === 'kepala_sekolah'
+                                ? 'Kepala Sekolah'
+                                : u.role === 'admin'
+                                ? 'Admin'
+                                : 'Karyawan / Guru'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex items-center gap-1 w-fit ${
+                                u.isActive
+                                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                  : 'bg-rose-50 text-rose-700 border border-rose-200'
+                              }`}
+                            >
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full ${
+                                  u.isActive ? 'bg-emerald-500' : 'bg-rose-500'
+                                }`}
+                              />
+                              {u.isActive ? 'Aktif' : 'Nonaktif'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => openEditUserModal(u)}
+                                className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                                title="Edit Akun & Jadwal Sesi"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              {u.role !== 'kepala_sekolah' && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleUserStatus(u)}
+                                  className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
+                                    u.isActive
+                                      ? 'border-amber-200 text-amber-700 hover:bg-amber-50'
+                                      : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
+                                  }`}
+                                  title={u.isActive ? 'Nonaktifkan Akun' : 'Aktifkan Akun'}
+                                >
+                                  <Power className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Modal Tambah / Edit Pengguna */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div
-            className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs"
-            onClick={() => !isSubmitting && setIsModalOpen(false)}
-          />
+      {/* ============================================================== */}
+      {/* TAB 2: KELOLA DEPARTEMEN SECARA MANUAL                         */}
+      {/* ============================================================== */}
+      {activeTab === 'departments' && (
+        <div className="space-y-4">
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Building2 className="w-5 h-5 text-emerald-600" />
+                <span>Unit Kerja &amp; Departemen Sekolah (Atur Manual)</span>
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Admin dan Kepala Sekolah dapat menambah, mengedit, dan menghapus departemen sekolah secara manual.
+              </p>
+            </div>
 
-          <div className="relative bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
+            <button
+              type="button"
+              onClick={openCreateDeptModal}
+              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer self-start sm:self-auto"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Tambah Departemen Baru</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {departments.map((dept) => {
+              const count = users.filter((u) => u.departmentId === dept.id).length;
+
+              return (
+                <div
+                  key={dept.id}
+                  className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-3 flex flex-col justify-between"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <span className="font-mono text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                          {dept.code}
+                        </span>
+                        <h3 className="font-extrabold text-slate-900 text-base mt-1.5">
+                          {dept.name}
+                        </h3>
+                      </div>
+                      <span className="text-[11px] font-bold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full">
+                        {count} Pegawai
+                      </span>
+                    </div>
+
+                    {dept.description && (
+                      <p className="text-xs text-slate-500 leading-relaxed">
+                        {dept.description}
+                      </p>
+                    )}
+
+                    {dept.headName && (
+                      <div className="text-[11px] text-slate-600 flex items-center gap-1.5 pt-1">
+                        <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Koordinator / PJ: <strong>{dept.headName}</strong></span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openEditDeptModal(dept)}
+                      className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                      <span>Edit</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteDept(dept)}
+                      className="px-3 py-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Hapus</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* TAB 3: ATURAN SESI 1, 2, 3 FLEKSIBEL PER KARYAWAN             */}
+      {/* ============================================================== */}
+      {activeTab === 'sessions' && (
+        <div className="space-y-6">
+          {/* Header Sesi */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <Clock className="w-5 h-5 text-emerald-600" />
+                <h2 className="text-base font-bold text-slate-900">
+                  Pengaturan Jam Mulai &amp; Pulang Sesi 1, Sesi 2, Sesi 3
+                </h2>
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                  Fleksibel Per Karyawan
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Kepala Sekolah dan Admin dapat mengatur jam presensi masuk dan jam pulang untuk Sesi 1, Sesi 2, dan Sesi 3. Pada menu presensi, karyawan bebas memilih sesi yang diatur untuknya.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={openCreateSessionModal}
+              className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer self-start sm:self-auto"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              <span>Tambah Sesi Tambahan</span>
+            </button>
+          </div>
+
+          {/* BAGIAN 1: KARTU ATURAN JAM SESI 1, SESI 2, SESI 3 */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {schedules.map((sched) => {
+              const assignedCount = users.filter((u) => {
+                const s = u.assignedSessionIds && u.assignedSessionIds.length > 0
+                  ? u.assignedSessionIds
+                  : ['sesi-1', 'sesi-2', 'sesi-3'];
+                return s.includes(sched.id);
+              }).length;
+
+              return (
+                <div
+                  key={sched.id}
+                  className="bg-white rounded-2xl border-2 border-slate-200/80 p-5 shadow-xs space-y-4 flex flex-col justify-between hover:border-emerald-500/60 transition-colors"
+                >
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="px-2.5 py-1 rounded-lg text-xs font-extrabold bg-emerald-600 text-white shadow-2xs">
+                        {sched.sessionName || sched.name}
+                      </span>
+                      <span className="text-[11px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">
+                        {assignedCount} Pegawai Aktif
+                      </span>
+                    </div>
+
+                    <div>
+                      <h3 className="font-extrabold text-slate-900 text-base">{sched.name}</h3>
+                      <p className="text-[11px] text-slate-500 mt-0.5">{sched.ruleNotes || 'Ketentuan jam kerja harian.'}</p>
+                    </div>
+
+                    {/* Form Pengaturan Jam Presensi Masuk & Pulang */}
+                    <div className="space-y-3 pt-2">
+                      {/* Aturan Masuk */}
+                      <div className="p-3 bg-emerald-50/80 rounded-xl border border-emerald-200/80 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-extrabold uppercase text-emerald-900 tracking-wider flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-emerald-700" />
+                            <span>1. Jam Presensi Masuk</span>
+                          </span>
+                          <span className="text-[10px] text-emerald-700 font-semibold font-mono">
+                            {sessionTimeInputs[sched.id]?.checkInStart || sched.checkInStart} - {sessionTimeInputs[sched.id]?.checkInDeadline || sched.checkInDeadline}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div>
+                            <label className="text-[10px] text-slate-600 font-semibold block mb-0.5">
+                              Mulai Dibuka:
+                            </label>
+                            <input
+                              type="time"
+                              value={sessionTimeInputs[sched.id]?.checkInStart ?? sched.checkInStart}
+                              onChange={(e) => updateSessionTimeField(sched.id, 'checkInStart', e.target.value)}
+                              className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                              title="Waktu presensi masuk mulai bisa dilakukan oleh karyawan"
+                            />
+                            <span className="text-[9px] text-slate-400 block mt-0.5">Jam buka masuk</span>
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-emerald-800 font-semibold block mb-0.5">
+                              Batas Tepat Waktu:
+                            </label>
+                            <input
+                              type="time"
+                              value={sessionTimeInputs[sched.id]?.checkInDeadline ?? sched.checkInDeadline}
+                              onChange={(e) => updateSessionTimeField(sched.id, 'checkInDeadline', e.target.value)}
+                              className="w-full px-2 py-1.5 rounded-lg border border-emerald-300 text-xs font-mono font-bold bg-white text-emerald-700 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                              title="Batas waktu sebelum tercatat Terlambat"
+                            />
+                            <span className="text-[9px] text-emerald-600 block mt-0.5">Batas keterlambatan</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Aturan Pulang */}
+                      <div className="p-3 bg-indigo-50/80 rounded-xl border border-indigo-200/80 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-extrabold uppercase text-indigo-900 tracking-wider flex items-center gap-1">
+                            <Clock className="w-3 h-3 text-indigo-700" />
+                            <span>2. Jam Presensi Pulang</span>
+                          </span>
+                          <span className="text-[10px] text-indigo-700 font-semibold font-mono">
+                            {sessionTimeInputs[sched.id]?.checkOutStart || sched.checkOutStart} - {sessionTimeInputs[sched.id]?.checkOutEnd || sched.checkOutEnd || '18:00'}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-xs">
+                          <div>
+                            <label className="text-[10px] text-slate-600 font-semibold block mb-0.5">
+                              Mulai Pulang:
+                            </label>
+                            <input
+                              type="time"
+                              value={sessionTimeInputs[sched.id]?.checkOutStart ?? sched.checkOutStart}
+                              onChange={(e) => updateSessionTimeField(sched.id, 'checkOutStart', e.target.value)}
+                              className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white text-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                              title="Waktu presensi kepulangan mulai bisa dilakukan oleh karyawan"
+                            />
+                            <span className="text-[9px] text-slate-400 block mt-0.5">Jam buka pulang</span>
+                          </div>
+                          <div>
+                            <label className="text-[10px] text-slate-600 font-semibold block mb-0.5">
+                              Batas Akhir:
+                            </label>
+                            <input
+                              type="time"
+                              value={sessionTimeInputs[sched.id]?.checkOutEnd ?? (sched.checkOutEnd || '18:00')}
+                              onChange={(e) => updateSessionTimeField(sched.id, 'checkOutEnd', e.target.value)}
+                              className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                              title="Batas waktu presensi kepulangan berakhir"
+                            />
+                            <span className="text-[9px] text-slate-400 block mt-0.5">Batas akhir sesi</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Tombol Simpan Jam Sesi */}
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => openEditSessionModal(sched)}
+                      className="text-xs text-slate-500 hover:text-slate-800 underline font-semibold cursor-pointer"
+                    >
+                      Atur Lengkap
+                    </button>
+                    <button
+                      type="button"
+                      disabled={savingSessionId === sched.id}
+                      onClick={() => handleQuickSaveSessionTimes(sched)}
+                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50 transition-colors"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>{savingSessionId === sched.id ? 'Menyimpan...' : 'Simpan Jam Sesi'}</span>
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* BAGIAN 2: MATRIKS PENUGASAN SESI FLEKSIBEL PER KARYAWAN */}
+          <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+              <div>
+                <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-emerald-600" />
+                  <span>Matriks Fleksibilitas Sesi Per Karyawan</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Centang sesi (Sesi 1, Sesi 2, Sesi 3) yang berlaku untuk masing-masing karyawan. Perubahan langsung aktif di layar HP karyawan.
+                </p>
+              </div>
+              <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                Otomatis Sinkron Cloud
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200/80 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-4">Nama Pegawai &amp; NIP</th>
+                    <th className="py-3 px-4">Departemen</th>
+                    {schedules.map((s) => (
+                      <th key={s.id} className="py-3 px-4 text-center">
+                        <span className="bg-white px-2 py-0.5 rounded border border-slate-200 font-mono">
+                          {s.sessionName || s.name}
+                        </span>
+                        <div className="text-[9px] text-slate-400 font-normal lowercase mt-0.5">
+                          {s.checkInDeadline} &bull; {s.checkOutStart}
+                        </div>
+                      </th>
+                    ))}
+                    <th className="py-3 px-4 text-right">Status Penugasan</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {users.map((u) => {
+                    const dept = departments.find((d) => d.id === u.departmentId);
+                    const userSessions = u.assignedSessionIds && u.assignedSessionIds.length > 0
+                      ? u.assignedSessionIds
+                      : ['sesi-1', 'sesi-2', 'sesi-3'];
+
+                    return (
+                      <tr key={u.id} className="hover:bg-slate-50/60 transition-colors">
+                        <td className="py-3 px-4">
+                          <div className="font-bold text-slate-900">{u.name}</div>
+                          <div className="text-[11px] text-slate-500 font-mono">
+                            NIP: {u.nip} &bull; {u.position}
+                          </div>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className="text-slate-700 font-medium">
+                            {dept ? dept.name : '-'}
+                          </span>
+                        </td>
+                        {schedules.map((s) => {
+                          const isChecked = userSessions.includes(s.id);
+                          return (
+                            <td key={s.id} className="py-3 px-4 text-center">
+                              <label className="inline-flex items-center justify-center cursor-pointer p-1">
+                                <input
+                                  type="checkbox"
+                                  checked={isChecked}
+                                  onChange={() => handleToggleUserSessionQuick(u, s.id)}
+                                  className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
+                                />
+                              </label>
+                            </td>
+                          );
+                        })}
+                        <td className="py-3 px-4 text-right">
+                          <span className="text-[11px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                            {userSessions.length} Sesi Terbuka
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL USER / PEGAWAI                                           */}
+      {/* ============================================================== */}
+      {isUserModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 my-8">
             <div className="flex items-center justify-between pb-4 border-b border-slate-100">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">
-                  {editingUser ? <Edit2 className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
+                <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                  <UserPlus className="w-4 h-4" />
                 </div>
                 <div>
-                  <h3 className="font-bold text-slate-900 text-base">
-                    {editingUser ? `Edit Akun: ${editingUser.name}` : 'Tambah Pengguna Baru'}
+                  <h3 className="font-extrabold text-slate-900 text-base">
+                    {editingUser ? 'Edit Data Pegawai & Sesi' : 'Tambah Pegawai Baru'}
                   </h3>
-                  <p className="text-[11px] text-slate-500">
-                    Password disimpan terenkripsi dengan hashing SHA-256 aman.
+                  <p className="text-xs text-slate-500">
+                    Lengkapi identitas, departemen, dan pilihan sesi presensi pegawai.
                   </p>
                 </div>
               </div>
               <button
                 type="button"
-                onClick={() => setIsModalOpen(false)}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+                onClick={() => setIsUserModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <form onSubmit={handleSubmitForm} className="space-y-4 mt-4">
-              {/* Role Selection (Only allowed for KS creating new) */}
-              {!editingUser && currentUser.role === 'kepala_sekolah' && (
+            <form onSubmit={handleSubmitUserForm} className="space-y-4 pt-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* NIP */}
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Jenis Peran Akun
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    NIP / No. Induk <span className="text-rose-500">*</span>
                   </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setFormRole('admin')}
-                      className={`p-2.5 rounded-xl border text-xs font-bold transition-all text-center ${
-                        formRole === 'admin'
-                          ? 'bg-indigo-50 border-indigo-500 text-indigo-700 ring-2 ring-indigo-500/20'
-                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      Admin Sekolah
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setFormRole('karyawan')}
-                      className={`p-2.5 rounded-xl border text-xs font-bold transition-all text-center ${
-                        formRole === 'karyawan'
-                          ? 'bg-emerald-50 border-emerald-500 text-emerald-700 ring-2 ring-emerald-500/20'
-                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      Karyawan / Tendik
-                    </button>
-                  </div>
+                  <input
+                    type="text"
+                    required
+                    value={formNip}
+                    onChange={(e) => setFormNip(e.target.value)}
+                    placeholder="Contoh: 19900415..."
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
                 </div>
-              )}
 
-              {/* NIP / ID */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  NIP / ID Unik <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={formNip}
-                  onChange={(e) => setFormNip(e.target.value)}
-                  placeholder="Misal: 198804152011012003"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                />
+                {/* Peran */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Peran Akun <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    value={formRole}
+                    onChange={(e) => setFormRole(e.target.value as any)}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white font-medium"
+                  >
+                    <option value="karyawan">Karyawan / Guru / Staf</option>
+                    <option value="admin">Admin Operasional</option>
+                  </select>
+                </div>
               </div>
 
               {/* Nama Lengkap */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Nama Lengkap & Gelar <span className="text-rose-500">*</span>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Nama Lengkap &amp; Gelar <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
                   required
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
-                  placeholder="Misal: Siti Rahmawati, S.Pd."
+                  placeholder="Contoh: Siti Rahmawati, S.Pd."
                   className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
 
-              {/* Username */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Username Login <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={formUsername}
-                  onChange={(e) => setFormUsername(e.target.value)}
-                  placeholder="Misal: sitirahma"
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                />
-              </div>
-
-              {/* Password */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  {editingUser ? 'Reset Password (Kosongkan jika tidak diubah)' : 'Password Awal'} {!editingUser && <span className="text-rose-500">*</span>}
-                </label>
-                <input
-                  type="password"
-                  required={!editingUser}
-                  value={formPassword}
-                  onChange={(e) => setFormPassword(e.target.value)}
-                  placeholder={editingUser ? 'Ketik password baru untuk mereset...' : 'Minimal 6 karakter'}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                />
-              </div>
-
-              {/* Jabatan & Departemen */}
+              {/* Username & Password */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Username Login <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={formUsername}
+                    onChange={(e) => setFormUsername(e.target.value)}
+                    placeholder="sitirahma"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    {editingUser ? 'Reset Password (Opsional)' : 'Password Awal'} {!editingUser && <span className="text-rose-500">*</span>}
+                  </label>
+                  <input
+                    type="password"
+                    required={!editingUser}
+                    value={formPassword}
+                    onChange={(e) => setFormPassword(e.target.value)}
+                    placeholder={editingUser ? 'Ketik jika ingin ubah...' : 'Minimal 6 karakter'}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              {/* Jabatan & Departemen Manual */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
                     Jabatan / Posisi <span className="text-rose-500">*</span>
                   </label>
                   <input
@@ -604,69 +1318,106 @@ export const UserManager: React.FC<UserManagerProps> = ({
                     required
                     value={formPosition}
                     onChange={(e) => setFormPosition(e.target.value)}
-                    placeholder="Contoh: Guru Matematika"
+                    placeholder="Guru Matematika"
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Departemen
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-bold text-slate-700 uppercase">
+                      Departemen Manual
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsUserModalOpen(false);
+                        openCreateDeptModal();
+                      }}
+                      className="text-[10px] text-emerald-700 font-bold hover:underline cursor-pointer"
+                    >
+                      + Tambah Baru
+                    </button>
+                  </div>
                   <select
                     value={formDepartmentId}
                     onChange={(e) => setFormDepartmentId(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white font-medium"
                   >
                     {departments.map((d) => (
                       <option key={d.id} value={d.id}>
-                        {d.name}
+                        {d.name} ({d.code})
                       </option>
                     ))}
                   </select>
                 </div>
               </div>
 
-              {/* Jadwal Kerja */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                  Jadwal Kerja / Shift Presensi
-                </label>
-                <select
-                  value={formScheduleId}
-                  onChange={(e) => setFormScheduleId(e.target.value)}
-                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white"
-                >
-                  {schedules.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} (Batas: {s.checkInDeadline}, Toleransi: +{s.lateToleranceMinutes}m, Pulang: {s.checkOutStart})
-                    </option>
-                  ))}
-                </select>
+              {/* SESI FLEKSIBEL PER KARYAWAN: CHECKBOXES SESI 1, SESI 2, SESI 3 */}
+              <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-extrabold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                    <Clock className="w-4 h-4 text-emerald-600" />
+                    <span>Sesi Presensi yang Berlaku untuk Karyawan Ini:</span>
+                  </label>
+                  <span className="text-[10px] text-emerald-700 font-bold">
+                    Fleksibel Per Pegawai
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  Pilih sesi yang dapat diambil oleh karyawan ini saat presensi masuk &amp; pulang:
+                </p>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {schedules.map((sch) => {
+                    const isChecked = formAssignedSessionIds.includes(sch.id);
+                    return (
+                      <button
+                        key={sch.id}
+                        type="button"
+                        onClick={() => toggleSessionInUserForm(sch.id)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border ${
+                          isChecked
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                            : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        <span className={`w-3.5 h-3.5 rounded flex items-center justify-center text-[10px] border ${
+                          isChecked ? 'bg-white text-emerald-700 border-white' : 'border-slate-400'
+                        }`}>
+                          {isChecked && '✓'}
+                        </span>
+                        <span>{sch.sessionName || sch.name}</span>
+                        <span className={`text-[10px] font-mono ${isChecked ? 'text-emerald-100' : 'text-slate-400'}`}>
+                          ({sch.checkInDeadline})
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               {/* Email & Phone */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
                     Email
                   </label>
                   <input
                     type="email"
                     value={formEmail}
                     onChange={(e) => setFormEmail(e.target.value)}
-                    placeholder="nama@sekolah.sch.id"
+                    placeholder="email@sekolah.sch.id"
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Nomor WhatsApp/HP
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    No. WhatsApp/HP
                   </label>
                   <input
                     type="text"
                     value={formPhone}
                     onChange={(e) => setFormPhone(e.target.value)}
-                    placeholder="08123456789"
+                    placeholder="081234567890"
                     className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   />
                 </div>
@@ -675,18 +1426,296 @@ export const UserManager: React.FC<UserManagerProps> = ({
               <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setIsModalOpen(false)}
-                  disabled={isSubmitting}
-                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold"
+                  onClick={() => setIsUserModalOpen(false)}
+                  disabled={isSubmittingUser}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold cursor-pointer"
                 >
                   Batal
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
-                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs disabled:opacity-50"
+                  disabled={isSubmittingUser}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs disabled:opacity-50 cursor-pointer"
                 >
-                  {isSubmitting ? 'Menyimpan...' : editingUser ? 'Perbarui Akun' : 'Simpan Akun'}
+                  {isSubmittingUser ? 'Menyimpan...' : editingUser ? 'Perbarui Pegawai' : 'Simpan Pegawai'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL DEPARTEMEN                                               */}
+      {/* ============================================================== */}
+      {isDeptModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                  <Building2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-base">
+                    {editingDept ? 'Edit Departemen' : 'Tambah Departemen Baru'}
+                  </h3>
+                  <p className="text-xs text-slate-500">Unit kerja atau departemen staf sekolah.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsDeptModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitDept} className="space-y-4 pt-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Nama Departemen <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={deptFormName}
+                  onChange={(e) => setDeptFormName(e.target.value)}
+                  placeholder="Contoh: Tata Usaha / Kepegawaian"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Kode Singkat Departemen <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={deptFormCode}
+                  onChange={(e) => setDeptFormCode(e.target.value)}
+                  placeholder="Contoh: TU, GURU, SATPAM"
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm uppercase focus:ring-2 focus:ring-emerald-500 focus:outline-none font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Nama Kepala / Penanggung Jawab
+                </label>
+                <input
+                  type="text"
+                  value={deptFormHeadName}
+                  onChange={(e) => setDeptFormHeadName(e.target.value)}
+                  placeholder="Contoh: Ahmad Fauzi, S.Kom."
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Deskripsi Singkat
+                </label>
+                <textarea
+                  rows={2}
+                  value={deptFormDescription}
+                  onChange={(e) => setDeptFormDescription(e.target.value)}
+                  placeholder="Penjelasan fungsi departemen ini di sekolah..."
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsDeptModalOpen(false)}
+                  disabled={isSubmittingDept}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingDept}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs disabled:opacity-50 cursor-pointer"
+                >
+                  {isSubmittingDept ? 'Menyimpan...' : editingDept ? 'Perbarui Departemen' : 'Simpan Departemen'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* MODAL SESI PRESENSI MANUAL                                     */}
+      {/* ============================================================== */}
+      {isSessionModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 my-8">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold">
+                  <Clock className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-base">
+                    {editingSession ? 'Edit Detail Sesi Presensi' : 'Tambah Form Sesi Presensi Baru'}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    Atur jam buka masuk, batas tepat waktu, dan jam pulang sesi presensi.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSessionModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitSession} className="space-y-4 pt-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Label Nama Sesi <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={sessionFormName}
+                    onChange={(e) => setSessionFormName(e.target.value)}
+                    placeholder="Contoh: Sesi 1 (Pagi)"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Nama Singkat Sesi <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={sessionFormSessionName}
+                    onChange={(e) => setSessionFormSessionName(e.target.value)}
+                    placeholder="Contoh: Sesi 1 / Sesi 2 / Sesi 3"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none font-bold"
+                  />
+                </div>
+              </div>
+
+              {/* Aturan Masuk */}
+              <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200/80 space-y-3">
+                <span className="text-xs font-extrabold text-emerald-900 uppercase tracking-wider block">
+                  Aturan Jam Presensi Masuk
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
+                      Jam Buka Masuk
+                    </label>
+                    <input
+                      type="time"
+                      required
+                      value={sessionCheckInStart}
+                      onChange={(e) => setSessionCheckInStart(e.target.value)}
+                      className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
+                      Batas Tepat Waktu
+                    </label>
+                    <input
+                      type="time"
+                      required
+                      value={sessionCheckInDeadline}
+                      onChange={(e) => setSessionCheckInDeadline(e.target.value)}
+                      className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white text-emerald-700"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
+                      Toleransi (Menit)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={120}
+                      value={sessionLateTolerance}
+                      onChange={(e) => setSessionLateTolerance(Number(e.target.value))}
+                      className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Aturan Pulang */}
+              <div className="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-200/80 space-y-3">
+                <span className="text-xs font-extrabold text-indigo-900 uppercase tracking-wider block">
+                  Aturan Jam Presensi Pulang
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
+                      Mulai Buka Pulang
+                    </label>
+                    <input
+                      type="time"
+                      required
+                      value={sessionCheckOutStart}
+                      onChange={(e) => setSessionCheckOutStart(e.target.value)}
+                      className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white text-indigo-700"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
+                      Batas Akhir Pulang
+                    </label>
+                    <input
+                      type="time"
+                      required
+                      value={sessionCheckOutEnd}
+                      onChange={(e) => setSessionCheckOutEnd(e.target.value)}
+                      className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Catatan Sesi */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Catatan Sesi / Petunjuk untuk Karyawan
+                </label>
+                <input
+                  type="text"
+                  value={sessionRuleNotes}
+                  onChange={(e) => setSessionRuleNotes(e.target.value)}
+                  placeholder="Contoh: Sesi pagi kedatangan seluruh guru..."
+                  className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsSessionModalOpen(false)}
+                  disabled={isSubmittingSession}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmittingSession}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs disabled:opacity-50 cursor-pointer"
+                >
+                  {isSubmittingSession ? 'Menyimpan...' : editingSession ? 'Perbarui Sesi' : 'Simpan Sesi Presensi'}
                 </button>
               </div>
             </form>

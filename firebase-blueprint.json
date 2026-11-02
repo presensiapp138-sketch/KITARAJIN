@@ -1,0 +1,244 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Akun pengguna sistem sekolah (Kepala Sekolah, Admin, dan Karyawan/Tendik)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nip": { "type": "string" },
+        "name": { "type": "string" },
+        "username": { "type": "string" },
+        "email": { "type": "string" },
+        "passwordHash": { "type": "string" },
+        "role": { "type": "string", "enum": ["kepala_sekolah", "admin", "karyawan"] },
+        "departmentId": { "type": "string" },
+        "scheduleId": { "type": "string" },
+        "position": { "type": "string" },
+        "phone": { "type": "string" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "nip", "name", "username", "role", "isActive"]
+    },
+    "Department": {
+      "title": "Department",
+      "description": "Unit kerja atau departemen sekolah",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "headName": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "code", "name"]
+    },
+    "Schedule": {
+      "title": "Schedule",
+      "description": "Jadwal kerja, jam presensi masuk dan pulang",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "checkInStart": { "type": "string" },
+        "checkInDeadline": { "type": "string" },
+        "lateToleranceMinutes": { "type": "number" },
+        "checkOutStart": { "type": "string" },
+        "workDays": { "type": "array" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "name", "checkInStart", "checkInDeadline", "checkOutStart"]
+    },
+    "Location": {
+      "title": "Location",
+      "description": "Titik koordinat GPS dan radius geofence presensi",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "radiusMeters": { "type": "number" },
+        "address": { "type": "string" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "name", "latitude", "longitude", "radiusMeters"]
+    },
+    "FaceRegistry": {
+      "title": "FaceRegistry",
+      "description": "Dataset biometrik dan vektor embedding wajah pegawai",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "nip": { "type": "string" },
+        "userName": { "type": "string" },
+        "role": { "type": "string" },
+        "faceEmbedding": { "type": "array" },
+        "registeredPhotoRef": { "type": "string" },
+        "registeredBy": { "type": "string" },
+        "cameraUsed": { "type": "string" },
+        "qualityScore": { "type": "number" },
+        "updatedAt": { "type": "string" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "userId", "userName", "faceEmbedding", "registeredPhotoRef"]
+    },
+    "AttendanceRecord": {
+      "title": "AttendanceRecord",
+      "description": "Transaksi presensi kehadiran masuk dan pulang",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "nip": { "type": "string" },
+        "userName": { "type": "string" },
+        "role": { "type": "string" },
+        "date": { "type": "string" },
+        "type": { "type": "string", "enum": ["masuk", "pulang"] },
+        "timestamp": { "type": "string" },
+        "status": { "type": "string" },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "distanceFromLocationMeters": { "type": "number" },
+        "isLocationValid": { "type": "boolean" },
+        "isFaceValid": { "type": "boolean" },
+        "faceSimilarityScore": { "type": "number" },
+        "photoRef": { "type": "string" },
+        "deviceInfo": { "type": "string" },
+        "notes": { "type": "string" }
+      },
+      "required": ["id", "userId", "date", "type", "timestamp", "status", "photoRef"]
+    },
+    "LeaveRequest": {
+      "title": "LeaveRequest",
+      "description": "Pengajuan izin, sakit, dan surat dinas luar",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "nip": { "type": "string" },
+        "userName": { "type": "string" },
+        "type": { "type": "string", "enum": ["izin", "sakit", "dinas"] },
+        "startDate": { "type": "string" },
+        "endDate": { "type": "string" },
+        "durationDays": { "type": "number" },
+        "reason": { "type": "string" },
+        "documentRef": { "type": "string" },
+        "status": { "type": "string", "enum": ["menunggu", "disetujui", "ditolak"] },
+        "reviewedBy": { "type": "string" },
+        "reviewNotes": { "type": "string" },
+        "reviewedAt": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "userName", "type", "startDate", "endDate", "status"]
+    },
+    "Assignment": {
+      "title": "Assignment",
+      "description": "Distribusi penugasan staf dan unggahan dokumentasi",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "assignedToUserId": { "type": "string" },
+        "assignedToName": { "type": "string" },
+        "assignedByUserId": { "type": "string" },
+        "assignedByName": { "type": "string" },
+        "dueDate": { "type": "string" },
+        "status": { "type": "string", "enum": ["belum_mulai", "proses", "selesai", "perlu_perbaikan"] },
+        "completedAt": { "type": "string" },
+        "documentationPhotoRef": { "type": "string" },
+        "documentationNotes": { "type": "string" },
+        "feedback": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "title", "assignedToUserId", "status", "createdAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Catatan rekam jejak aktivitas admin dan pengguna",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "actorUserId": { "type": "string" },
+        "actorName": { "type": "string" },
+        "actorRole": { "type": "string" },
+        "action": { "type": "string" },
+        "targetEntity": { "type": "string" },
+        "targetId": { "type": "string" },
+        "details": { "type": "string" },
+        "ipAddress": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["id", "actorUserId", "actorName", "action", "timestamp"]
+    },
+    "Settings": {
+      "title": "Settings",
+      "description": "Konfigurasi identitas sekolah dan integrasi",
+      "type": "object",
+      "properties": {
+        "schoolName": { "type": "string" },
+        "schoolAddress": { "type": "string" },
+        "appTitle": { "type": "string" },
+        "storageMode": { "type": "string" },
+        "googleSheetSpreadsheetId": { "type": "string" },
+        "googleDriveFolderId": { "type": "string" },
+        "requireStrictFaceVerification": { "type": "boolean" },
+        "requireStrictGps": { "type": "boolean" },
+        "minFaceMatchThreshold": { "type": "number" },
+        "themeColor": { "type": "string" },
+        "lastSyncTimestamp": { "type": "string" },
+        "googleAccountEmail": { "type": "string" },
+        "isGoogleConnected": { "type": "boolean" },
+        "googleConnectedAt": { "type": "string" }
+      },
+      "required": ["schoolName", "appTitle"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Koleksi data akun pengguna"
+    },
+    "/departments/{departmentId}": {
+      "schema": { "$ref": "#/entities/Department" },
+      "description": "Koleksi unit kerja / departemen"
+    },
+    "/schedules/{scheduleId}": {
+      "schema": { "$ref": "#/entities/Schedule" },
+      "description": "Koleksi jadwal kerja dan toleransi presensi"
+    },
+    "/locations/{locationId}": {
+      "schema": { "$ref": "#/entities/Location" },
+      "description": "Koleksi koordinat GPS dan radius geofence"
+    },
+    "/faceRegistry/{faceId}": {
+      "schema": { "$ref": "#/entities/FaceRegistry" },
+      "description": "Koleksi pendaftaran wajah staf"
+    },
+    "/attendance/{attendanceId}": {
+      "schema": { "$ref": "#/entities/AttendanceRecord" },
+      "description": "Koleksi transaksi presensi masuk & pulang"
+    },
+    "/leaveRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/LeaveRequest" },
+      "description": "Koleksi permohonan izin dan sakit"
+    },
+    "/assignments/{assignmentId}": {
+      "schema": { "$ref": "#/entities/Assignment" },
+      "description": "Koleksi penugasan kerja dan foto bukti"
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Koleksi audit log sistem"
+    },
+    "/settings/{settingId}": {
+      "schema": { "$ref": "#/entities/Settings" },
+      "description": "Koleksi pengaturan sekolah dan integrasi"
+    }
+  }
+}

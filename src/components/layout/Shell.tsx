@@ -183,8 +183,17 @@ export const Shell: React.FC<ShellProps> = ({
               </button>
             </div>
 
-            {/* Right Controls: PWA Install Button & Current User Info & Logout */}
-            <div className="flex items-center gap-2 sm:gap-4">
+            {/* Right Controls: Cloud Sync Badge, PWA Install Button & Current User Info & Logout */}
+            <div className="flex items-center gap-2 sm:gap-3">
+              {/* Multi-Device Real-Time Cloud Sync Badge */}
+              <div
+                className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold shadow-2xs"
+                title="Database Cloud Firestore aktif untuk sinkronisasi multi-device real-time (siap deploy ke Vercel dan dibagikan ke banyak pengguna)"
+              >
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>Multi-Device Sync</span>
+              </div>
+
               <PWAInstallButton variant="header" />
 
               {/* User Profile Summary - Clickable to edit Name & Email */}

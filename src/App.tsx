@@ -26,11 +26,13 @@ import { AssignmentManager } from './components/operations/AssignmentManager';
 import { ReportManager } from './components/reports/ReportManager';
 import { AuditLogManager } from './components/audit/AuditLogManager';
 import { AlertCircle } from 'lucide-react';
+import { startMultiDeviceRealtimeSync } from './services/firestoreSync';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeMenuId, setActiveMenuId] = useState<string>('dashboard');
   const [isInitializing, setIsInitializing] = useState<boolean>(true);
+  const [syncVersion, setSyncVersion] = useState<number>(0);
 
   useEffect(() => {
     async function init() {
@@ -42,6 +44,23 @@ export default function App() {
       setIsInitializing(false);
     }
     init();
+
+    // Mulai sinkronisasi multi-device real-time dengan Cloud Firestore
+    const stopSync = startMultiDeviceRealtimeSync((collectionName) => {
+      // Jika profil akun aktif diperbarui dari device lain, sinkronkan sesi
+      if (collectionName === 'users') {
+        const session = getCurrentSession();
+        if (session) {
+          setCurrentUser(session);
+        }
+      }
+      // Trigger render ulang seluruh tampilan aktif agar data dari perangkat lain langsung muncul
+      setSyncVersion((v) => v + 1);
+    });
+
+    return () => {
+      stopSync();
+    };
   }, []);
 
   const handleLoginSuccess = (user: User) => {
@@ -141,7 +160,7 @@ export default function App() {
         return <UserManager currentUser={currentUser} initialRoleFilter="karyawan" />;
 
       case 'departemen':
-        return <DepartmentManager currentUser={currentUser} />;
+        return <UserManager currentUser={currentUser} initialTab="departments" />;
 
       case 'jadwal':
         return <ScheduleManager currentUser={currentUser} />;
@@ -202,7 +221,9 @@ export default function App() {
       onSelectMenu={(menuId) => setActiveMenuId(menuId)}
       onUpdateCurrentUser={(updated) => setCurrentUser(updated)}
     >
-      {renderContent()}
+      <div key={`${activeMenuId}_${syncVersion}`}>
+        {renderContent()}
+      </div>
     </Shell>
   );
 }

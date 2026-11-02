@@ -1,0 +1,82 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions: Valid document ID (non-empty string up to 128 chars)
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128;
+    }
+
+    // Default safety catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 1. Users Collection
+    match /users/{userId} {
+      allow read: if true;
+      allow write: if isValidId(userId);
+    }
+
+    // 2. Departments Collection
+    match /departments/{departmentId} {
+      allow read: if true;
+      allow write: if isValidId(departmentId);
+    }
+
+    // 3. Schedules Collection
+    match /schedules/{scheduleId} {
+      allow read: if true;
+      allow write: if isValidId(scheduleId);
+    }
+
+    // 4. Locations Collection
+    match /locations/{locationId} {
+      allow read: if true;
+      allow write: if isValidId(locationId);
+    }
+
+    // 5. Face Registry Collection
+    match /faceRegistry/{faceId} {
+      allow read: if true;
+      allow write: if isValidId(faceId);
+    }
+
+    // 6. Attendance Collection (Presensi Masuk & Pulang)
+    match /attendance/{attendanceId} {
+      allow read: if true;
+      allow write: if isValidId(attendanceId);
+    }
+
+    // 7. Leave Requests Collection (Pengajuan Izin)
+    match /leaveRequests/{requestId} {
+      allow read: if true;
+      allow write: if isValidId(requestId);
+    }
+
+    // 8. Assignments Collection (Tugas & Dokumentasi)
+    match /assignments/{assignmentId} {
+      allow read: if true;
+      allow write: if isValidId(assignmentId);
+    }
+
+    // 9. Audit Logs Collection (Allow write during multi-device synchronization)
+    match /auditLogs/{logId} {
+      allow read: if true;
+      allow write: if isValidId(logId);
+    }
+
+    // 10. Settings Collection
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isValidId(settingId);
+    }
+
+    // Connection test document
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+  }
+}
+

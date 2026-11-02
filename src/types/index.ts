@@ -23,6 +23,7 @@ export interface User {
   departmentId?: string;
   position: string; // Jabatan: e.g. Kepala Sekolah, Admin TU, Guru, Staff Dapur, Satpam
   scheduleId?: string;
+  assignedSessionIds?: string[]; // Sesi presensi aktif yang ditugaskan ke karyawan ini (e.g. ['sesi-1', 'sesi-2'])
   phone?: string;
   isActive: boolean;
   avatarUrl?: string;
@@ -103,6 +104,8 @@ export interface AttendanceRecord {
   photoRef: string; // Foto bukti presensi
   deviceInfo: string;
   notes?: string;
+  sessionId?: string;
+  sessionName?: string;
 }
 
 // Pasangan Riwayat Presensi Harian (Absen Masuk & Pulang)

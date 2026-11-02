@@ -28,6 +28,10 @@ import {
   Lock,
   ArrowRight,
   Layers,
+  Cloud,
+  Radio,
+  Smartphone,
+  Laptop,
 } from 'lucide-react';
 import { AppSettings, User } from '../../types';
 import {
@@ -45,6 +49,11 @@ import {
   updateUser,
   getCurrentSession,
 } from '../../services/storage';
+import {
+  getCloudSyncStatus,
+  testFirestoreConnection,
+  pushAllLocalDataToCloud,
+} from '../../services/firestoreSync';
 import {
   signInWithGoogle,
   signOutGoogle,
@@ -125,6 +134,12 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     liveApiVerified?: boolean;
   } | null>(null);
 
+  // Cloud Multi-Device Sync State
+  const [cloudStatus, setCloudStatus] = useState(getCloudSyncStatus());
+  const [isPushingCloud, setIsPushingCloud] = useState(false);
+  const [isTestingCloud, setIsTestingCloud] = useState(false);
+  const [cloudMessage, setCloudMessage] = useState<string | null>(null);
+
   useEffect(() => {
     const data = getAppSettings();
     setSettings(data);
@@ -175,10 +190,53 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       runDatabaseCheck(data.googleSheetSpreadsheetId, data.googleDriveFolderId, false);
     }
 
+    const handleSyncEvent = () => {
+      setCloudStatus(getCloudSyncStatus());
+      setSettings(getAppSettings());
+    };
+    window.addEventListener('kitarajin_cloud_sync', handleSyncEvent);
+
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe();
+      window.removeEventListener('kitarajin_cloud_sync', handleSyncEvent);
     };
   }, []);
+
+  const handleTestCloudConnection = async () => {
+    setIsTestingCloud(true);
+    setCloudMessage(null);
+    try {
+      const ok = await testFirestoreConnection();
+      setCloudStatus(getCloudSyncStatus());
+      if (ok) {
+        setCloudMessage('Koneksi Cloud Firestore aktif! Sinkronisasi antar-perangkat berjalan secara real-time.');
+      } else {
+        setCloudMessage('Koneksi ke Firestore cloud sedang offline/dibatasi.');
+      }
+    } catch {
+      setCloudMessage('Terjadi kendala saat memeriksa koneksi cloud.');
+    } finally {
+      setIsTestingCloud(false);
+    }
+  };
+
+  const handleForcePushCloud = async () => {
+    setIsPushingCloud(true);
+    setCloudMessage(null);
+    try {
+      const res = await pushAllLocalDataToCloud();
+      setCloudStatus(getCloudSyncStatus());
+      if (res.success) {
+        setCloudMessage(`Berhasil menyinkronkan seluruh database (${res.totalUploaded} dokumen) ke Firestore Cloud! Semua HP, laptop, dan perangkat lain yang membuka link aplikasi akan langsung sinkron.`);
+      } else {
+        setCloudMessage('Data berhasil dikirim sebagian, periksa status koneksi jaringan.');
+      }
+    } catch (err: any) {
+      setCloudMessage(`Gagal menyinkronkan data ke cloud: ${err?.message || 'Error'}`);
+    } finally {
+      setIsPushingCloud(false);
+    }
+  };
 
   // Hubungkan Akun Google / Email Kepala Sekolah (Bebas pilih email mana saja)
   const handleGoogleConnect = async (preferredEmail?: string) => {
@@ -696,6 +754,114 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             </button>
           </div>
         </form>
+      </div>
+
+      {/* ============================================================== */}
+      {/* KARTU SINKRONISASI REAL-TIME MULTI-DEVICE (FIRESTORE CLOUD)     */}
+      {/* ============================================================== */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
+            <div className="w-8 h-8 rounded-lg bg-sky-100 text-sky-700 flex items-center justify-center font-bold">
+              <Cloud className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span>Sinkronisasi Real-Time Multi-Device (Cloud Database)</span>
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  REAL-TIME AKTIF
+                </span>
+              </div>
+              <p className="text-xs font-normal text-slate-500">
+                Data presensi, perizinan, dan penugasan sinkron otomatis dalam hitungan detik di semua HP, laptop, dan tablet pengguna, termasuk saat aplikasi di-share via link Vercel.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={handleTestCloudConnection}
+              disabled={isTestingCloud}
+              className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <Radio className={`w-3.5 h-3.5 ${isTestingCloud ? 'animate-spin' : 'text-sky-600'}`} />
+              <span>{isTestingCloud ? 'Memeriksa...' : 'Uji Koneksi Cloud'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={handleForcePushCloud}
+              disabled={isPushingCloud}
+              className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isPushingCloud ? 'animate-spin' : ''}`} />
+              <span>{isPushingCloud ? 'Menyinkronkan...' : 'Sinkronkan Semua Data Lokal ke Cloud'}</span>
+            </button>
+          </div>
+        </div>
+
+        {cloudMessage && (
+          <div className="p-3.5 rounded-xl bg-sky-50 border border-sky-200 text-sky-900 text-xs flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="w-4 h-4 text-sky-600 shrink-0" />
+              <span>{cloudMessage}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCloudMessage(null)}
+              className="text-slate-400 hover:text-slate-600 ml-2"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Status Grid Multi-Device */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+              Database Cloud ID
+            </span>
+            <div className="mt-1 flex items-center gap-1.5">
+              <span className="font-mono text-xs font-semibold text-slate-800 truncate" title={cloudStatus.databaseId}>
+                {cloudStatus.databaseId || 'ai-studio-kitarajinsistemp-...'}
+              </span>
+            </div>
+            <span className="text-[10px] text-emerald-600 font-semibold mt-1 block">
+              &bull; Firestore Multi-Tenant Terpasang
+            </span>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+              Dukungan Perangkat (Multi-Device)
+            </span>
+            <div className="mt-1 flex items-center gap-2 text-slate-800 text-xs font-bold">
+              <Smartphone className="w-4 h-4 text-emerald-600" />
+              <span>HP / Android / iOS</span>
+              <span className="text-slate-300">&bull;</span>
+              <Laptop className="w-4 h-4 text-sky-600" />
+              <span>PC / Laptop</span>
+            </div>
+            <span className="text-[10px] text-slate-500 mt-1 block">
+              Sinkron otomatis tanpa perlu refresh browser
+            </span>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+              Kesiapan Deploy Vercel / Publik
+            </span>
+            <div className="mt-1 flex items-center gap-1.5 text-xs font-bold text-slate-800">
+              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              <span>Siap Dibagikan ke Banyak Pengguna</span>
+            </div>
+            <span className="text-[10px] text-slate-500 mt-1 block">
+              Data terpusat di server cloud, bukan memori lokal HP
+            </span>
+          </div>
+        </div>
       </div>
 
       {/* ============================================================== */}

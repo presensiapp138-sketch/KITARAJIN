@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Camera,
   MapPin,
@@ -22,6 +22,13 @@ import {
   FileCheck,
   Lock,
   X,
+  Users,
+  UserCheck,
+  Calendar,
+  Filter,
+  Check,
+  Sliders,
+  Save,
 } from 'lucide-react';
 import {
   User,
@@ -33,9 +40,12 @@ import {
 import {
   getAllLocations,
   getAllSchedules,
+  updateSchedule,
   getFaceRegistryByUserId,
   recordAttendance,
   getAttendanceForUser,
+  getAllAttendanceRecords,
+  getAllUsers,
   getAppSettings,
   groupAttendanceByDateAndUser,
 } from '../../services/storage';
@@ -74,9 +84,18 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
   const [attendanceType, setAttendanceType] = useState<AttendanceType>('masuk');
   const [activeLocation, setActiveLocation] = useState<LocationConfig | null>(null);
   const [userSchedule, setUserSchedule] = useState<Schedule | null>(null);
+  const [allSchedules, setAllSchedules] = useState<Schedule[]>([]);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [allAttendanceRecords, setAllAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [userRecords, setUserRecords] = useState<AttendanceRecord[]>([]);
   const [activeTab, setActiveTab] = useState<'presensi' | 'riwayat'>(initialTab);
   const [previewPhoto, setPreviewPhoto] = useState<{ url: string; title: string } | null>(null);
+
+  // Riwayat State (Bisa cek hari ini maupun hari sebelumnya)
+  const [historyScope, setHistoryScope] = useState<'self' | 'team'>('self');
+  const [selectedStaffId, setSelectedStaffId] = useState<string>('all');
+  const [dateFilterPreset, setDateFilterPreset] = useState<'all' | 'today' | 'yesterday' | 'custom'>('today');
+  const [customDate, setCustomDate] = useState<string>(new Date().toISOString().split('T')[0]);
 
   // GPS State
   const [deviceCoords, setDeviceCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
@@ -113,7 +132,58 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     return () => clearInterval(timer);
   }, []);
 
-  // Evaluasi kepatuhan jam presensi terhadap jadwal kerja
+  // Quick Edit Jam Sesi Khusus Admin & Kepala Sekolah
+  const [isQuickSessionEditOpen, setIsQuickSessionEditOpen] = useState(false);
+  const [quickCheckInStart, setQuickCheckInStart] = useState('');
+  const [quickCheckInDeadline, setQuickCheckInDeadline] = useState('');
+  const [quickCheckOutStart, setQuickCheckOutStart] = useState('');
+  const [quickCheckOutEnd, setQuickCheckOutEnd] = useState('');
+  const [isSavingQuickSession, setIsSavingQuickSession] = useState(false);
+
+  const openQuickSessionEdit = (sch?: Schedule | null) => {
+    const target = sch || userSchedule;
+    if (!target) return;
+    setQuickCheckInStart(target.checkInStart || '06:00');
+    setQuickCheckInDeadline(target.checkInDeadline || '07:30');
+    setQuickCheckOutStart(target.checkOutStart || '11:30');
+    setQuickCheckOutEnd(target.checkOutEnd || '13:00');
+    setIsQuickSessionEditOpen(true);
+  };
+
+  const handleSaveQuickSessionTimes = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userSchedule) return;
+    setIsSavingQuickSession(true);
+    const res = updateSchedule(currentUser, userSchedule.id, {
+      checkInStart: quickCheckInStart,
+      checkInDeadline: quickCheckInDeadline,
+      checkOutStart: quickCheckOutStart,
+      checkOutEnd: quickCheckOutEnd,
+    });
+    setIsSavingQuickSession(false);
+    if (res.success) {
+      loadData();
+      setIsQuickSessionEditOpen(false);
+      setResultMessage({
+        type: 'success',
+        title: 'Jam Sesi Berhasil Disimpan',
+        description: `Jam ${userSchedule.sessionName || userSchedule.name} berhasil diperbarui: Masuk (${quickCheckInStart} - ${quickCheckInDeadline} WIB), Pulang (${quickCheckOutStart} - ${quickCheckOutEnd} WIB). Langsung aktif di sistem.`,
+      });
+    } else {
+      alert(res.message);
+    }
+  };
+
+  // Filter sesi yang berlaku khusus untuk karyawan ini
+  const userAllowedSchedules = useMemo(() => {
+    if (currentUser.assignedSessionIds && currentUser.assignedSessionIds.length > 0) {
+      const filtered = allSchedules.filter((s) => currentUser.assignedSessionIds?.includes(s.id));
+      if (filtered.length > 0) return filtered;
+    }
+    return allSchedules;
+  }, [allSchedules, currentUser.assignedSessionIds]);
+
+  // Evaluasi kepatuhan jam presensi terhadap jadwal kerja / sesi aktif
   const getScheduleStatus = () => {
     if (!userSchedule) {
       return {
@@ -136,7 +206,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
           statusType: 'early_in',
           badge: `Belum Dibuka (Buka: ${userSchedule.checkInStart} WIB)`,
           color: 'rose',
-          reason: `Presensi MASUK belum dibuka. Jam masuk resmi dimulai pukul ${userSchedule.checkInStart} WIB. Waktu saat ini: ${curTime} WIB.`,
+          reason: `Presensi MASUK ${userSchedule.sessionName || 'Sesi'} belum dibuka. Jam masuk dimulai pukul ${userSchedule.checkInStart} WIB. Waktu sekarang: ${curTime} WIB.`,
         };
       }
       if (curTime >= userSchedule.checkOutStart) {
@@ -145,7 +215,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
           statusType: 'closed_in',
           badge: `Sesi Masuk Berakhir (Pukul ${userSchedule.checkOutStart})`,
           color: 'rose',
-          reason: `Waktu presensi MASUK sudah ditutup. Saat ini sudah memasuki sesi presensi pulang (mulai pukul ${userSchedule.checkOutStart} WIB).`,
+          reason: `Waktu presensi MASUK ${userSchedule.sessionName || 'Sesi'} sudah ditutup. Saat ini sudah memasuki jam kepulangan sesi (mulai pukul ${userSchedule.checkOutStart} WIB).`,
         };
       }
       if (curTime <= userSchedule.checkInDeadline) {
@@ -154,7 +224,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
           statusType: 'on_time',
           badge: `Sesi Masuk Tepat Waktu (s/d ${userSchedule.checkInDeadline} WIB)`,
           color: 'emerald',
-          reason: `Presensi masuk sedang dibuka dan memenuhi kriteria tepat waktu (batas pukul ${userSchedule.checkInDeadline} WIB).`,
+          reason: `Presensi masuk memenuhi kriteria tepat waktu (batas pukul ${userSchedule.checkInDeadline} WIB).`,
         };
       }
       return {
@@ -162,7 +232,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
         statusType: 'late',
         badge: `Sesi Masuk: Terlambat (Batas: ${userSchedule.checkInDeadline} WIB)`,
         color: 'amber',
-        reason: `Presensi masuk di luar batas tepat waktu (${userSchedule.checkInDeadline} WIB). Kehadiran akan dicatat sebagai TERLAMBAT.`,
+        reason: `Presensi masuk melebihi batas waktu (${userSchedule.checkInDeadline} WIB). Kehadiran dicatat sebagai TERLAMBAT.`,
       };
     } else {
       // Presensi Pulang
@@ -172,7 +242,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
           statusType: 'early_out',
           badge: `Belum Dibuka (Buka: ${userSchedule.checkOutStart} WIB)`,
           color: 'rose',
-          reason: `Presensi PULANG belum dibuka. Jam kepulangan resmi dimulai pukul ${userSchedule.checkOutStart} WIB. Waktu saat ini: ${curTime} WIB.`,
+          reason: `Presensi PULANG ${userSchedule.sessionName || 'Sesi'} belum dibuka. Jam kepulangan dimulai pukul ${userSchedule.checkOutStart} WIB. Waktu sekarang: ${curTime} WIB.`,
         };
       }
       if (userSchedule.checkOutEnd && curTime > userSchedule.checkOutEnd) {
@@ -181,7 +251,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
           statusType: 'closed_out',
           badge: `Sesi Pulang Berakhir (${userSchedule.checkOutEnd} WIB)`,
           color: 'rose',
-          reason: `Batas akhir waktu presensi PULANG telah berakhir pada pukul ${userSchedule.checkOutEnd} WIB. Waktu saat ini: ${curTime} WIB.`,
+          reason: `Batas akhir waktu presensi PULANG ${userSchedule.sessionName || 'Sesi'} telah berakhir pada pukul ${userSchedule.checkOutEnd} WIB. Waktu saat ini: ${curTime} WIB.`,
         };
       }
       return {
@@ -200,10 +270,21 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     setActiveLocation(activeLoc);
 
     const schedules = getAllSchedules();
-    const sch = schedules.find((s) => s.id === currentUser.scheduleId) || schedules[0] || null;
-    setUserSchedule(sch);
+    setAllSchedules(schedules);
+
+    // Tentukan sesi awal yang dipilih
+    setUserSchedule((prev) => {
+      if (prev && schedules.some((s) => s.id === prev.id)) {
+        return schedules.find((s) => s.id === prev.id) || prev;
+      }
+      const userSessions = currentUser.assignedSessionIds || [];
+      const assigned = schedules.find((s) => userSessions.includes(s.id));
+      return assigned || schedules[0] || null;
+    });
 
     setUserRecords(getAttendanceForUser(currentUser.id));
+    setAllUsers(getAllUsers());
+    setAllAttendanceRecords(getAllAttendanceRecords());
   };
 
   useEffect(() => {
@@ -211,10 +292,30 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     detectDeviceLocation();
     startCamera(cameraFacing);
 
+    const handleSync = () => {
+      loadData();
+    };
+    window.addEventListener('kitarajin_cloud_sync', handleSync);
+
     return () => {
       stopCamera();
+      window.removeEventListener('kitarajin_cloud_sync', handleSync);
     };
   }, []);
+
+  // Otomatis atur tombol Masuk vs Pulang sesuai sesi yang sedang dipilih
+  const handleSelectSession = (sched: Schedule) => {
+    setUserSchedule(sched);
+    const today = currentNow.toISOString().split('T')[0];
+    const hasMasuk = userRecords.some((r) => r.date === today && r.type === 'masuk' && r.sessionId === sched.id);
+    const hasPulang = userRecords.some((r) => r.date === today && r.type === 'pulang' && r.sessionId === sched.id);
+
+    if (hasMasuk && !hasPulang) {
+      setAttendanceType('pulang');
+    } else {
+      setAttendanceType('masuk');
+    }
+  };
 
   // Update jarak setiap kali koordinat GPS atau lokasi berubah
   useEffect(() => {
@@ -261,6 +362,11 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     setCameraError(null);
 
     try {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setCameraError('Peramban Anda tidak mendukung akses kamera.');
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: facing,
@@ -273,12 +379,23 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play();
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current?.play().catch((err) => {
+            console.warn('Video play error:', err);
+          });
+        };
       }
       setIsCameraActive(true);
-    } catch {
-      setCameraError('Gagal mengakses kamera. Pastikan izin akses kamera diberikan pada peramban.');
+    } catch (err: any) {
+      console.error('Camera error:', err);
       setIsCameraActive(false);
+      if (err.name === 'NotAllowedError') {
+        setCameraError('Akses kamera ditolak. Berikan izin kamera di peramban Anda.');
+      } else if (err.name === 'NotFoundError') {
+        setCameraError('Kamera tidak ditemukan di perangkat ini.');
+      } else {
+        setCameraError('Gagal menghubungkan kamera perangkat.');
+      }
     }
   };
 
@@ -287,135 +404,100 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
     setIsCameraActive(false);
   };
 
   const toggleCameraFacing = () => {
-    const next = cameraFacing === 'user' ? 'environment' : 'user';
-    setCameraFacing(next);
-    startCamera(next);
+    const nextFacing = cameraFacing === 'user' ? 'environment' : 'user';
+    setCameraFacing(nextFacing);
+    startCamera(nextFacing);
   };
 
+  // Submit Presensi
   const handleSubmitAttendance = async () => {
-    setResultMessage(null);
-    setIsProcessing(true);
-
-    // 0. Validasi Ketat Aturan Jam Presensi (Mulai Absen & Pulang)
-    const scheduleCheck = getScheduleStatus();
-    if (!scheduleCheck.allowed) {
-      setIsProcessing(false);
-      setResultMessage({
-        type: 'error',
-        title: `Presensi ${attendanceType.toUpperCase()} Ditolak: Di Luar Aturan Jam`,
-        description: scheduleCheck.reason,
-        details: userSchedule
-          ? `Ketentuan Jadwal: Masuk (${userSchedule.checkInStart} - ${userSchedule.checkInDeadline} WIB) &bull; Pulang (${userSchedule.checkOutStart} - ${userSchedule.checkOutEnd || '18:00'} WIB).`
-          : undefined,
-      });
-      return;
-    }
-
-    const appSettings = getAppSettings();
-    const threshold = appSettings.minFaceMatchThreshold || 0.75;
-
-    // 1. Validasi GPS
-    if (appSettings.requireStrictGps) {
-      if (!deviceCoords || gpsDistance === null) {
-        setIsProcessing(false);
-        setResultMessage({
-          type: 'error',
-          title: 'Presensi Ditolak: Lokasi GPS Belum Terdeteksi',
-          description: 'Sistem belum berhasil membaca koordinat GPS perangkat Anda. Pastikan izin GPS aktif.',
-        });
-        return;
-      }
-
-      if (activeLocation && gpsDistance > activeLocation.radiusMeters) {
-        setIsProcessing(false);
-        setResultMessage({
-          type: 'error',
-          title: 'Presensi Ditolak: Berada di Luar Radius Sekolah',
-          description: `Jarak Anda saat ini adalah ${gpsDistance} meter dari titik sekolah. Batas maksimal yang diizinkan adalah ${activeLocation.radiusMeters} meter.`,
-          details: `Titik Lokasi: ${activeLocation.name} (${activeLocation.address})`,
-        });
-        return;
-      }
-    }
-
-    // 2. Ambil snapshot wajah dari kamera video
     if (!videoRef.current) {
-      setIsProcessing(false);
       setResultMessage({
         type: 'error',
-        title: 'Presensi Ditolak: Kamera Tidak Aktif',
-        description: 'Kamera diperlukan untuk verifikasi identitas wajah.',
+        title: 'Kamera Tidak Aktif',
+        description: 'Pastikan kamera aktif sebelum melakukan verifikasi presensi.',
       });
       return;
     }
 
-    const video = videoRef.current;
+    const schedStatus = getScheduleStatus();
+    if (!schedStatus.allowed) {
+      setResultMessage({
+        type: 'error',
+        title: 'Presensi Ditolak Aturan Jam',
+        description: schedStatus.reason,
+      });
+      return;
+    }
+
+    const settings = getAppSettings();
+
+    // 1. Validasi Radius GPS
+    if (settings.requireStrictGps && !isInsideRadius) {
+      setResultMessage({
+        type: 'error',
+        title: 'Lokasi Berada di Luar Radius',
+        description: `Jarak Anda (${gpsDistance !== null ? gpsDistance : 'N/A'}m) melebihi batas radius izin sekolah (${activeLocation?.radiusMeters}m). Presensi ditolak.`,
+      });
+      return;
+    }
+
+    setIsProcessing(true);
+    setResultMessage(null);
+
+    // 2. Capture Frame Kamera
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    canvas.width = videoRef.current.videoWidth || 640;
+    canvas.height = videoRef.current.videoHeight || 480;
     const ctx = canvas.getContext('2d');
     if (!ctx) {
       setIsProcessing(false);
       return;
     }
-
-    if (cameraFacing === 'user') {
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1);
-    }
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    if (cameraFacing === 'user') {
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-    }
-
+    ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
     const liveFaceAnalysis = analyzeFaceFromCanvas(canvas);
     setCapturedSnapshot(liveFaceAnalysis.photoDataUrl);
 
-    if (!liveFaceAnalysis.hasFace) {
-      setIsProcessing(false);
-      setResultMessage({
-        type: 'error',
-        title: 'Presensi Ditolak: Wajah Tidak Terdeteksi',
-        description: liveFaceAnalysis.feedbackMessage || 'Pastikan wajah menghadap jelas ke kamera dan pencahayaan memadai.',
-      });
-      return;
-    }
-
-    // 3. Cek apakah wajah user sudah terdaftar di Database Wajah Kepala Sekolah
+    // 3. Ambil Database Wajah Terdaftar Pegawai
     const registeredFace = getFaceRegistryByUserId(currentUser.id);
     if (!registeredFace) {
       setIsProcessing(false);
       setResultMessage({
         type: 'error',
-        title: 'Presensi Ditolak: Wajah Belum Terdaftar',
+        title: 'Wajah Belum Terdaftar',
         description:
-          'Data biometrik wajah Anda belum terdaftar di Database Wajah. Silakan hubungi Kepala Sekolah untuk melakukan pendaftaran wajah.',
+          'Data wajah Anda belum terdaftar di sistem. Hubungi Kepala Sekolah atau Admin untuk registrasi biometrik.',
       });
       return;
     }
 
-    // 4. Hitung skor kemiripan wajah (Cosine distance)
+    // 4. Hitung Kemiripan Biometrik Wajah
     const similarityScore = calculateFaceSimilarity(
       liveFaceAnalysis.embedding,
       registeredFace.faceEmbedding
     );
 
-    const isFaceValid = similarityScore >= threshold;
-    if (!isFaceValid) {
+    const minMatch = settings.minFaceMatchThreshold || 0.75;
+    if (similarityScore < minMatch) {
       setIsProcessing(false);
       setResultMessage({
         type: 'error',
-        title: 'Presensi Ditolak: Verifikasi Wajah Tidak Cocok',
-        description: `Tingkat kemiripan wajah (${Math.round(similarityScore * 100)}%) berada di bawah standar toleransi (${Math.round(threshold * 100)}%). Pastikan tidak ada penghalang pada wajah.`,
+        title: 'Verifikasi Wajah Gagal',
+        description: `Tingkat kecocokan wajah hanya ${Math.round(
+          similarityScore * 100
+        )}% (Dibutuhkan minimal ${Math.round(minMatch * 100)}%). Wajah tidak sesuai dengan pemilik akun.`,
       });
       return;
     }
 
-    // 5. Evaluasi Status Kehadiran (Tepat Waktu vs Terlambat)
+    // 5. Tentukan Status Tepat Waktu atau Terlambat
     const now = new Date();
     const todayStr = now.toISOString().split('T')[0];
     const currentHoursMinutes = now.toTimeString().substring(0, 5); // 'HH:MM'
@@ -427,7 +509,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
       }
     }
 
-    // 6. Simpan Transaksi Presensi
+    // 6. Simpan Transaksi Presensi (Terhubung Sesi & Realtime Cloud Sync)
     const res = recordAttendance({
       userId: currentUser.id,
       nip: currentUser.nip,
@@ -444,6 +526,9 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
       faceSimilarityScore: similarityScore,
       photoRef: liveFaceAnalysis.photoDataUrl,
       deviceInfo: `${navigator.userAgent.substring(0, 50)} &bull; ${cameraFacing}`,
+      sessionId: userSchedule?.id,
+      sessionName: userSchedule?.sessionName || userSchedule?.name,
+      notes: `Sesi: ${userSchedule?.sessionName || userSchedule?.name || 'Reguler'}`,
     });
 
     setIsProcessing(false);
@@ -452,7 +537,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
       setResultMessage({
         type: 'success',
         title: `Presensi ${attendanceType.toUpperCase()} Berhasil!`,
-        description: `Status: ${status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}. Verifikasi Wajah (${Math.round(similarityScore * 100)}%) dan Validasi GPS (${gpsDistance}m) Valid.`,
+        description: `Status: ${status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}. Sesi: ${userSchedule?.sessionName || userSchedule?.name || 'Reguler'}. Jam: ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB. Verifikasi Wajah (${Math.round(similarityScore * 100)}%) dan Validasi GPS (${gpsDistance}m) Sah.`,
       });
       loadData();
     } else {
@@ -464,6 +549,33 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     }
   };
 
+  // ==============================================================
+  // DATA FILTERING UNTUK TAB RIWAYAT PRESENSI
+  // ==============================================================
+  const getFilteredRecords = () => {
+    let records = historyScope === 'self' ? userRecords : allAttendanceRecords;
+
+    if (historyScope === 'team' && selectedStaffId !== 'all') {
+      records = records.filter((r) => r.userId === selectedStaffId);
+    }
+
+    if (dateFilterPreset === 'today') {
+      const today = currentNow.toISOString().split('T')[0];
+      records = records.filter((r) => r.date === today);
+    } else if (dateFilterPreset === 'yesterday') {
+      const y = new Date();
+      y.setDate(y.getDate() - 1);
+      const yesterday = y.toISOString().split('T')[0];
+      records = records.filter((r) => r.date === yesterday);
+    } else if (dateFilterPreset === 'custom' && customDate) {
+      records = records.filter((r) => r.date === customDate);
+    }
+
+    return records;
+  };
+
+  const filteredHistoryRecords = getFilteredRecords();
+
   return (
     <div className="space-y-6">
       {/* Header Banner */}
@@ -472,13 +584,13 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
           <div>
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-xs font-semibold mb-3">
               <Camera className="w-3.5 h-3.5" />
-              <span>Presensi Mandiri Seluruh Pengguna</span>
+              <span>Presensi Fleksibel Sesi 1, 2, 3</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
-              Presensi Kehadiran Sekolah
+              Presensi Kehadiran Civitas Sekolah
             </h1>
             <p className="text-emerald-100/80 text-xs sm:text-sm mt-1 max-w-xl leading-relaxed">
-              Wajib untuk Kepala Sekolah, Admin, dan Karyawan/Tendik. Memeriksa validitas koordinat GPS dan verifikasi wajah aktif.
+              Pilih Sesi 1, Sesi 2, atau Sesi 3 sesuai penugasan Anda. Aturan jam mulai masuk dan kepulangan diatur secara terpusat oleh Admin &amp; Kepala Sekolah.
             </p>
           </div>
 
@@ -487,7 +599,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
             <button
               type="button"
               onClick={() => setActiveTab('presensi')}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                 activeTab === 'presensi'
                   ? 'bg-emerald-500 text-white shadow-md'
                   : 'text-slate-200 hover:text-white'
@@ -498,121 +610,179 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
             <button
               type="button"
               onClick={() => setActiveTab('riwayat')}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                 activeTab === 'riwayat'
                   ? 'bg-emerald-500 text-white shadow-md'
                   : 'text-slate-200 hover:text-white'
               }`}
             >
-              Riwayat Saya ({userRecords.length})
+              Cek Riwayat Presensi
             </button>
           </div>
         </div>
 
         {/* Rule Reminder */}
-        <div className="mt-6 pt-4 border-t border-white/10 flex items-center gap-2 text-xs text-emerald-200/90">
-          <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>
-            Identitas diambil otomatis dari akun login: <strong>{currentUser.name}</strong> (NIP: {currentUser.nip}).
-            Presensi ditolak jika wajah tidak cocok atau posisi di luar radius sekolah.
+        <div className="mt-6 pt-4 border-t border-white/10 flex items-center justify-between gap-2 text-xs text-emerald-200/90 flex-wrap">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>
+              Identitas Login: <strong>{currentUser.name}</strong> ({currentUser.role.replace('_', ' ').toUpperCase()}) &bull; Sesi Dipilih:{' '}
+              <strong className="text-white underline">{userSchedule?.sessionName || userSchedule?.name || 'Sesi 1'}</strong>
+            </span>
+          </div>
+          <span className="text-[10px] text-emerald-300 font-mono bg-emerald-950/60 px-2 py-0.5 rounded-full border border-emerald-400/20">
+            Realtime Cloud Multi-Device Aktif
           </span>
         </div>
       </div>
 
-      {/* VIEW 1: PRESENSI AKTIF (KAMERA & GPS) */}
+      {/* ============================================================== */}
+      {/* VIEW 1: PRESENSI AKTIF (KAMERA, PILIHAN SESI 1, 2, 3 & GPS)    */}
+      {/* ============================================================== */}
       {activeTab === 'presensi' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Kolom Kiri: Kamera Live Viewport (7 Kolom) */}
           <div className="lg:col-span-7 space-y-4">
             <div className="bg-white rounded-3xl border border-slate-200/80 p-5 shadow-xs space-y-4">
-              {/* Ringkasan Status Presensi Hari Ini: Absen Masuk & Pulang */}
-              {(() => {
-                const todayIso = currentNow.toISOString().split('T')[0];
-                const recMasuk = userRecords.find((r) => r.date === todayIso && r.type === 'masuk');
-                const recPulang = userRecords.find((r) => r.date === todayIso && r.type === 'pulang');
+              
+              {/* RINGKASAN STATUS PRESENSI HARI INI PER SESI (SESI 1, SESI 2, SESI 3) */}
+              <div className="space-y-2">
+                <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 block">
+                  Status Presensi Hari Ini Per Sesi Anda
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {userAllowedSchedules.map((sch) => {
+                    const todayIso = currentNow.toISOString().split('T')[0];
+                    const recMasuk = userRecords.find(
+                      (r) => r.date === todayIso && r.type === 'masuk' && r.sessionId === sch.id
+                    );
+                    const recPulang = userRecords.find(
+                      (r) => r.date === todayIso && r.type === 'pulang' && r.sessionId === sch.id
+                    );
+                    const isSelected = userSchedule?.id === sch.id;
 
-                return (
-                  <div className="grid grid-cols-2 gap-3 p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 text-xs">
-                    {/* Status Absen Masuk */}
-                    <div className="space-y-1">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                        Absen Masuk Hari Ini
-                      </span>
-                      {recMasuk ? (
-                        <div className="flex items-center gap-1.5 text-emerald-800 font-bold">
-                          <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span className="font-mono">
-                            {new Date(recMasuk.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB
+                    return (
+                      <div
+                        key={sch.id}
+                        onClick={() => handleSelectSession(sch)}
+                        className={`p-3 rounded-2xl border text-xs cursor-pointer transition-all ${
+                          isSelected
+                            ? 'bg-emerald-50/90 border-emerald-500 ring-2 ring-emerald-500/20'
+                            : 'bg-slate-50/70 border-slate-200 hover:bg-slate-100/80'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between pb-1 mb-1.5 border-b border-slate-200/60">
+                          <span className={`font-extrabold ${isSelected ? 'text-emerald-900' : 'text-slate-800'}`}>
+                            {sch.sessionName || sch.name}
                           </span>
-                          <span className="text-[10px] px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded font-normal">
-                            {recMasuk.status === 'tepat_waktu' ? 'Tepat' : 'Terlambat'}
-                          </span>
+                          {isSelected && (
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                          )}
                         </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5 text-slate-500 font-medium">
-                          <Clock className="w-4 h-4 text-slate-400 shrink-0" />
-                          <span>Belum Absen Masuk</span>
-                        </div>
-                      )}
-                    </div>
 
-                    {/* Status Absen Pulang */}
-                    <div className="space-y-1 pl-3 border-l border-slate-200">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
-                        Absen Pulang Hari Ini
-                      </span>
-                      {recPulang ? (
-                        <div className="flex items-center gap-1.5 text-indigo-800 font-bold">
-                          <CheckCircle className="w-4 h-4 text-indigo-600 shrink-0" />
-                          <span className="font-mono">
-                            {new Date(recPulang.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB
-                          </span>
-                          <span className="text-[10px] px-1.5 py-0.2 bg-indigo-100 text-indigo-800 rounded font-normal">
-                            Sah
-                          </span>
+                        {/* Status Masuk */}
+                        <div className="space-y-1 text-[11px]">
+                          <div className="flex items-center justify-between text-slate-600">
+                            <span>Masuk:</span>
+                            {recMasuk ? (
+                              <span className="font-bold font-mono text-emerald-800">
+                                {new Date(recMasuk.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 italic">Belum</span>
+                            )}
+                          </div>
+
+                          {/* Status Pulang */}
+                          <div className="flex items-center justify-between text-slate-600">
+                            <span>Pulang:</span>
+                            {recPulang ? (
+                              <span className="font-bold font-mono text-indigo-800">
+                                {new Date(recPulang.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 italic">Belum</span>
+                            )}
+                          </div>
                         </div>
-                      ) : (
-                        <div className="flex items-center gap-1.5 text-slate-500 font-medium">
-                          <Clock className="w-4 h-4 text-slate-400 shrink-0" />
-                          <span>Belum Absen Pulang</span>
-                        </div>
-                      )}
-                    </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* TOMBOL PEMILIH SESI 1, SESI 2, SESI 3 */}
+              <div className="p-3.5 bg-slate-50/90 rounded-2xl border border-slate-200/90 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+                    <Clock className="w-4 h-4 text-emerald-600" />
+                    <span>Pilih Sesi yang Akan Dipresensikan:</span>
                   </div>
-                );
-              })()}
+                  <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/70 px-2 py-0.5 rounded-full border border-emerald-200">
+                    Aturan Diatur Admin/KS
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                  {userAllowedSchedules.map((sch) => {
+                    const isSelected = userSchedule?.id === sch.id;
+                    return (
+                      <button
+                        key={sch.id}
+                        type="button"
+                        onClick={() => handleSelectSession(sch)}
+                        className={`p-2.5 rounded-xl text-left transition-all border cursor-pointer ${
+                          isSelected
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                            : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="font-extrabold text-xs flex items-center justify-between">
+                          <span>{sch.sessionName || sch.name}</span>
+                          {isSelected && <span>✓</span>}
+                        </div>
+                        <div className={`text-[10px] font-mono mt-1 ${isSelected ? 'text-emerald-100' : 'text-slate-500'}`}>
+                          Masuk: {sch.checkInStart}-{sch.checkInDeadline}
+                        </div>
+                        <div className={`text-[10px] font-mono ${isSelected ? 'text-emerald-100' : 'text-slate-500'}`}>
+                          Pulang: {sch.checkOutStart} WIB
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
 
+              {/* Selector Masuk vs Pulang & Switch Kamera */}
               <div className="flex items-center justify-between">
-                {/* Selector: Masuk vs Pulang */}
                 <div className="flex items-center bg-slate-100 p-1 rounded-2xl border border-slate-200">
                   <button
                     type="button"
                     onClick={() => setAttendanceType('masuk')}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                       attendanceType === 'masuk'
                         ? 'bg-emerald-600 text-white shadow-xs'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    Presensi Masuk
+                    Presensi Masuk ({userSchedule?.sessionName || 'Sesi'})
                   </button>
                   <button
                     type="button"
                     onClick={() => setAttendanceType('pulang')}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                       attendanceType === 'pulang'
                         ? 'bg-indigo-600 text-white shadow-xs'
                         : 'text-slate-600 hover:text-slate-900'
                     }`}
                   >
-                    Presensi Pulang
+                    Presensi Pulang ({userSchedule?.sessionName || 'Sesi'})
                   </button>
                 </div>
 
                 <button
                   type="button"
                   onClick={toggleCameraFacing}
-                  className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
                   title="Ganti Kamera Depan / Belakang"
                 >
                   <SwitchCamera className="w-4 h-4 text-emerald-600" />
@@ -648,16 +818,11 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                     </div>
 
                     {!schedStatus.allowed && (
-                      <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 flex items-start gap-3 text-xs animate-in fade-in">
-                        <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
-                        <div>
-                          <div className="font-bold text-rose-900">
-                            Aturan Jam Presensi: {attendanceType.toUpperCase()} Belum / Tidak Diizinkan
-                          </div>
-                          <p className="mt-0.5 text-rose-700 leading-relaxed">{schedStatus.reason}</p>
-                          <p className="mt-1 text-[11px] text-rose-600/80 font-medium">
-                            Tombol presensi terkunci otomatis demi mematuhi ketentuan jam kehadiran sekolah.
-                          </p>
+                      <div className="p-3 bg-rose-50/70 border border-rose-200 text-rose-900 rounded-xl text-xs flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                        <div className="space-y-0.5">
+                          <p className="font-bold text-[11px]">Waktu Presensi Sesi Terkunci:</p>
+                          <p className="text-[11px] text-rose-800 leading-relaxed">{schedStatus.reason}</p>
                         </div>
                       </div>
                     )}
@@ -665,8 +830,8 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                 );
               })()}
 
-              {/* Viewport Video */}
-              <div className="relative aspect-4/3 bg-slate-950 rounded-2xl overflow-hidden shadow-inner flex items-center justify-center border-2 border-emerald-500/30">
+              {/* Viewport Kamera Video */}
+              <div className="relative aspect-4/3 bg-slate-950 rounded-2xl overflow-hidden border-2 border-slate-200 flex items-center justify-center shadow-inner">
                 <video
                   ref={videoRef}
                   autoPlay
@@ -675,26 +840,28 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                   className={`w-full h-full object-cover ${cameraFacing === 'user' ? 'scale-x-[-1]' : ''}`}
                 />
 
-                {/* Face Scanning Guide Overlay */}
+                {/* Target Face Guide Oval */}
                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                  <div className="w-52 h-64 rounded-full border-2 border-dashed border-emerald-400/70 shadow-[0_0_0_9999px_rgba(0,0,0,0.3)] flex items-center justify-center">
-                    <span className="text-[10px] text-white/90 bg-slate-900/60 px-2 py-0.5 rounded-full font-medium">
-                      Posisikan Wajah Anda di Dalam Oval
+                  <div className="w-48 h-60 border-2 border-dashed border-emerald-400/70 rounded-full animate-pulse shadow-[0_0_20px_rgba(16,185,129,0.2)] flex items-center justify-center">
+                    <span className="text-[10px] text-emerald-300 font-bold uppercase tracking-wider bg-slate-900/70 px-2 py-0.5 rounded-full">
+                      Posisikan Wajah Di Sini
                     </span>
                   </div>
                 </div>
 
-                {/* Top Overlay Badges */}
-                <div className="absolute top-3 left-3 flex items-center gap-2">
-                  <span className="px-2.5 py-1 bg-slate-900/70 backdrop-blur-xs text-white rounded-lg text-[10px] font-semibold flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    Kamera Aktif
-                  </span>
-                </div>
-
-                <div className="absolute bottom-3 right-3 px-2 py-1 bg-slate-900/70 backdrop-blur-xs text-white rounded-lg text-[10px] font-mono">
-                  {currentNow.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} WIB
-                </div>
+                {!isCameraActive && (
+                  <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center text-slate-300 p-4 text-center">
+                    <Camera className="w-10 h-10 text-slate-500 mb-2 animate-bounce" />
+                    <span className="text-xs font-semibold">Menghubungkan Kamera...</span>
+                    <button
+                      type="button"
+                      onClick={() => startCamera(cameraFacing)}
+                      className="mt-3 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold cursor-pointer"
+                    >
+                      Buka Kamera Ulang
+                    </button>
+                  </div>
+                )}
               </div>
 
               {cameraError && (
@@ -714,7 +881,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                     type="button"
                     onClick={handleSubmitAttendance}
                     disabled={isDisabled}
-                    className={`w-full py-3.5 px-4 rounded-2xl text-white font-extrabold text-sm shadow-lg transition-all flex items-center justify-center gap-2 disabled:cursor-not-allowed ${
+                    className={`w-full py-3.5 px-4 rounded-2xl text-white font-extrabold text-sm shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer disabled:cursor-not-allowed ${
                       isDisabled
                         ? 'bg-slate-400 text-slate-100 shadow-none opacity-80 cursor-not-allowed'
                         : attendanceType === 'masuk'
@@ -727,12 +894,14 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                     ) : !schedStatus.allowed ? (
                       <div className="flex items-center gap-2">
                         <Lock className="w-4 h-4 text-slate-200" />
-                        <span>Presensi {attendanceType.toUpperCase()} Terkunci (Di Luar Jadwal)</span>
+                        <span>Presensi {attendanceType.toUpperCase()} Terkunci (Di Luar Jadwal {userSchedule?.sessionName || 'Sesi'})</span>
                       </div>
                     ) : (
                       <>
                         <Camera className="w-5 h-5" />
-                        <span>Lakukan Presensi {attendanceType.toUpperCase()} Sekarang</span>
+                        <span>
+                          Lakukan Presensi {attendanceType.toUpperCase()} ({userSchedule?.sessionName || 'Sesi'}) Sekarang
+                        </span>
                       </>
                     )}
                   </button>
@@ -741,7 +910,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
             </div>
           </div>
 
-          {/* Kolom Kanan: Status Validasi GPS & Jadwal (5 Kolom) */}
+          {/* Kolom Kanan: Status Validasi GPS & Jadwal Sesi (5 Kolom) */}
           <div className="lg:col-span-5 space-y-4">
             {/* Result Message Box */}
             {resultMessage && (
@@ -780,7 +949,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                   type="button"
                   onClick={detectDeviceLocation}
                   disabled={isLocating}
-                  className="text-xs text-emerald-600 hover:text-emerald-700 font-semibold flex items-center gap-1"
+                  className="text-xs text-emerald-600 hover:text-emerald-700 font-semibold flex items-center gap-1 cursor-pointer"
                 >
                   <RefreshCw className={`w-3.5 h-3.5 ${isLocating ? 'animate-spin' : ''}`} />
                   <span>Refresh GPS</span>
@@ -838,16 +1007,16 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
               )}
             </div>
 
-            {/* Jadwal Saya Card */}
+            {/* Jadwal Sesi Terpilih Card */}
             <div className="bg-white rounded-3xl border border-slate-200/80 p-5 shadow-xs space-y-3">
               <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                 <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-700">
                   <Clock className="w-4 h-4 text-emerald-600" />
-                  <span>Aturan Jam &amp; Sesi Kerja</span>
+                  <span>Rincian Sesi Aktif</span>
                 </div>
                 {userSchedule && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
-                    {userSchedule.sessionName || 'Sesi Reguler'}
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+                    {userSchedule.sessionName || 'Sesi 1'}
                   </span>
                 )}
               </div>
@@ -861,7 +1030,9 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                     <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-100 text-[11px] space-y-1">
                       <div className="font-bold text-emerald-900 flex items-center justify-between">
                         <span>Sesi Presensi Masuk</span>
-                        <span className="font-mono text-emerald-700">{userSchedule.checkInStart} - {userSchedule.checkInDeadline}</span>
+                        <span className="font-mono text-emerald-700">
+                          {userSchedule.checkInStart} - {userSchedule.checkInDeadline}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between text-slate-600 text-[10px]">
                         <span>Buka Presensi: <strong>{userSchedule.checkInStart} WIB</strong></span>
@@ -873,7 +1044,9 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                     <div className="p-2.5 rounded-xl bg-indigo-50/70 border border-indigo-100 text-[11px] space-y-1">
                       <div className="font-bold text-indigo-900 flex items-center justify-between">
                         <span>Sesi Presensi Pulang</span>
-                        <span className="font-mono text-indigo-700">{userSchedule.checkOutStart} - {userSchedule.checkOutEnd || '18:00'}</span>
+                        <span className="font-mono text-indigo-700">
+                          {userSchedule.checkOutStart} - {userSchedule.checkOutEnd || '18:00'}
+                        </span>
                       </div>
                       <div className="flex items-center justify-between text-slate-600 text-[10px]">
                         <span>Mulai Pulang: <strong>{userSchedule.checkOutStart} WIB</strong></span>
@@ -896,49 +1069,181 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
         </div>
       )}
 
-      {/* VIEW 2: RIWAYAT PRESENSI SAYA */}
+      {/* ============================================================== */}
+      {/* VIEW 2: CEK RIWAYAT PRESENSI HARIAN (HARI INI / HARI SEBELUMNYA) */}
+      {/* ============================================================== */}
       {activeTab === 'riwayat' && (
-        <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs p-6 space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+        <div className="bg-white rounded-3xl border border-slate-200/80 shadow-xs p-6 space-y-5">
+          {/* Header Riwayat & Filter */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-100">
             <div>
               <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
                 <History className="w-5 h-5 text-emerald-600" />
-                Riwayat Presensi Mandiri Saya
+                <span>Riwayat Presensi Mandiri &amp; Harian Civitas</span>
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                Histori kehadiran Anda yang tersimpan di tabel Attendance.
+                Periksa catatan presensi harian per sesi, baik hari ini maupun hari-hari sebelumnya secara lengkap.
               </p>
             </div>
-            <span className="text-xs font-bold bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full">
-              Total: {userRecords.length} Catatan
-            </span>
+
+            {/* Jika Admin atau Kepala Sekolah, tampilkan toggle: Saya vs Karyawan/Tim */}
+            {(currentUser.role === 'admin' || currentUser.role === 'kepala_sekolah') && (
+              <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 self-start md:self-auto">
+                <button
+                  type="button"
+                  onClick={() => setHistoryScope('self')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                    historyScope === 'self'
+                      ? 'bg-white text-emerald-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <UserCheck className="w-3.5 h-3.5" />
+                  <span>Presensi Saya</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setHistoryScope('team')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                    historyScope === 'team'
+                      ? 'bg-white text-emerald-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Cek Presensi Karyawan &amp; Rekan</span>
+                </button>
+              </div>
+            )}
           </div>
 
-          {userRecords.length === 0 ? (
+          {/* Filter Toolbar: Pilihan Tanggal (Hari ini, Kemarin, Hari Sebelumnya, Date Picker) & Pegawai */}
+          <div className="p-4 bg-slate-50/80 rounded-2xl border border-slate-200/80 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider flex items-center gap-1">
+                <Calendar className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Filter Tanggal:</span>
+              </span>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDateFilterPreset('today');
+                  setCustomDate(new Date().toISOString().split('T')[0]);
+                }}
+                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  dateFilterPreset === 'today'
+                    ? 'bg-emerald-600 text-white shadow-2xs'
+                    : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                Hari Ini
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDateFilterPreset('yesterday');
+                  const d = new Date();
+                  d.setDate(d.getDate() - 1);
+                  setCustomDate(d.toISOString().split('T')[0]);
+                }}
+                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  dateFilterPreset === 'yesterday'
+                    ? 'bg-emerald-600 text-white shadow-2xs'
+                    : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                Kemarin
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setDateFilterPreset('all');
+                  setCustomDate('');
+                }}
+                className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                  dateFilterPreset === 'all'
+                    ? 'bg-emerald-600 text-white shadow-2xs'
+                    : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                Semua Hari
+              </button>
+
+              {/* Date Input untuk pilih tanggal hari sebelumnya secara bebas */}
+              <div className="flex items-center gap-1 ml-1">
+                <input
+                  type="date"
+                  value={customDate}
+                  onChange={(e) => {
+                    setCustomDate(e.target.value);
+                    setDateFilterPreset('custom');
+                  }}
+                  className="px-2.5 py-1 rounded-xl border border-slate-300 text-xs font-medium bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none cursor-pointer"
+                  title="Pilih tanggal hari sebelumnya"
+                />
+              </div>
+            </div>
+
+            {/* Filter Karyawan (jika mode team) */}
+            {historyScope === 'team' && (currentUser.role === 'admin' || currentUser.role === 'kepala_sekolah') && (
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                  Pegawai:
+                </span>
+                <select
+                  value={selectedStaffId}
+                  onChange={(e) => setSelectedStaffId(e.target.value)}
+                  className="px-3 py-1 rounded-xl border border-slate-300 text-xs font-medium bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                >
+                  <option value="all">Semua Pegawai ({allUsers.length})</option>
+                  {allUsers.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.name} ({u.role})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+          </div>
+
+          {/* List Riwayat Berpasangan (Masuk & Pulang) Per Sesi */}
+          {filteredHistoryRecords.length === 0 ? (
             <div className="py-12 text-center text-slate-400 text-xs">
-              Belum ada riwayat presensi yang tercatat untuk akun Anda.
+              Tidak ada catatan presensi pada tanggal yang dipilih.
             </div>
           ) : (
             <div className="space-y-4">
-              {groupAttendanceByDateAndUser(userRecords).map((pair) => {
+              {groupAttendanceByDateAndUser(filteredHistoryRecords).map((pair) => {
                 const hasMasuk = Boolean(pair.masukRecord);
                 const hasPulang = Boolean(pair.pulangRecord);
+                const sessionLabel = pair.masukRecord?.sessionName || pair.pulangRecord?.sessionName;
 
                 return (
                   <div
-                    key={pair.date}
+                    key={`${pair.date}_${pair.userId}_${pair.masukRecord?.id || ''}_${pair.pulangRecord?.id || ''}`}
                     className="p-4 rounded-2xl border border-slate-200/80 bg-slate-50/50 space-y-3"
                   >
-                    <div className="flex items-center justify-between pb-2 border-b border-slate-200/60">
-                      <div className="flex items-center gap-2">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-2 border-b border-slate-200/60 gap-1.5">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold text-slate-900 text-xs">{pair.date}</span>
                         {pair.date === currentNow.toISOString().split('T')[0] && (
                           <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-100 text-emerald-800">
                             Hari Ini
                           </span>
                         )}
+                        <span className="text-slate-400 text-xs">&bull;</span>
+                        <span className="text-xs font-bold text-slate-800">{pair.userName}</span>
+                        <span className="text-[10px] text-slate-500 font-mono">({pair.nip})</span>
+                        {sessionLabel && (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-sky-100 text-sky-800 border border-sky-200">
+                            {sessionLabel}
+                          </span>
+                        )}
                       </div>
-                      <span className="text-[10px] font-bold text-slate-600 bg-white px-2 py-0.5 rounded-md border border-slate-200">
+                      <span className="text-[10px] font-bold text-slate-600 bg-white px-2 py-0.5 rounded-md border border-slate-200 w-fit">
                         {hasMasuk && hasPulang
                           ? 'Selesai (Masuk & Pulang)'
                           : hasMasuk
@@ -960,7 +1265,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                         <div className="flex items-center justify-between font-bold text-[11px] mb-2">
                           <span className="flex items-center gap-1.5">
                             <span className="w-2 h-2 rounded-full bg-emerald-500" />
-                            Absen Masuk
+                            Absen Masuk {sessionLabel ? `(${sessionLabel})` : ''}
                           </span>
                           {hasMasuk && (
                             <span
@@ -982,7 +1287,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                               onClick={() =>
                                 setPreviewPhoto({
                                   url: pair.masukRecord!.photoRef,
-                                  title: `Foto Absen Masuk - ${pair.date}`,
+                                  title: `Foto Absen Masuk - ${pair.userName} (${pair.date})`,
                                 })
                               }
                               className="shrink-0 group relative cursor-pointer"
@@ -1006,11 +1311,16 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                                 Jarak: {pair.masukRecord.distanceFromLocationMeters}m &bull; Wajah:{' '}
                                 {Math.round(pair.masukRecord.faceSimilarityScore * 100)}%
                               </div>
+                              {pair.masukRecord.sessionName && (
+                                <div className="text-[10px] text-emerald-700 font-semibold">
+                                  {pair.masukRecord.sessionName}
+                                </div>
+                              )}
                             </div>
                           </div>
                         ) : (
                           <div className="py-2 text-center text-[11px] text-slate-400">
-                            Belum absen masuk
+                            Belum absen masuk untuk sesi ini
                           </div>
                         )}
                       </div>
@@ -1026,7 +1336,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                         <div className="flex items-center justify-between font-bold text-[11px] mb-2">
                           <span className="flex items-center gap-1.5">
                             <span className={`w-2 h-2 rounded-full ${hasPulang ? 'bg-indigo-600' : 'bg-slate-300'}`} />
-                            Absen Pulang
+                            Absen Pulang {sessionLabel ? `(${sessionLabel})` : ''}
                           </span>
                           {hasPulang && (
                             <span className="text-[9px] px-1.5 py-0.2 rounded font-semibold bg-indigo-200 text-indigo-900">
@@ -1042,7 +1352,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                               onClick={() =>
                                 setPreviewPhoto({
                                   url: pair.pulangRecord!.photoRef,
-                                  title: `Foto Absen Pulang - ${pair.date}`,
+                                  title: `Foto Absen Pulang - ${pair.userName} (${pair.date})`,
                                 })
                               }
                               className="shrink-0 group relative cursor-pointer"
@@ -1066,11 +1376,16 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                                 Jarak: {pair.pulangRecord.distanceFromLocationMeters}m &bull; Wajah:{' '}
                                 {Math.round(pair.pulangRecord.faceSimilarityScore * 100)}%
                               </div>
+                              {pair.pulangRecord.sessionName && (
+                                <div className="text-[10px] text-indigo-700 font-semibold">
+                                  {pair.pulangRecord.sessionName}
+                                </div>
+                              )}
                             </div>
                           </div>
                         ) : (
                           <div className="py-2 text-center text-[11px] text-slate-400">
-                            Belum absen pulang
+                            Belum absen pulang untuk sesi ini
                           </div>
                         )}
                       </div>
@@ -1092,7 +1407,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
               <button
                 type="button"
                 onClick={() => setPreviewPhoto(null)}
-                className="p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+                className="p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -1108,7 +1423,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
               <button
                 type="button"
                 onClick={() => setPreviewPhoto(null)}
-                className="px-3 py-1.5 bg-slate-900 text-white rounded-xl text-xs font-bold"
+                className="px-3 py-1.5 bg-slate-900 text-white rounded-xl text-xs font-bold cursor-pointer"
               >
                 Tutup
               </button>

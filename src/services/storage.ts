@@ -20,6 +20,7 @@ import {
   DailyAttendancePair,
 } from '../types';
 import { hashPassword, verifyPassword } from './crypto';
+import { syncRecordToCloud, deleteRecordFromCloud, SYNC_COLLECTIONS } from './firestoreSync';
 
 const STORAGE_KEYS = {
   USERS: 'kitarajin_table_users',
@@ -44,36 +45,45 @@ const INITIAL_DEPARTMENTS: Department[] = [
   { id: 'dept-5', name: 'Kebersihan & Sarpras', code: 'KBR', description: 'Pemeliharaan fasilitas, kebersihan kelas, dan taman', headName: 'Joko W.', createdAt: new Date().toISOString() },
 ];
 
-// Data Inisial Jadwal Kerja Default
+// Data Inisial Jadwal Kerja & Sesi Fleksibel (Sesi 1, Sesi 2, Sesi 3)
 const INITIAL_SCHEDULES: Schedule[] = [
   {
-    id: 'sch-reguler',
-    name: 'Jadwal Reguler Guru & Staf TU',
+    id: 'sesi-1',
+    name: 'Sesi 1 (Pagi)',
+    sessionName: 'Sesi 1',
     checkInStart: '06:00',
-    checkInDeadline: '07:15',
+    checkInDeadline: '07:30',
     lateToleranceMinutes: 15,
-    checkOutStart: '15:30',
-    workDays: [1, 2, 3, 4, 5], // Senin s/d Jumat
+    checkOutStart: '11:30',
+    checkOutEnd: '13:00',
+    workDays: [1, 2, 3, 4, 5, 6],
+    ruleNotes: 'Sesi 1: Presensi kedatangan pagi seluruh staf dan guru.',
     isActive: true,
   },
   {
-    id: 'sch-satpam-pagi',
-    name: 'Shift Pagi Keamanan & Satpam',
-    checkInStart: '05:30',
-    checkInDeadline: '06:00',
-    lateToleranceMinutes: 10,
-    checkOutStart: '14:00',
-    workDays: [1, 2, 3, 4, 5, 6], // Senin s/d Sabtu
-    isActive: true,
-  },
-  {
-    id: 'sch-kebersihan',
-    name: 'Jadwal Tim Kebersihan & Sarpras',
-    checkInStart: '05:45',
-    checkInDeadline: '06:30',
+    id: 'sesi-2',
+    name: 'Sesi 2 (Siang)',
+    sessionName: 'Sesi 2',
+    checkInStart: '11:30',
+    checkInDeadline: '12:30',
     lateToleranceMinutes: 15,
     checkOutStart: '15:00',
+    checkOutEnd: '16:30',
     workDays: [1, 2, 3, 4, 5, 6],
+    ruleNotes: 'Sesi 2: Presensi mengajar dan operasional siang.',
+    isActive: true,
+  },
+  {
+    id: 'sesi-3',
+    name: 'Sesi 3 (Sore / Lanjutan)',
+    sessionName: 'Sesi 3',
+    checkInStart: '15:00',
+    checkInDeadline: '15:30',
+    lateToleranceMinutes: 15,
+    checkOutStart: '17:30',
+    checkOutEnd: '19:00',
+    workDays: [1, 2, 3, 4, 5, 6],
+    ruleNotes: 'Sesi 3: Presensi sore, piket sekolah, dan pengawasan akhir.',
     isActive: true,
   },
 ];
@@ -456,6 +466,7 @@ export function logAuditAction(
   };
   logs.unshift(newLog); // letakkan terbaru di atas
   localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(logs.slice(0, 500))); // simpan hingga 500 log
+  syncRecordToCloud(SYNC_COLLECTIONS.AUDIT_LOGS, newLog.id, newLog);
 }
 
 /**
@@ -571,6 +582,7 @@ export async function createUser(
     role: 'admin' | 'karyawan';
     departmentId?: string;
     scheduleId?: string;
+    assignedSessionIds?: string[];
     position: string;
     email?: string;
     phone?: string;
@@ -607,6 +619,10 @@ export async function createUser(
     role: userData.role,
     departmentId: userData.departmentId,
     scheduleId: userData.scheduleId,
+    assignedSessionIds:
+      userData.assignedSessionIds && userData.assignedSessionIds.length > 0
+        ? userData.assignedSessionIds
+        : ['sesi-1', 'sesi-2', 'sesi-3'],
     position: userData.position.trim(),
     phone: userData.phone?.trim(),
     isActive: true,
@@ -616,6 +632,7 @@ export async function createUser(
 
   users.push(newUser);
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+  syncRecordToCloud(SYNC_COLLECTIONS.USERS, newUser.id, newUser);
 
   logAuditAction(
     actor,
@@ -678,6 +695,7 @@ export async function updateUser(
   if (updates.position) targetUser.position = updates.position;
   if (updates.departmentId !== undefined) targetUser.departmentId = updates.departmentId;
   if (updates.scheduleId !== undefined) targetUser.scheduleId = updates.scheduleId;
+  if (updates.assignedSessionIds !== undefined) targetUser.assignedSessionIds = updates.assignedSessionIds;
   if (updates.email !== undefined) targetUser.email = updates.email;
   if (updates.phone !== undefined) targetUser.phone = updates.phone;
   if (updates.isActive !== undefined) targetUser.isActive = updates.isActive;
@@ -690,6 +708,7 @@ export async function updateUser(
   targetUser.updatedAt = new Date().toISOString();
   users[index] = targetUser;
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+  syncRecordToCloud(SYNC_COLLECTIONS.USERS, targetUser.id, targetUser);
 
   // Update current session if actor edited themselves
   if (actor.id === userId) {
@@ -732,6 +751,7 @@ export function toggleUserStatus(actor: User, userId: string): { success: boolea
   targetUser.updatedAt = new Date().toISOString();
   users[index] = targetUser;
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+  syncRecordToCloud(SYNC_COLLECTIONS.USERS, targetUser.id, targetUser);
 
   const statusText = targetUser.isActive ? 'diaktifkan' : 'dinonaktifkan';
   logAuditAction(
@@ -782,6 +802,7 @@ export function createDepartment(
 
   depts.push(newDept);
   localStorage.setItem(STORAGE_KEYS.DEPARTMENTS, JSON.stringify(depts));
+  syncRecordToCloud(SYNC_COLLECTIONS.DEPARTMENTS, newDept.id, newDept);
 
   logAuditAction(
     actor,
@@ -820,6 +841,7 @@ export function updateDepartment(
   depts[idx].headName = data.headName?.trim();
 
   localStorage.setItem(STORAGE_KEYS.DEPARTMENTS, JSON.stringify(depts));
+  syncRecordToCloud(SYNC_COLLECTIONS.DEPARTMENTS, id, depts[idx]);
 
   logAuditAction(
     actor,
@@ -848,6 +870,7 @@ export function deleteDepartment(actor: User, id: string): { success: boolean; m
   const depts = getAllDepartments();
   const filtered = depts.filter((d) => d.id !== id);
   localStorage.setItem(STORAGE_KEYS.DEPARTMENTS, JSON.stringify(filtered));
+  deleteRecordFromCloud(SYNC_COLLECTIONS.DEPARTMENTS, id);
 
   logAuditAction(actor, 'DELETE_DEPARTMENT', 'Departments', id, 'Menghapus departemen.');
 
@@ -862,7 +885,53 @@ export function deleteDepartment(actor: User, id: string): { success: boolean; m
 
 export function getAllSchedules(): Schedule[] {
   const data = localStorage.getItem(STORAGE_KEYS.SCHEDULES);
-  return data ? JSON.parse(data) : [];
+  let list: Schedule[] = data ? JSON.parse(data) : [];
+
+  // Pastikan Sesi 1, Sesi 2, Sesi 3 selalu tersedia untuk fleksibilitas sesi per karyawan
+  let hasChanges = false;
+  for (const initSched of INITIAL_SCHEDULES) {
+    if (!list.some((s) => s.id === initSched.id || s.sessionName === initSched.sessionName)) {
+      list.push(initSched);
+      hasChanges = true;
+    }
+  }
+
+  if (hasChanges || !data) {
+    localStorage.setItem(STORAGE_KEYS.SCHEDULES, JSON.stringify(list));
+  }
+
+  return list;
+}
+
+export function updateUserSessions(
+  actor: User,
+  userId: string,
+  sessionIds: string[]
+): { success: boolean; message: string } {
+  if (actor.role === 'karyawan') {
+    return { success: false, message: 'Hanya Kepala Sekolah dan Admin yang dapat mengatur sesi presensi karyawan.' };
+  }
+
+  const users = getAllUsers();
+  const idx = users.findIndex((u) => u.id === userId);
+  if (idx === -1) {
+    return { success: false, message: 'Karyawan tidak ditemukan.' };
+  }
+
+  users[idx].assignedSessionIds = sessionIds;
+  users[idx].updatedAt = new Date().toISOString();
+  localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+  syncRecordToCloud(SYNC_COLLECTIONS.USERS, userId, users[idx]);
+
+  logAuditAction(
+    actor,
+    'UPDATE_USER_SESSIONS',
+    'Users',
+    userId,
+    `Mengatur sesi presensi karyawan ${users[idx].name}: [${sessionIds.join(', ')}]`
+  );
+
+  return { success: true, message: `Sesi presensi untuk ${users[idx].name} berhasil disimpan.` };
 }
 
 export function createSchedule(
@@ -902,6 +971,7 @@ export function createSchedule(
 
   schedules.push(newSchedule);
   localStorage.setItem(STORAGE_KEYS.SCHEDULES, JSON.stringify(schedules));
+  syncRecordToCloud(SYNC_COLLECTIONS.SCHEDULES, newSchedule.id, newSchedule);
 
   logAuditAction(
     actor,
@@ -942,6 +1012,7 @@ export function updateSchedule(
   if (data.isActive !== undefined) schedules[idx].isActive = data.isActive;
 
   localStorage.setItem(STORAGE_KEYS.SCHEDULES, JSON.stringify(schedules));
+  syncRecordToCloud(SYNC_COLLECTIONS.SCHEDULES, id, schedules[idx]);
 
   logAuditAction(actor, 'UPDATE_SCHEDULE', 'Schedules', id, `Memperbarui jadwal/sesi ${schedules[idx].name}.`);
 
@@ -960,6 +1031,7 @@ export function deleteSchedule(actor: User, id: string): { success: boolean; mes
 
   const filtered = schedules.filter((s) => s.id !== id);
   localStorage.setItem(STORAGE_KEYS.SCHEDULES, JSON.stringify(filtered));
+  deleteRecordFromCloud(SYNC_COLLECTIONS.SCHEDULES, id);
 
   logAuditAction(actor, 'DELETE_SCHEDULE', 'Schedules', id, 'Menghapus jadwal kerja.');
 
@@ -1005,6 +1077,7 @@ export function createLocation(
 
   locations.push(newLocation);
   localStorage.setItem(STORAGE_KEYS.LOCATIONS, JSON.stringify(locations));
+  syncRecordToCloud(SYNC_COLLECTIONS.LOCATIONS, newLocation.id, newLocation);
 
   logAuditAction(
     actor,
@@ -1041,6 +1114,7 @@ export function updateLocation(
   if (data.isActive !== undefined) locations[idx].isActive = data.isActive;
 
   localStorage.setItem(STORAGE_KEYS.LOCATIONS, JSON.stringify(locations));
+  syncRecordToCloud(SYNC_COLLECTIONS.LOCATIONS, id, locations[idx]);
 
   logAuditAction(
     actor,
@@ -1066,6 +1140,7 @@ export function deleteLocation(actor: User, id: string): { success: boolean; mes
 
   const filtered = locations.filter((l) => l.id !== id);
   localStorage.setItem(STORAGE_KEYS.LOCATIONS, JSON.stringify(filtered));
+  deleteRecordFromCloud(SYNC_COLLECTIONS.LOCATIONS, id);
 
   logAuditAction(actor, 'DELETE_LOCATION', 'Locations', id, 'Menghapus titik presensi.');
 
@@ -1108,6 +1183,7 @@ export function updateAppSettings(actor: User, updates: Partial<AppSettings>): {
   };
 
   localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(merged));
+  syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', merged);
 
   logAuditAction(actor, 'UPDATE_SETTINGS', 'Settings', 'global', 'Memperbarui pengaturan sistem dan sekolah.');
 
@@ -1180,6 +1256,7 @@ export function registerOrUpdateFace(
   }
 
   localStorage.setItem(STORAGE_KEYS.FACE_REGISTRY, JSON.stringify(registry));
+  syncRecordToCloud(SYNC_COLLECTIONS.FACE_REGISTRY, registryItem.id, registryItem);
 
   logAuditAction(
     actor,
@@ -1208,6 +1285,7 @@ export function toggleFaceStatus(actor: User, registryId: string): { success: bo
   item.isActive = !item.isActive;
   item.updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEYS.FACE_REGISTRY, JSON.stringify(registry));
+  syncRecordToCloud(SYNC_COLLECTIONS.FACE_REGISTRY, registryId, item);
 
   const statusText = item.isActive ? 'diaktifkan' : 'dinonaktifkan';
   logAuditAction(actor, 'TOGGLE_FACE_STATUS', 'FaceRegistry', registryId, `Status wajah ${item.userName} ${statusText}.`);
@@ -1223,6 +1301,7 @@ export function deleteFaceRegistry(actor: User, registryId: string): { success: 
   const registry = getAllFaceRegistry();
   const filtered = registry.filter((f) => f.id !== registryId);
   localStorage.setItem(STORAGE_KEYS.FACE_REGISTRY, JSON.stringify(filtered));
+  deleteRecordFromCloud(SYNC_COLLECTIONS.FACE_REGISTRY, registryId);
 
   logAuditAction(actor, 'DELETE_FACE', 'FaceRegistry', registryId, 'Menghapus data biometrik wajah.');
 
@@ -1253,7 +1332,7 @@ export function groupAttendanceByDateAndUser(records: AttendanceRecord[]): Daily
   const map = new Map<string, DailyAttendancePair>();
 
   for (const r of records) {
-    const key = `${r.date}_${r.userId}`;
+    const key = `${r.date}_${r.userId}_${r.sessionId || 'default'}`;
     if (!map.has(key)) {
       map.set(key, {
         date: r.date,
@@ -1285,24 +1364,32 @@ export function recordAttendance(
   const records = getAllAttendanceRecords();
   const todayStr = new Date().toISOString().split('T')[0];
 
-  // Cegah presensi ganda untuk jenis yang sama di hari yang sama
+  // Cegah presensi ganda untuk jenis yang sama di hari yang sama (per sesi jika ada sesi)
   const duplicate = records.find(
-    (r) => r.userId === recordData.userId && r.date === todayStr && r.type === recordData.type
+    (r) =>
+      r.userId === recordData.userId &&
+      r.date === todayStr &&
+      r.type === recordData.type &&
+      (recordData.sessionId ? r.sessionId === recordData.sessionId : true)
   );
 
   if (duplicate) {
     const timeFormatted = new Date(duplicate.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const sessionLabel = duplicate.sessionName ? ` untuk ${duplicate.sessionName}` : '';
     return {
       success: false,
-      message: `Anda sudah melakukan presensi ${recordData.type.toUpperCase()} hari ini pada pukul ${timeFormatted} WIB.`,
+      message: `Anda sudah melakukan presensi ${recordData.type.toUpperCase()}${sessionLabel} hari ini pada pukul ${timeFormatted} WIB.`,
     };
   }
 
-  // Validasi ketat aturan jam presensi sesuai jadwal aktif user
+  // Validasi ketat aturan jam presensi sesuai jadwal aktif user atau sesi yang dipilih
   const users = getAllUsers();
   const user = users.find((u) => u.id === recordData.userId);
   const schedules = getAllSchedules();
-  const schedule = (user?.scheduleId ? schedules.find((s) => s.id === user.scheduleId) : null) || schedules[0];
+  const schedule =
+    (recordData.sessionId ? schedules.find((s) => s.id === recordData.sessionId) : null) ||
+    (user?.scheduleId ? schedules.find((s) => s.id === user.scheduleId) : null) ||
+    schedules[0];
 
   if (schedule) {
     const now = new Date();
@@ -1345,6 +1432,7 @@ export function recordAttendance(
 
   records.unshift(newRecord);
   localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(records));
+  syncRecordToCloud(SYNC_COLLECTIONS.ATTENDANCE, newRecord.id, newRecord);
 
   // Catat audit
   const actor: User = {
@@ -1425,6 +1513,7 @@ export function createLeaveRequest(
   const leaves = getAllLeaveRequests();
   leaves.unshift(newRequest);
   localStorage.setItem(STORAGE_KEYS.LEAVE_REQUESTS, JSON.stringify(leaves));
+  syncRecordToCloud(SYNC_COLLECTIONS.LEAVE_REQUESTS, newRequest.id, newRequest);
 
   logAuditAction(
     actor,
@@ -1463,6 +1552,7 @@ export function reviewLeaveRequest(
   leaves[idx].reviewedAt = new Date().toISOString();
 
   localStorage.setItem(STORAGE_KEYS.LEAVE_REQUESTS, JSON.stringify(leaves));
+  syncRecordToCloud(SYNC_COLLECTIONS.LEAVE_REQUESTS, requestId, leaves[idx]);
 
   logAuditAction(
     actor,
@@ -1529,6 +1619,7 @@ export function createAssignment(
   const tasks = getAllAssignments();
   tasks.unshift(newAssignment);
   localStorage.setItem(STORAGE_KEYS.ASSIGNMENTS, JSON.stringify(tasks));
+  syncRecordToCloud(SYNC_COLLECTIONS.ASSIGNMENTS, newAssignment.id, newAssignment);
 
   logAuditAction(
     actor,
@@ -1572,6 +1663,7 @@ export function submitAssignmentDocumentation(
   task.status = 'proses'; // Menunggu review admin / verifikasi
 
   localStorage.setItem(STORAGE_KEYS.ASSIGNMENTS, JSON.stringify(tasks));
+  syncRecordToCloud(SYNC_COLLECTIONS.ASSIGNMENTS, assignmentId, task);
 
   logAuditAction(
     actor,
@@ -1607,6 +1699,7 @@ export function reviewAssignment(
   tasks[idx].feedback = feedback?.trim();
 
   localStorage.setItem(STORAGE_KEYS.ASSIGNMENTS, JSON.stringify(tasks));
+  syncRecordToCloud(SYNC_COLLECTIONS.ASSIGNMENTS, assignmentId, tasks[idx]);
 
   const statusLabel = status === 'selesai' ? 'SELESAI' : 'PERLU PERBAIKAN';
   logAuditAction(
