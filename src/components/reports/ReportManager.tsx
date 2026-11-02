@@ -64,10 +64,22 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
   const [selectedDeptId, setSelectedDeptId] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState<'rekap_harian' | 'log_transaksi'>('rekap_harian');
 
   // Photo Preview Modal
   const [previewPhoto, setPreviewPhoto] = useState<{ url: string; title: string } | null>(null);
   const [copyFeedback, setCopyFeedback] = useState(false);
+
+  const getWorkDuration = (masukTimestamp?: string, pulangTimestamp?: string) => {
+    if (!masukTimestamp || !pulangTimestamp) return null;
+    const tMasuk = new Date(masukTimestamp).getTime();
+    const tPulang = new Date(pulangTimestamp).getTime();
+    const diffMs = tPulang - tMasuk;
+    if (diffMs <= 0) return null;
+    const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    return `${diffHrs}j ${diffMins}m`;
+  };
 
   useEffect(() => {
     loadData();
@@ -157,83 +169,206 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
 
   const onTimePercentage = totalCheckIns > 0 ? Math.round((totalOnTime / totalCheckIns) * 100) : 100;
 
+  const pairedRecords = groupAttendanceByDateAndUser(filteredRecords);
+
   // Ekspor ke CSV
   const handleExportCSV = () => {
-    const settings = getAppSettings();
-    const headers = [
-      'ID Presensi',
-      'Tanggal',
-      'Waktu Presensi',
-      'NIP / ID',
-      'Nama Karyawan',
-      'Peran',
-      'Departemen',
-      'Jenis Presensi',
-      'Status Kehadiran',
-      'Jarak GPS (Meter)',
-      'GPS Valid',
-      'Skor Wajah (%)',
-      'Wajah Valid',
-    ];
+    if (viewMode === 'rekap_harian') {
+      const headers = [
+        'Tanggal',
+        'NIP / ID',
+        'Nama Karyawan',
+        'Peran',
+        'Departemen',
+        'Jam Masuk',
+        'Status Masuk',
+        'Jarak Masuk (Meter)',
+        'Skor Wajah Masuk (%)',
+        'Jam Pulang',
+        'Status Pulang',
+        'Jarak Pulang (Meter)',
+        'Skor Wajah Pulang (%)',
+        'Durasi Kerja',
+        'Kelengkapan Presensi',
+      ];
 
-    const rows = filteredRecords.map((r) => {
-      const u = users.find((user) => user.id === r.userId);
-      const d = departments.find((dept) => dept.id === u?.departmentId);
-      const deptName = d?.name || '-';
-      const timeStr = new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const rows = pairedRecords.map((p) => {
+        const u = users.find((user) => user.id === p.userId);
+        const d = departments.find((dept) => dept.id === u?.departmentId);
+        const deptName = d?.name || '-';
+        const masukTime = p.masukRecord
+          ? new Date(p.masukRecord.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : '-';
+        const pulangTime = p.pulangRecord
+          ? new Date(p.pulangRecord.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : '-';
+        const dur = getWorkDuration(p.masukRecord?.timestamp, p.pulangRecord?.timestamp) || '-';
+        const kelengkapan =
+          p.masukRecord && p.pulangRecord
+            ? 'Lengkap (Masuk & Pulang)'
+            : p.masukRecord
+            ? 'Belum Absen Pulang'
+            : 'Belum Presensi Masuk';
 
-      return [
-        `"${r.id}"`,
-        `"${r.date}"`,
-        `"${timeStr}"`,
-        `"${r.nip}"`,
-        `"${r.userName}"`,
-        `"${r.role}"`,
-        `"${deptName}"`,
-        `"${r.type.toUpperCase()}"`,
-        `"${r.status.replace('_', ' ').toUpperCase()}"`,
-        r.distanceFromLocationMeters,
-        r.isLocationValid ? 'YA' : 'TIDAK',
-        `${Math.round(r.faceSimilarityScore * 100)}%`,
-        r.isFaceValid ? 'YA' : 'TIDAK',
-      ].join(',');
-    });
+        return [
+          `"${p.date}"`,
+          `"${p.nip}"`,
+          `"${p.userName}"`,
+          `"${p.role}"`,
+          `"${deptName}"`,
+          `"${masukTime}"`,
+          `"${p.masukRecord ? p.masukRecord.status.replace('_', ' ').toUpperCase() : '-'}"`,
+          p.masukRecord ? p.masukRecord.distanceFromLocationMeters : '-',
+          p.masukRecord ? `${Math.round(p.masukRecord.faceSimilarityScore * 100)}%` : '-',
+          `"${pulangTime}"`,
+          `"${p.pulangRecord ? p.pulangRecord.status.replace('_', ' ').toUpperCase() : '-'}"`,
+          p.pulangRecord ? p.pulangRecord.distanceFromLocationMeters : '-',
+          p.pulangRecord ? `${Math.round(p.pulangRecord.faceSimilarityScore * 100)}%` : '-',
+          `"${dur}"`,
+          `"${kelengkapan}"`,
+        ].join(',');
+      });
 
-    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `Rekap_Presensi_KITARAJIN_${startDate}_sd_${endDate}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+      const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows].join('\n');
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement('a');
+      link.setAttribute('href', encodedUri);
+      link.setAttribute('download', `Rekap_Presensi_Harian_Masuk_Pulang_${startDate}_sd_${endDate}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } else {
+      const headers = [
+        'ID Presensi',
+        'Tanggal',
+        'Waktu Presensi',
+        'NIP / ID',
+        'Nama Karyawan',
+        'Peran',
+        'Departemen',
+        'Jenis Presensi',
+        'Status Kehadiran',
+        'Jarak GPS (Meter)',
+        'GPS Valid',
+        'Skor Wajah (%)',
+        'Wajah Valid',
+      ];
+
+      const rows = filteredRecords.map((r) => {
+        const u = users.find((user) => user.id === r.userId);
+        const d = departments.find((dept) => dept.id === u?.departmentId);
+        const deptName = d?.name || '-';
+        const timeStr = new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+        return [
+          `"${r.id}"`,
+          `"${r.date}"`,
+          `"${timeStr}"`,
+          `"${r.nip}"`,
+          `"${r.userName}"`,
+          `"${r.role}"`,
+          `"${deptName}"`,
+          `"${r.type.toUpperCase()}"`,
+          `"${r.status.replace('_', ' ').toUpperCase()}"`,
+          r.distanceFromLocationMeters,
+          r.isLocationValid ? 'YA' : 'TIDAK',
+          `${Math.round(r.faceSimilarityScore * 100)}%`,
+          r.isFaceValid ? 'YA' : 'TIDAK',
+        ].join(',');
+      });
+
+      const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows].join('\n');
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement('a');
+      link.setAttribute('href', encodedUri);
+      link.setAttribute('download', `Log_Presensi_KITARAJIN_${startDate}_sd_${endDate}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
 
   // Salin Format Tabulasi untuk Google Sheets
   const handleCopyForGoogleSheets = () => {
-    const headers = ['Tanggal', 'Waktu', 'NIP', 'Nama', 'Peran', 'Departemen', 'Tipe', 'Status', 'Jarak (m)', 'Skor Wajah'];
-    const rows = filteredRecords.map((r) => {
-      const u = users.find((user) => user.id === r.userId);
-      const d = departments.find((dept) => dept.id === u?.departmentId);
-      const timeStr = new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      return [
-        r.date,
-        timeStr,
-        r.nip,
-        r.userName,
-        r.role,
-        d?.name || '-',
-        r.type.toUpperCase(),
-        r.status.replace('_', ' ').toUpperCase(),
-        r.distanceFromLocationMeters,
-        `${Math.round(r.faceSimilarityScore * 100)}%`,
-      ].join('\t');
-    });
+    if (viewMode === 'rekap_harian') {
+      const headers = [
+        'Tanggal',
+        'NIP',
+        'Nama',
+        'Peran',
+        'Departemen',
+        'Jam Masuk',
+        'Status Masuk',
+        'Jarak Masuk (m)',
+        'Jam Pulang',
+        'Status Pulang',
+        'Jarak Pulang (m)',
+        'Durasi Kerja',
+        'Status',
+      ];
+      const rows = pairedRecords.map((p) => {
+        const u = users.find((user) => user.id === p.userId);
+        const d = departments.find((dept) => dept.id === u?.departmentId);
+        const masukTime = p.masukRecord
+          ? new Date(p.masukRecord.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : '-';
+        const pulangTime = p.pulangRecord
+          ? new Date(p.pulangRecord.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : '-';
+        const dur = getWorkDuration(p.masukRecord?.timestamp, p.pulangRecord?.timestamp) || '-';
+        const status =
+          p.masukRecord && p.pulangRecord
+            ? 'Lengkap'
+            : p.masukRecord
+            ? 'Belum Pulang'
+            : 'Belum Masuk';
 
-    const tsvData = [headers.join('\t'), ...rows].join('\n');
-    navigator.clipboard.writeText(tsvData);
-    setCopyFeedback(true);
-    setTimeout(() => setCopyFeedback(false), 3000);
+        return [
+          p.date,
+          p.nip,
+          p.userName,
+          p.role,
+          d?.name || '-',
+          masukTime,
+          p.masukRecord?.status || '-',
+          p.masukRecord ? p.masukRecord.distanceFromLocationMeters : '-',
+          pulangTime,
+          p.pulangRecord?.status || '-',
+          p.pulangRecord ? p.pulangRecord.distanceFromLocationMeters : '-',
+          dur,
+          status,
+        ].join('\t');
+      });
+
+      const tsvData = [headers.join('\t'), ...rows].join('\n');
+      navigator.clipboard.writeText(tsvData);
+      setCopyFeedback(true);
+      setTimeout(() => setCopyFeedback(false), 3000);
+    } else {
+      const headers = ['Tanggal', 'Waktu', 'NIP', 'Nama', 'Peran', 'Departemen', 'Tipe', 'Status', 'Jarak (m)', 'Skor Wajah'];
+      const rows = filteredRecords.map((r) => {
+        const u = users.find((user) => user.id === r.userId);
+        const d = departments.find((dept) => dept.id === u?.departmentId);
+        const timeStr = new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return [
+          r.date,
+          timeStr,
+          r.nip,
+          r.userName,
+          r.role,
+          d?.name || '-',
+          r.type.toUpperCase(),
+          r.status.replace('_', ' ').toUpperCase(),
+          r.distanceFromLocationMeters,
+          `${Math.round(r.faceSimilarityScore * 100)}%`,
+        ].join('\t');
+      });
+
+      const tsvData = [headers.join('\t'), ...rows].join('\n');
+      navigator.clipboard.writeText(tsvData);
+      setCopyFeedback(true);
+      setTimeout(() => setCopyFeedback(false), 3000);
+    }
   };
 
   const handlePrint = () => {
@@ -434,141 +569,363 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
         </div>
       </div>
 
-      {/* Data Table */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-          <div className="text-xs font-bold text-slate-800">
-            Daftar Catatan Kehadiran ({filteredRecords.length} Data)
+      {/* Data Table with Dual View Mode: Rekap Berpasangan vs Log Individual */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden space-y-0">
+        <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="space-y-0.5">
+            <div className="text-xs font-bold text-slate-800">
+              {viewMode === 'rekap_harian'
+                ? `Rekap Presensi Harian (Absen Masuk & Pulang) • ${pairedRecords.length} Hari`
+                : `Daftar Log Transaksi Per Kejadian • ${filteredRecords.length} Data`}
+            </div>
+            <p className="text-[11px] text-slate-400">
+              {viewMode === 'rekap_harian'
+                ? 'Menampilkan rekapitulasi pasangan Absen Masuk dan Absen Pulang untuk setiap pegawai per tanggal.'
+                : 'Menampilkan riwayat catatan mentah secara berurutan waktu.'}
+            </p>
           </div>
-          <span className="text-[11px] text-slate-400">
-            Urutan: Data terbaru di paling atas
-          </span>
+
+          {/* Mode Switcher */}
+          <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs self-start sm:self-auto">
+            <button
+              type="button"
+              onClick={() => setViewMode('rekap_harian')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+                viewMode === 'rekap_harian'
+                  ? 'bg-white text-emerald-800 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Rekap Harian (Masuk &amp; Pulang)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('log_transaksi')}
+              className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+                viewMode === 'log_transaksi'
+                  ? 'bg-white text-emerald-800 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>Log Transaksi</span>
+            </button>
+          </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="bg-slate-50/80 text-slate-500 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200/60">
-                <th className="py-3 px-4">Tanggal &amp; Waktu</th>
-                <th className="py-3 px-4">Pegawai / Staf</th>
-                <th className="py-3 px-4">Jenis</th>
-                <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-4">Verifikasi Wajah</th>
-                <th className="py-3 px-4">Validasi GPS Radius</th>
-                <th className="py-3 px-4 text-center">Foto Bukti</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filteredRecords.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400 text-xs">
-                    Tidak ada catatan presensi yang cocok dengan kriteria filter di atas.
-                  </td>
+        {viewMode === 'rekap_harian' ? (
+          /* TABEL REKAP HARIAN BERPASANGAN (ABSEN MASUK & PULANG) */
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-50/80 text-slate-500 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200/60">
+                  <th className="py-3 px-4">Tanggal</th>
+                  <th className="py-3 px-4">Pegawai / Staf</th>
+                  <th className="py-3 px-4">1. Absen Masuk</th>
+                  <th className="py-3 px-4">2. Absen Pulang</th>
+                  <th className="py-3 px-4">Durasi Kerja</th>
+                  <th className="py-3 px-4">Status Kelengkapan</th>
                 </tr>
-              ) : (
-                filteredRecords.map((r) => {
-                  const u = users.find((user) => user.id === r.userId);
-                  const d = departments.find((dept) => dept.id === u?.departmentId);
-                  const timeStr = new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {pairedRecords.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-12 text-center text-slate-400 text-xs">
+                      Tidak ada catatan presensi yang cocok dengan kriteria filter di atas.
+                    </td>
+                  </tr>
+                ) : (
+                  pairedRecords.map((p) => {
+                    const u = users.find((user) => user.id === p.userId);
+                    const d = departments.find((dept) => dept.id === u?.departmentId);
+                    const dur = getWorkDuration(p.masukRecord?.timestamp, p.pulangRecord?.timestamp);
+                    const hasMasuk = Boolean(p.masukRecord);
+                    const hasPulang = Boolean(p.pulangRecord);
 
-                  return (
-                    <tr key={r.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="font-bold text-slate-900">{r.date}</div>
-                        <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
-                          <span>{timeStr} WIB</span>
-                        </div>
-                      </td>
+                    return (
+                      <tr key={`${p.date}_${p.userId}`} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-3.5 px-4 whitespace-nowrap align-top">
+                          <div className="font-bold text-slate-900">{p.date}</div>
+                        </td>
 
-                      <td className="py-3 px-4">
-                        <div className="font-bold text-slate-900">{r.userName}</div>
-                        <div className="text-[10px] text-slate-400 font-mono">
-                          NIP: {r.nip} &bull; <span className="text-slate-600 font-semibold">{d?.name || r.role}</span>
-                        </div>
-                      </td>
+                        <td className="py-3.5 px-4 align-top">
+                          <div className="font-bold text-slate-900">{p.userName}</div>
+                          <div className="text-[10px] text-slate-400 font-mono">
+                            NIP: {p.nip} &bull; <span className="text-slate-600 font-semibold">{d?.name || p.role}</span>
+                          </div>
+                        </td>
 
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <span
-                          className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wide ${
-                            r.type === 'masuk' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'
-                          }`}
-                        >
-                          {r.type}
-                        </span>
-                      </td>
+                        {/* KOLOM 1: ABSEN MASUK */}
+                        <td className="py-3.5 px-4 align-top">
+                          {hasMasuk && p.masukRecord ? (
+                            <div className="flex items-start gap-2.5">
+                              {p.masukRecord.photoRef && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPreviewPhoto({
+                                      url: p.masukRecord!.photoRef,
+                                      title: `Absen Masuk - ${p.userName} (${p.date})`,
+                                    })
+                                  }
+                                  className="shrink-0 p-0.5 rounded-lg border border-emerald-200 hover:border-emerald-500 cursor-pointer"
+                                  title="Lihat foto snapshot masuk"
+                                >
+                                  <img
+                                    src={p.masukRecord.photoRef}
+                                    alt="Foto Masuk"
+                                    className="w-8 h-8 rounded-md object-cover"
+                                  />
+                                </button>
+                              )}
+                              <div className="space-y-0.5 text-[11px]">
+                                <div className="flex items-center gap-1.5 font-bold text-slate-900 font-mono">
+                                  <Clock className="w-3 h-3 text-emerald-600" />
+                                  <span>
+                                    {new Date(p.masukRecord.timestamp).toLocaleTimeString([], {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}{' '}
+                                    WIB
+                                  </span>
+                                  <span
+                                    className={`px-1.5 py-0.2 rounded text-[9px] font-semibold ${
+                                      p.masukRecord.status === 'tepat_waktu'
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : 'bg-amber-100 text-amber-800'
+                                    }`}
+                                  >
+                                    {p.masukRecord.status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-slate-500">
+                                  Jarak: <strong>{p.masukRecord.distanceFromLocationMeters}m</strong> &bull; Wajah: <strong>{Math.round(p.masukRecord.faceSimilarityScore * 100)}%</strong>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 italic text-[11px]">- Belum Masuk -</span>
+                          )}
+                        </td>
 
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <span
-                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                            r.status === 'tepat_waktu'
-                              ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                              : r.status === 'terlambat'
-                              ? 'bg-amber-50 text-amber-800 border border-amber-200'
-                              : 'bg-slate-100 text-slate-700'
-                          }`}
-                        >
-                          {r.status === 'tepat_waktu' && <CheckCircle className="w-3 h-3 text-emerald-600" />}
-                          {r.status === 'terlambat' && <AlertTriangle className="w-3 h-3 text-amber-600" />}
-                          <span className="capitalize">{r.status.replace('_', ' ')}</span>
-                        </span>
-                      </td>
+                        {/* KOLOM 2: ABSEN PULANG */}
+                        <td className="py-3.5 px-4 align-top">
+                          {hasPulang && p.pulangRecord ? (
+                            <div className="flex items-start gap-2.5">
+                              {p.pulangRecord.photoRef && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setPreviewPhoto({
+                                      url: p.pulangRecord!.photoRef,
+                                      title: `Absen Pulang - ${p.userName} (${p.date})`,
+                                    })
+                                  }
+                                  className="shrink-0 p-0.5 rounded-lg border border-indigo-200 hover:border-indigo-500 cursor-pointer"
+                                  title="Lihat foto snapshot pulang"
+                                >
+                                  <img
+                                    src={p.pulangRecord.photoRef}
+                                    alt="Foto Pulang"
+                                    className="w-8 h-8 rounded-md object-cover"
+                                  />
+                                </button>
+                              )}
+                              <div className="space-y-0.5 text-[11px]">
+                                <div className="flex items-center gap-1.5 font-bold text-slate-900 font-mono">
+                                  <Clock className="w-3 h-3 text-indigo-600" />
+                                  <span>
+                                    {new Date(p.pulangRecord.timestamp).toLocaleTimeString([], {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}{' '}
+                                    WIB
+                                  </span>
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-semibold bg-indigo-100 text-indigo-800">
+                                    Pulang Sah
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-slate-500">
+                                  Jarak: <strong>{p.pulangRecord.distanceFromLocationMeters}m</strong> &bull; Wajah: <strong>{Math.round(p.pulangRecord.faceSimilarityScore * 100)}%</strong>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-amber-700 font-medium text-[11px] bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 inline-block">
+                              Belum Absen Pulang
+                            </span>
+                          )}
+                        </td>
 
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="flex items-center gap-1.5">
+                        {/* DURASI KERJA */}
+                        <td className="py-3.5 px-4 whitespace-nowrap align-top">
+                          {dur ? (
+                            <span className="font-mono font-bold text-slate-800 bg-slate-100 px-2.5 py-1 rounded-lg">
+                              {dur}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
+
+                        {/* STATUS KELENGKAPAN */}
+                        <td className="py-3.5 px-4 whitespace-nowrap align-top">
                           <span
-                            className={`font-mono font-bold text-xs ${
-                              r.isFaceValid ? 'text-emerald-700' : 'text-rose-600'
+                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                              hasMasuk && hasPulang
+                                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                : hasMasuk
+                                ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                                : 'bg-rose-50 text-rose-800 border border-rose-200'
                             }`}
                           >
-                            {Math.round(r.faceSimilarityScore * 100)}%
+                            {hasMasuk && hasPulang && <CheckCircle className="w-3 h-3 text-emerald-600" />}
+                            {hasMasuk && !hasPulang && <Clock className="w-3 h-3 text-amber-600" />}
+                            {!hasMasuk && <AlertTriangle className="w-3 h-3 text-rose-600" />}
+                            <span>
+                              {hasMasuk && hasPulang
+                                ? 'Lengkap (Masuk & Pulang)'
+                                : hasMasuk
+                                ? 'Belum Absen Pulang'
+                                : 'Belum Presensi'}
+                            </span>
                           </span>
-                          <span className="text-[10px] text-slate-400">
-                            {r.isFaceValid ? '(Cocok)' : '(Tolak)'}
-                          </span>
-                        </div>
-                      </td>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          /* TABEL LOG TRANSAKSI INDIVIDUAL */
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-50/80 text-slate-500 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200/60">
+                  <th className="py-3 px-4">Tanggal &amp; Waktu</th>
+                  <th className="py-3 px-4">Pegawai / Staf</th>
+                  <th className="py-3 px-4">Jenis</th>
+                  <th className="py-3 px-4">Status</th>
+                  <th className="py-3 px-4">Verifikasi Wajah</th>
+                  <th className="py-3 px-4">Validasi GPS Radius</th>
+                  <th className="py-3 px-4 text-center">Foto Bukti</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filteredRecords.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="py-12 text-center text-slate-400 text-xs">
+                      Tidak ada catatan presensi yang cocok dengan kriteria filter di atas.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredRecords.map((r) => {
+                    const u = users.find((user) => user.id === r.userId);
+                    const d = departments.find((dept) => dept.id === u?.departmentId);
+                    const timeStr = new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-                      <td className="py-3 px-4 whitespace-nowrap">
-                        <div className="flex items-center gap-1 text-[11px] text-slate-600">
-                          <MapPin className="w-3 h-3 text-emerald-600 shrink-0" />
-                          <span className="font-mono font-bold text-slate-800">{r.distanceFromLocationMeters}m</span>
-                          <span className="text-[10px] text-slate-400">
-                            {r.isLocationValid ? '(Radius Valid)' : '(Luar Radius)'}
-                          </span>
-                        </div>
-                      </td>
+                    return (
+                      <tr key={r.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <div className="font-bold text-slate-900">{r.date}</div>
+                          <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1">
+                            <Clock className="w-3 h-3" />
+                            <span>{timeStr} WIB</span>
+                          </div>
+                        </td>
 
-                      <td className="py-3 px-4 text-center whitespace-nowrap">
-                        {r.photoRef ? (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setPreviewPhoto({
-                                url: r.photoRef,
-                                title: `${r.userName} - Presensi ${r.type.toUpperCase()} (${r.date} ${timeStr})`,
-                              })
-                            }
-                            className="inline-flex items-center justify-center p-1 rounded-lg border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 transition-colors"
-                            title="Lihat foto snapshot"
+                        <td className="py-3 px-4">
+                          <div className="font-bold text-slate-900">{r.userName}</div>
+                          <div className="text-[10px] text-slate-400 font-mono">
+                            NIP: {r.nip} &bull; <span className="text-slate-600 font-semibold">{d?.name || r.role}</span>
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wide ${
+                              r.type === 'masuk' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'
+                            }`}
                           >
-                            <img
-                              src={r.photoRef}
-                              alt="Snapshot"
-                              className="w-7 h-7 rounded-md object-cover"
-                            />
-                          </button>
-                        ) : (
-                          <span className="text-slate-300">-</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
+                            {r.type}
+                          </span>
+                        </td>
+
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <span
+                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
+                              r.status === 'tepat_waktu'
+                                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                : r.status === 'terlambat'
+                                ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                                : 'bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            {r.status === 'tepat_waktu' && <CheckCircle className="w-3 h-3 text-emerald-600" />}
+                            {r.status === 'terlambat' && <AlertTriangle className="w-3 h-3 text-amber-600" />}
+                            <span className="capitalize">{r.status.replace('_', ' ')}</span>
+                          </span>
+                        </td>
+
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`font-mono font-bold text-xs ${
+                                r.isFaceValid ? 'text-emerald-700' : 'text-rose-600'
+                              }`}
+                            >
+                              {Math.round(r.faceSimilarityScore * 100)}%
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              {r.isFaceValid ? '(Cocok)' : '(Tolak)'}
+                            </span>
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <div className="flex items-center gap-1 text-[11px] text-slate-600">
+                            <MapPin className="w-3 h-3 text-emerald-600 shrink-0" />
+                            <span className="font-mono font-bold text-slate-800">{r.distanceFromLocationMeters}m</span>
+                            <span className="text-[10px] text-slate-400">
+                              {r.isLocationValid ? '(Radius Valid)' : '(Luar Radius)'}
+                            </span>
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-4 text-center whitespace-nowrap">
+                          {r.photoRef ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewPhoto({
+                                  url: r.photoRef,
+                                  title: `${r.userName} - Presensi ${r.type.toUpperCase()} (${r.date} ${timeStr})`,
+                                })
+                              }
+                              className="inline-flex items-center justify-center p-1 rounded-lg border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 transition-colors"
+                              title="Lihat foto snapshot"
+                            >
+                              <img
+                                src={r.photoRef}
+                                alt="Snapshot"
+                                className="w-7 h-7 rounded-md object-cover"
+                              />
+                            </button>
+                          ) : (
+                            <span className="text-slate-300">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Modal Preview Foto Snapshot Presensi */}

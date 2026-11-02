@@ -21,6 +21,7 @@ import {
   History,
   FileCheck,
   Lock,
+  X,
 } from 'lucide-react';
 import {
   User,

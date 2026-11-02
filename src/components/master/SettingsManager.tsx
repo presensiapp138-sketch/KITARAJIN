@@ -171,7 +171,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     };
   }, []);
 
-  // Hubungkan Akun Google
+  // Hubungkan Akun Google / Email Kepala Sekolah
   const handleGoogleConnect = async () => {
     setIsSigningInGoogle(true);
     setFeedback(null);
@@ -179,10 +179,18 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       const result = await signInWithGoogle();
       if (result) {
         setIsGoogleConnected(true);
-        setGoogleUserEmail(result.user.email || 'Akun Google');
+        const email = result.user.email || 'Akun Google';
+        setGoogleUserEmail(email);
+        if (result.user.email) {
+          setKsEmail(result.user.email);
+          await updateUser(currentUser, currentUser.id, { email: result.user.email });
+          if (onUpdateCurrentUser) {
+            onUpdateCurrentUser({ ...currentUser, email: result.user.email });
+          }
+        }
         setFeedback({
           type: 'success',
-          message: `Berhasil terhubung dengan Google (${result.user.email}). Sekarang Anda dapat membuat atau menyinkronkan database otomatis!`,
+          message: `Berhasil menghubungkan akun email Kepala Sekolah (${result.user.email})! Akun email telah tertaut ke profil pimpinan dan siap untuk sinkronisasi database.`,
         });
       }
     } catch (err: any) {
@@ -517,9 +525,26 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                Alamat Email Kepala Sekolah <span className="text-rose-500">*</span>
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-bold text-slate-700 uppercase">
+                  Alamat Email Kepala Sekolah <span className="text-rose-500">*</span>
+                </label>
+                {isGoogleConnected ? (
+                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                    Terhubung ke Google
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleGoogleConnect}
+                    disabled={isSigningInGoogle}
+                    className="text-[10px] font-bold text-emerald-700 hover:text-emerald-900 underline flex items-center gap-1"
+                  >
+                    <span>Hubungkan Email Google</span>
+                  </button>
+                )}
+              </div>
               <div className="relative">
                 <Mail className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
                 <input
@@ -527,12 +552,12 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                   required
                   value={ksEmail}
                   onChange={(e) => setKsEmail(e.target.value)}
-                  placeholder="Contoh: kepsek@sekolah.sch.id"
+                  placeholder="Contoh: kepsek@sekolah.sch.id atau presensiapp138@gmail.com"
                   className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
               <span className="text-[10px] text-slate-400 mt-1 block">
-                Digunakan untuk identitas dan login akun Kepala Sekolah.
+                Digunakan untuk identitas, notifikasi, dan sinkronisasi database Google Sheets/Drive sekolah.
               </span>
             </div>
 
