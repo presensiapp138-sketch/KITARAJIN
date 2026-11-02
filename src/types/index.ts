@@ -185,4 +185,7 @@ export interface AppSettings {
   minFaceMatchThreshold: number; // e.g. 0.75 (75%)
   themeColor: string;
   lastSyncTimestamp?: string;
+  googleAccountEmail?: string;
+  isGoogleConnected?: boolean;
+  googleConnectedAt?: string;
 }
