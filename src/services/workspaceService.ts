@@ -37,8 +37,7 @@ const provider = new GoogleAuthProvider();
 provider.addScope('https://www.googleapis.com/auth/spreadsheets');
 provider.addScope('https://www.googleapis.com/auth/drive.file');
 provider.setCustomParameters({
-  prompt: 'consent',
-  access_type: 'offline',
+  prompt: 'select_account',
 });
 
 // Cache token di memori
@@ -66,13 +65,28 @@ export const initAuth = (
   });
 };
 
-export const signInWithGoogle = async (): Promise<{
+export const signInWithGoogle = async (
+  emailHint?: string
+): Promise<{
   user: FirebaseUser;
   accessToken: string;
 } | null> => {
   try {
     isSigningIn = true;
-    const result = await signInWithPopup(auth, provider);
+    const customProvider = new GoogleAuthProvider();
+    customProvider.addScope('https://www.googleapis.com/auth/spreadsheets');
+    customProvider.addScope('https://www.googleapis.com/auth/drive.file');
+    
+    // Selalu tampilkan pemilih akun agar Kepala Sekolah bebas memilih email mana saja
+    const customParams: Record<string, string> = {
+      prompt: 'select_account',
+    };
+    if (emailHint && emailHint.trim().includes('@')) {
+      customParams.login_hint = emailHint.trim();
+    }
+    customProvider.setCustomParameters(customParams);
+
+    const result = await signInWithPopup(auth, customProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
       throw new Error('Gagal memperoleh token akses dari Google.');
@@ -516,8 +530,8 @@ export async function executeAutoCreateDatabase(
 ): Promise<CreateDatabaseResult> {
   let token = await getAccessToken();
   if (!token) {
-    if (onStepProgress) onStepProgress('Menghubungkan akun Google...');
-    const authResult = await signInWithGoogle();
+    if (onStepProgress) onStepProgress('Menghubungkan akun Google Kepala Sekolah...');
+    const authResult = await signInWithGoogle(currentUser.email);
     if (!authResult) {
       throw new Error('Autentikasi Google diperlukan untuk membuat database di Google Drive & Sheets.');
     }

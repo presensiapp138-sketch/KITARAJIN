@@ -171,12 +171,13 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     };
   }, []);
 
-  // Hubungkan Akun Google / Email Kepala Sekolah
-  const handleGoogleConnect = async () => {
+  // Hubungkan Akun Google / Email Kepala Sekolah (Bebas pilih email mana saja)
+  const handleGoogleConnect = async (preferredEmail?: string) => {
     setIsSigningInGoogle(true);
     setFeedback(null);
     try {
-      const result = await signInWithGoogle();
+      const hint = preferredEmail || ksEmail || currentUser.email;
+      const result = await signInWithGoogle(hint);
       if (result) {
         setIsGoogleConnected(true);
         const email = result.user.email || 'Akun Google';
@@ -190,14 +191,14 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         }
         setFeedback({
           type: 'success',
-          message: `Berhasil menghubungkan akun email Kepala Sekolah (${result.user.email})! Akun email telah tertaut ke profil pimpinan dan siap untuk sinkronisasi database.`,
+          message: `Berhasil menghubungkan akun Google (${result.user.email})! Email Kepala Sekolah kini aktif dan siap untuk membuat atau menyinkronkan database.`,
         });
       }
     } catch (err: any) {
       console.error('Login Google gagal:', err);
       setFeedback({
         type: 'error',
-        message: err.message || 'Gagal menghubungkan akun Google. Pastikan jendela popup tidak diblokir.',
+        message: err.message || 'Gagal menghubungkan akun Google. Pastikan jendela popup diizinkan pada peramban.',
       });
     } finally {
       setIsSigningInGoogle(false);
@@ -210,7 +211,21 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     setGoogleUserEmail(null);
     setFeedback({
       type: 'success',
-      message: 'Koneksi akun Google berhasil diputuskan.',
+      message: 'Koneksi akun Google berhasil diputuskan. Anda dapat menghubungkan akun email lain kapan saja.',
+    });
+  };
+
+  // Inisialisasi Database 10 Tab Lokal Sekolah (Tanpa bergantung ke Google)
+  const handleCreateLocalVaultDatabase = () => {
+    updateAppSettings(currentUser, {
+      storageMode: 'local_secure_vault',
+      lastSyncTimestamp: new Date().toISOString(),
+    });
+    setSettings(getAppSettings());
+    runDatabaseCheck(undefined, undefined, false);
+    setFeedback({
+      type: 'success',
+      message: 'Database 10 Tab Lokal / Vault Sekolah berhasil diinisialisasi dan aktif! Semua data civitas sekolah (pengguna, jadwal, lokasi, wajah, presensi) siap digunakan.',
     });
   };
 
@@ -537,9 +552,9 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 ) : (
                   <button
                     type="button"
-                    onClick={handleGoogleConnect}
+                    onClick={() => handleGoogleConnect(ksEmail)}
                     disabled={isSigningInGoogle}
-                    className="text-[10px] font-bold text-emerald-700 hover:text-emerald-900 underline flex items-center gap-1"
+                    className="text-[10px] font-bold text-emerald-700 hover:text-emerald-900 underline flex items-center gap-1 cursor-pointer"
                   >
                     <span>Hubungkan Email Google</span>
                   </button>
@@ -629,15 +644,24 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           {/* Status Akun Google */}
           <div className="flex items-center gap-2">
             {isGoogleConnected ? (
-              <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl">
+              <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl flex-wrap">
                 <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                 <span className="text-xs font-bold text-emerald-800">
                   {googleUserEmail || 'Akun Google Terhubung'}
                 </span>
                 <button
                   type="button"
+                  onClick={() => handleGoogleConnect()}
+                  className="text-[10px] text-emerald-700 hover:text-emerald-900 font-semibold underline ml-1 cursor-pointer"
+                  title="Ganti ke akun email Google lain"
+                >
+                  Ganti Akun
+                </button>
+                <button
+                  type="button"
                   onClick={handleGoogleDisconnect}
-                  className="text-[10px] text-slate-400 hover:text-rose-600 underline ml-1"
+                  className="text-[10px] text-slate-400 hover:text-rose-600 underline ml-1 cursor-pointer"
+                  title="Putuskan koneksi Google"
                 >
                   Keluar
                 </button>
@@ -645,9 +669,10 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             ) : (
               <button
                 type="button"
-                onClick={handleGoogleConnect}
+                onClick={() => handleGoogleConnect(ksEmail)}
                 disabled={isSigningInGoogle}
-                className="px-3.5 py-1.5 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold shadow-2xs flex items-center gap-2 transition-colors disabled:opacity-50"
+                className="px-3.5 py-1.5 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold shadow-2xs flex items-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+                title="Pilih akun email Google mana saja untuk membuat database"
               >
                 <svg className="w-4 h-4" viewBox="0 0 24 24">
                   <path
@@ -667,7 +692,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                     d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
                   />
                 </svg>
-                <span>{isSigningInGoogle ? 'Menghubungkan...' : 'Hubungkan Akun Google'}</span>
+                <span>{isSigningInGoogle ? 'Menghubungkan...' : 'Hubungkan Akun Google Bebas'}</span>
               </button>
             )}
           </div>
@@ -695,7 +720,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
             />
             <span className="text-[11px] text-slate-500 mt-1.5 block">
-              💡 Boleh kosong jika ingin aplikasi <strong>membuat Spreadsheet baru secara otomatis</strong>.
+              💡 Boleh kosong jika ingin aplikasi <strong>membuat Spreadsheet baru secara otomatis</strong> di akun Google Anda.
             </span>
           </div>
 
@@ -719,7 +744,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono bg-white focus:ring-2 focus:ring-teal-500 focus:outline-none"
             />
             <span className="text-[11px] text-slate-500 mt-1.5 block">
-              💡 Boleh kosong jika ingin aplikasi <strong>membuat Folder Drive baru secara otomatis</strong>.
+              💡 Boleh kosong jika ingin aplikasi <strong>membuat Folder Drive baru secara otomatis</strong> di akun Google Anda.
             </span>
           </div>
         </div>
@@ -748,24 +773,35 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           <div>
             <div className="text-sm font-extrabold flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-emerald-200" />
-              <span>Eksekusi Pembuatan Database Otomatis</span>
+              <span>Pilihan Eksekusi Pembuatan Database</span>
             </div>
             <p className="text-xs text-emerald-100 mt-0.5 leading-relaxed max-w-xl">
-              Tempel ID atau biarkan kosong, lalu klik tombol ini. Aplikasi akan langsung membuat Folder Google Drive &amp; 10 Tab Google Sheets tanpa perlu unduh file JSON.
+              Buat database otomatis di Google Drive/Sheets menggunakan email pilihan Anda, atau aktifkan database 10 tab langsung secara instan.
             </p>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap shrink-0">
-            {/* Tombol Utama Otomatis */}
+            {/* Tombol Utama 1: Buat Database Otomatis di Google */}
             <button
               type="button"
               onClick={handleAutoCreateAndLinkDatabase}
               disabled={isCreatingDb}
-              className="px-5 py-3 rounded-xl bg-white hover:bg-emerald-50 text-emerald-900 font-extrabold text-xs shadow-lg transition-all flex items-center gap-2 active:scale-95 disabled:opacity-50 cursor-pointer"
+              className="px-4 py-2.5 rounded-xl bg-white hover:bg-emerald-50 text-emerald-900 font-extrabold text-xs shadow-lg transition-all flex items-center gap-2 active:scale-95 disabled:opacity-50 cursor-pointer"
             >
               <Database className="w-4 h-4 text-emerald-700" />
-              <span>{isCreatingDb ? 'Memproses di Google...' : 'Buat Database Otomatis Sekarang'}</span>
+              <span>{isCreatingDb ? 'Memproses di Google...' : 'Buat di Google Drive & Sheets'}</span>
               <ArrowRight className="w-3.5 h-3.5 text-emerald-700" />
+            </button>
+
+            {/* Tombol Utama 2: Inisialisasi Database 10 Tab Lokal */}
+            <button
+              type="button"
+              onClick={handleCreateLocalVaultDatabase}
+              className="px-3.5 py-2.5 rounded-xl bg-emerald-800/90 hover:bg-emerald-900 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+              title="Aktifkan seluruh 10 tab database langsung secara instan"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-300" />
+              <span>Inisialisasi Database 10 Tab</span>
             </button>
 
             {/* Tombol Sinkronkan Data Saat Ini */}
@@ -773,7 +809,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               type="button"
               onClick={handleSyncDataToSheets}
               disabled={isSyncingData || (!sheetIdInput && !settings.googleSheetSpreadsheetId)}
-              className="px-3.5 py-3 rounded-xl bg-emerald-800/80 hover:bg-emerald-800 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-40"
+              className="px-3.5 py-2.5 rounded-xl bg-slate-900/60 hover:bg-slate-900 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-40"
               title="Kirim ulang 10 tab data saat ini ke Spreadsheet"
             >
               <CloudUpload className={`w-3.5 h-3.5 ${isSyncingData ? 'animate-bounce' : ''}`} />
@@ -785,7 +821,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               type="button"
               onClick={() => runDatabaseCheck(undefined, undefined, true)}
               disabled={isCheckingDb}
-              className="px-3.5 py-3 rounded-xl bg-emerald-800/80 hover:bg-emerald-800 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-40"
+              className="px-3.5 py-2.5 rounded-xl bg-emerald-800/80 hover:bg-emerald-800 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-40"
               title="Periksa status live ke Google API"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isCheckingDb ? 'animate-spin' : ''}`} />
