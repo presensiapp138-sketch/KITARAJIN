@@ -177,11 +177,12 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
             <div className="grid grid-cols-3 gap-1.5">
               <button
                 type="button"
-                onClick={() => setQuickDemo('kepsek@sekolah.sch.id', 'kepsek123')}
+                onClick={() => setQuickDemo('presensiapp138@gmail.com', 'kepsek123')}
                 className="p-2 rounded-xl border border-slate-200 bg-white text-left hover:border-emerald-500 hover:bg-emerald-50 transition-all text-xs"
+                title="Login sebagai Kepala Sekolah (Dapat gunakan email presensiapp138@gmail.com, kepsek@sekolah.sch.id, atau username kepsek)"
               >
                 <div className="font-bold text-slate-800 text-[11px]">Kep. Sekolah</div>
-                <div className="text-[9px] text-slate-400 font-mono">kepsek123</div>
+                <div className="text-[9px] text-emerald-600 font-mono truncate">presensiapp138...</div>
               </button>
 
               <button

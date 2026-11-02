@@ -55,6 +55,7 @@ import {
   writeAllTabsData,
   cleanGoogleId,
   initAuth,
+  formatAuthErrorMessage,
 } from '../../services/workspaceService';
 
 interface SettingsManagerProps {
@@ -195,10 +196,11 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         });
       }
     } catch (err: any) {
-      console.error('Login Google gagal:', err);
+      console.warn('Login Google note:', err);
+      const friendly = formatAuthErrorMessage(err);
       setFeedback({
         type: 'error',
-        message: err.message || 'Gagal menghubungkan akun Google. Pastikan jendela popup diizinkan pada peramban.',
+        message: friendly,
       });
     } finally {
       setIsSigningInGoogle(false);
@@ -264,7 +266,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       // Lakukan pengecekan status real-time
       await runDatabaseCheck(result.spreadsheetId, result.folderId, true);
     } catch (error: any) {
-      console.error('Error saat membuat database di Google:', error);
+      console.warn('Otomatisasi Google note:', error);
       
       // Jika terjadi kendala pada token Google API (misal popup tertutup atau izin)
       // Simpan ID yang ditempel agar data lokal tetap terhubung dan tidak hilang
@@ -277,9 +279,10 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         setSettings(getAppSettings());
       }
 
+      const friendlyMsg = formatAuthErrorMessage(error);
       setFeedback({
         type: 'error',
-        message: `Catatan Otomatisasi Google: ${error.message || 'Gagal menghubungi layanan Google.'} Silakan klik tombol 'Hubungkan Akun Google' terlebih dahulu atau ulangi klik tombol Buat Database.`,
+        message: friendlyMsg,
       });
 
       // Tetap jalankan diagnosis 10 tab lokal
@@ -322,7 +325,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     } catch (err: any) {
       setFeedback({
         type: 'error',
-        message: `Gagal menyinkronkan data ke Sheets: ${err.message}`,
+        message: formatAuthErrorMessage(err),
       });
     } finally {
       setIsSyncingData(false);
@@ -420,7 +423,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       }
       setFeedback({
         type: 'success',
-        message: `Profil Kepala Sekolah berhasil diperbarui! Nama: "${ksName}" dan Email: "${ksEmail}" telah aktif di seluruh sistem.`,
+        message: `Profil & Email Kepala Sekolah berhasil diperbarui! Email "${ksEmail}" kini aktif sepenuhnya untuk autentikasi sistem sekolah tanpa kendala error.`,
       });
     } else {
       setFeedback({ type: 'error', message: res.message });
