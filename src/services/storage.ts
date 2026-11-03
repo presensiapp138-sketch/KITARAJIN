@@ -581,6 +581,7 @@ export async function createUser(
     rawPassword: string;
     role: 'admin' | 'karyawan';
     departmentId?: string;
+    departmentName?: string;
     scheduleId?: string;
     assignedSessionIds?: string[];
     position: string;
@@ -609,6 +610,7 @@ export async function createUser(
   }
 
   const passwordHash = await hashPassword(userData.rawPassword);
+  const manualDept = userData.departmentName?.trim() || userData.departmentId?.trim() || '';
   const newUser: User = {
     id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     nip: userData.nip.trim(),
@@ -617,7 +619,8 @@ export async function createUser(
     email: userData.email?.trim() || undefined,
     passwordHash,
     role: userData.role,
-    departmentId: userData.departmentId,
+    departmentId: manualDept,
+    departmentName: manualDept,
     scheduleId: userData.scheduleId,
     assignedSessionIds:
       userData.assignedSessionIds && userData.assignedSessionIds.length > 0
@@ -693,7 +696,13 @@ export async function updateUser(
 
   if (updates.name) targetUser.name = updates.name;
   if (updates.position) targetUser.position = updates.position;
-  if (updates.departmentId !== undefined) targetUser.departmentId = updates.departmentId;
+  if (updates.departmentName !== undefined) {
+    targetUser.departmentName = updates.departmentName.trim();
+    targetUser.departmentId = updates.departmentName.trim();
+  } else if (updates.departmentId !== undefined) {
+    targetUser.departmentId = updates.departmentId;
+    targetUser.departmentName = updates.departmentId;
+  }
   if (updates.scheduleId !== undefined) targetUser.scheduleId = updates.scheduleId;
   if (updates.assignedSessionIds !== undefined) targetUser.assignedSessionIds = updates.assignedSessionIds;
   if (updates.email !== undefined) targetUser.email = updates.email;
@@ -932,6 +941,92 @@ export function updateUserSessions(
   );
 
   return { success: true, message: `Sesi presensi untuk ${users[idx].name} berhasil disimpan.` };
+}
+
+export function toggleUserSession(
+  actor: User,
+  userId: string,
+  sessionId: string,
+  enable: boolean
+): { success: boolean; message: string } {
+  if (actor.role === 'karyawan') {
+    return { success: false, message: 'Hanya Kepala Sekolah dan Admin yang berwenang mengatur sesi.' };
+  }
+
+  const users = getAllUsers();
+  const idx = users.findIndex((u) => u.id === userId);
+  if (idx === -1) {
+    return { success: false, message: 'Karyawan tidak ditemukan.' };
+  }
+
+  const curSessions = new Set(users[idx].assignedSessionIds || ['sesi-1', 'sesi-2', 'sesi-3']);
+  if (enable) {
+    curSessions.add(sessionId);
+  } else {
+    curSessions.delete(sessionId);
+  }
+
+  users[idx].assignedSessionIds = Array.from(curSessions);
+  users[idx].updatedAt = new Date().toISOString();
+  localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+  syncRecordToCloud(SYNC_COLLECTIONS.USERS, userId, users[idx]);
+
+  logAuditAction(
+    actor,
+    'TOGGLE_USER_SESSION',
+    'Users',
+    userId,
+    `${enable ? 'Menambahkan' : 'Mencabut'} penugasan ${sessionId} untuk karyawan ${users[idx].name}.`
+  );
+
+  return {
+    success: true,
+    message: `${enable ? 'Menambahkan' : 'Mencabut'} sesi untuk ${users[idx].name}.`,
+  };
+}
+
+export function assignUsersToSession(
+  actor: User,
+  sessionId: string,
+  targetUserIds: string[]
+): { success: boolean; message: string } {
+  if (actor.role === 'karyawan') {
+    return { success: false, message: 'Hanya Kepala Sekolah dan Admin yang berwenang mengatur sesi.' };
+  }
+
+  const users = getAllUsers();
+  let updatedCount = 0;
+
+  users.forEach((u) => {
+    if (u.role === 'karyawan') {
+      const curSessions = new Set(u.assignedSessionIds || ['sesi-1', 'sesi-2', 'sesi-3']);
+      const shouldHave = targetUserIds.includes(u.id);
+      if (shouldHave && !curSessions.has(sessionId)) {
+        curSessions.add(sessionId);
+        u.assignedSessionIds = Array.from(curSessions);
+        u.updatedAt = new Date().toISOString();
+        syncRecordToCloud(SYNC_COLLECTIONS.USERS, u.id, u);
+        updatedCount++;
+      } else if (!shouldHave && curSessions.has(sessionId)) {
+        curSessions.delete(sessionId);
+        u.assignedSessionIds = Array.from(curSessions);
+        u.updatedAt = new Date().toISOString();
+        syncRecordToCloud(SYNC_COLLECTIONS.USERS, u.id, u);
+        updatedCount++;
+      }
+    }
+  });
+
+  localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+  logAuditAction(
+    actor,
+    'UPDATE_SESSION_ROSTER',
+    'Schedules',
+    sessionId,
+    `Memperbarui penugasan karyawan untuk ${sessionId} (${targetUserIds.length} karyawan terdaftar).`
+  );
+
+  return { success: true, message: `Berhasil mengatur ${targetUserIds.length} karyawan untuk sesi ini.` };
 }
 
 export function createSchedule(

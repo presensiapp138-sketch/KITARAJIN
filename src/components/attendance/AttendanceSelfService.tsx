@@ -36,10 +36,12 @@ import {
   AttendanceRecord,
   LocationConfig,
   Schedule,
+  Department,
 } from '../../types';
 import {
   getAllLocations,
   getAllSchedules,
+  getAllDepartments,
   updateSchedule,
   getFaceRegistryByUserId,
   recordAttendance,
@@ -85,6 +87,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
   const [activeLocation, setActiveLocation] = useState<LocationConfig | null>(null);
   const [userSchedule, setUserSchedule] = useState<Schedule | null>(null);
   const [allSchedules, setAllSchedules] = useState<Schedule[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [allAttendanceRecords, setAllAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [userRecords, setUserRecords] = useState<AttendanceRecord[]>([]);
@@ -131,6 +134,9 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // Status Pemilihan Sesi Wajib Oleh Karyawan
+  const [hasUserExplicitlySelectedSession, setHasUserExplicitlySelectedSession] = useState<boolean>(false);
 
   // Quick Edit Jam Sesi Khusus Admin & Kepala Sekolah
   const [isQuickSessionEditOpen, setIsQuickSessionEditOpen] = useState(false);
@@ -272,17 +278,22 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     const schedules = getAllSchedules();
     setAllSchedules(schedules);
 
-    // Tentukan sesi awal yang dipilih
-    setUserSchedule((prev) => {
-      if (prev && schedules.some((s) => s.id === prev.id)) {
-        return schedules.find((s) => s.id === prev.id) || prev;
-      }
-      const userSessions = currentUser.assignedSessionIds || [];
-      const assigned = schedules.find((s) => userSessions.includes(s.id));
-      return assigned || schedules[0] || null;
-    });
+    const userSessions = currentUser.assignedSessionIds || [];
+    const assigned = schedules.filter((s) => userSessions.includes(s.id));
+    if (assigned.length === 1) {
+      setUserSchedule(assigned[0]);
+      setHasUserExplicitlySelectedSession(true);
+    } else {
+      setUserSchedule((prev) => {
+        if (prev && schedules.some((s) => s.id === prev.id)) {
+          return schedules.find((s) => s.id === prev.id) || prev;
+        }
+        return assigned[0] || schedules[0] || null;
+      });
+    }
 
     setUserRecords(getAttendanceForUser(currentUser.id));
+    setDepartments(getAllDepartments());
     setAllUsers(getAllUsers());
     setAllAttendanceRecords(getAllAttendanceRecords());
   };
@@ -303,9 +314,11 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     };
   }, []);
 
-  // Otomatis atur tombol Masuk vs Pulang sesuai sesi yang sedang dipilih
+  // Otomatis atur tombol Masuk vs Pulang saat karyawan memilih sesi
   const handleSelectSession = (sched: Schedule) => {
     setUserSchedule(sched);
+    setHasUserExplicitlySelectedSession(true);
+    setResultMessage(null);
     const today = currentNow.toISOString().split('T')[0];
     const hasMasuk = userRecords.some((r) => r.date === today && r.type === 'masuk' && r.sessionId === sched.id);
     const hasPulang = userRecords.some((r) => r.date === today && r.type === 'pulang' && r.sessionId === sched.id);
@@ -423,6 +436,15 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
         type: 'error',
         title: 'Kamera Tidak Aktif',
         description: 'Pastikan kamera aktif sebelum melakukan verifikasi presensi.',
+      });
+      return;
+    }
+
+    if (!hasUserExplicitlySelectedSession && userAllowedSchedules.length > 1) {
+      setResultMessage({
+        type: 'error',
+        title: 'Wajib Memilih Sesi Terlebih Dahulu',
+        description: 'Silakan pilih sesi yang akan Anda presensikan (Sesi 1, Sesi 2, atau Sesi 3) pada pilihan tombol sesi di bawah sebelum melakukan presensi.',
       });
       return;
     }
@@ -645,6 +667,55 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
           <div className="lg:col-span-7 space-y-4">
             <div className="bg-white rounded-3xl border border-slate-200/80 p-5 shadow-xs space-y-4">
               
+              {/* KARTU IDENTITAS PRESENSI MANDIRI PRIBADI */}
+              <div className="p-3.5 bg-slate-900 text-white rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md border border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center font-black text-white text-base shadow-inner">
+                    {currentUser.name.charAt(0)}
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-sm">{currentUser.name}</span>
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">
+                        {currentUser.role.replace('_', ' ').toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-300 mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span>NIP: <span className="font-mono text-white font-bold">{currentUser.nip}</span></span>
+                      <span className="text-slate-500">&bull;</span>
+                      <span>Jabatan / Posisi: <span className="text-emerald-300 font-bold">{currentUser.position || 'Staff'}</span></span>
+                    </div>
+                  </div>
+                </div>
+                <div className="text-left sm:text-right pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-800">
+                  <span className="text-[11px] font-extrabold text-emerald-400 flex items-center sm:justify-end gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Presensi Mandiri Pribadi</span>
+                  </span>
+                  <span className="text-[10px] text-slate-400 block mt-0.5">
+                    Dilarang mewakili orang / sesi lain
+                  </span>
+                </div>
+              </div>
+
+              {/* INDIKATOR WAJIB MEMILIH SESI */}
+              {!hasUserExplicitlySelectedSession && userAllowedSchedules.length > 1 ? (
+                <div className="p-3 bg-amber-50 border-2 border-amber-300 rounded-2xl flex items-center gap-2.5 text-xs text-amber-900 font-bold animate-pulse">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>Wajib Pilih Sesi: Silakan klik salah satu sesi yang akan Anda ikuti hari ini (Sesi 1, Sesi 2, atau Sesi 3) di bawah ini sebelum mengambil foto.</span>
+                </div>
+              ) : (
+                <div className="p-2.5 bg-emerald-50/80 border border-emerald-200 rounded-2xl flex items-center justify-between text-xs text-emerald-950 font-bold">
+                  <span className="flex items-center gap-1.5">
+                    <Check className="w-4 h-4 text-emerald-600" />
+                    <span>Sesi Terpilih: <strong>{userSchedule?.sessionName || userSchedule?.name}</strong></span>
+                  </span>
+                  <span className="text-[10px] font-mono text-emerald-700 bg-white px-2 py-0.5 rounded-lg border border-emerald-200">
+                    Masuk: {userSchedule?.checkInStart}-{userSchedule?.checkInDeadline} | Pulang: {userSchedule?.checkOutStart} WIB
+                  </span>
+                </div>
+              )}
+
               {/* RINGKASAN STATUS PRESENSI HARI INI PER SESI (SESI 1, SESI 2, SESI 3) */}
               <div className="space-y-2">
                 <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 block">
@@ -711,16 +782,29 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                 </div>
               </div>
 
-              {/* TOMBOL PEMILIH SESI 1, SESI 2, SESI 3 */}
+              {/* TOMBOL PEMILIH SESI 1, SESI 2, SESI 3 & ATUR JAM SESI */}
               <div className="p-3.5 bg-slate-50/90 rounded-2xl border border-slate-200/90 space-y-2">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
                     <Clock className="w-4 h-4 text-emerald-600" />
                     <span>Pilih Sesi yang Akan Dipresensikan:</span>
                   </div>
-                  <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/70 px-2 py-0.5 rounded-full border border-emerald-200">
-                    Aturan Diatur Admin/KS
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {(currentUser.role === 'kepala_sekolah' || currentUser.role === 'admin') && (
+                      <button
+                        type="button"
+                        onClick={() => openQuickSessionEdit(userSchedule)}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+                        title="Ubah jam buka presensi masuk & jam pulang untuk sesi ini"
+                      >
+                        <Sliders className="w-3 h-3" />
+                        <span>Atur Jam {userSchedule?.sessionName || 'Sesi'}</span>
+                      </button>
+                    )}
+                    <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/70 px-2 py-0.5 rounded-full border border-emerald-200">
+                      Aturan Diatur Admin/KS
+                    </span>
+                  </div>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
                   {userAllowedSchedules.map((sch) => {
@@ -738,13 +822,13 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                       >
                         <div className="font-extrabold text-xs flex items-center justify-between">
                           <span>{sch.sessionName || sch.name}</span>
-                          {isSelected && <span>✓</span>}
+                          {isSelected && <span>✓ Aktif</span>}
                         </div>
-                        <div className={`text-[10px] font-mono mt-1 ${isSelected ? 'text-emerald-100' : 'text-slate-500'}`}>
-                          Masuk: {sch.checkInStart}-{sch.checkInDeadline}
+                        <div className={`text-[10px] font-mono mt-1 ${isSelected ? 'text-emerald-100' : 'text-slate-600'}`}>
+                          Masuk: {sch.checkInStart} - {sch.checkInDeadline}
                         </div>
-                        <div className={`text-[10px] font-mono ${isSelected ? 'text-emerald-100' : 'text-slate-500'}`}>
-                          Pulang: {sch.checkOutStart} WIB
+                        <div className={`text-[10px] font-mono ${isSelected ? 'text-emerald-100' : 'text-slate-600'}`}>
+                          Pulang: {sch.checkOutStart} - {sch.checkOutEnd || '18:00'}
                         </div>
                       </button>
                     );
@@ -874,7 +958,8 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
               {/* Primary Action Button */}
               {(() => {
                 const schedStatus = getScheduleStatus();
-                const isDisabled = isProcessing || !schedStatus.allowed;
+                const isSessionConfirmed = hasUserExplicitlySelectedSession || userAllowedSchedules.length <= 1;
+                const isDisabled = isProcessing || !schedStatus.allowed || !isSessionConfirmed;
 
                 return (
                   <button
@@ -891,6 +976,11 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                   >
                     {isProcessing ? (
                       <span>Memverifikasi Wajah &amp; GPS...</span>
+                    ) : !isSessionConfirmed ? (
+                      <div className="flex items-center gap-2">
+                        <AlertCircle className="w-4 h-4 text-amber-200" />
+                        <span>⚠️ Silakan Pilih Sesi (Sesi 1, 2, atau 3) di Atas</span>
+                      </div>
                     ) : !schedStatus.allowed ? (
                       <div className="flex items-center gap-2">
                         <Lock className="w-4 h-4 text-slate-200" />
@@ -1428,6 +1518,156 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                 Tutup
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Quick Edit Jam Sesi (Khusus Kepala Sekolah & Admin) */}
+      {isQuickSessionEditOpen && userSchedule && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full overflow-hidden shadow-2xl border border-slate-200">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50">
+              <div className="flex items-center gap-2">
+                <Clock className="w-5 h-5 text-emerald-600" />
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-sm">
+                    Atur Jam {userSchedule.sessionName || userSchedule.name}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Perubahan langsung aktif dan sinkron ke seluruh HP karyawan
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsQuickSessionEditOpen(false)}
+                className="p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-200 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveQuickSessionTimes} className="p-5 space-y-4">
+              {/* Aturan Masuk */}
+              <div className="p-3.5 bg-emerald-50 rounded-2xl border border-emerald-200/80 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-950 uppercase tracking-wide">
+                    1. Jam Presensi Masuk
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const now = new Date();
+                      const cur = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+                      setQuickCheckInStart(cur);
+                      const later = new Date(now.getTime() + 60 * 60000);
+                      const latStr = `${String(later.getHours()).padStart(2, '0')}:${String(later.getMinutes()).padStart(2, '0')}`;
+                      setQuickCheckInDeadline(latStr);
+                    }}
+                    className="text-[10px] font-bold text-emerald-700 bg-emerald-200/60 hover:bg-emerald-200 px-2 py-0.5 rounded cursor-pointer"
+                  >
+                    ⚡ Buka Masuk Jam Sekarang
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 block mb-1">
+                      Jam Mulai Masuk (Dibuka):
+                    </label>
+                    <input
+                      type="time"
+                      required
+                      value={quickCheckInStart}
+                      onChange={(e) => setQuickCheckInStart(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-white focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <span className="text-[9px] text-slate-400 block mt-0.5">Tombol masuk dibuka</span>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-emerald-900 block mb-1">
+                      Batas Tepat Waktu:
+                    </label>
+                    <input
+                      type="time"
+                      required
+                      value={quickCheckInDeadline}
+                      onChange={(e) => setQuickCheckInDeadline(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-xl border border-emerald-300 text-xs font-mono font-bold bg-white text-emerald-700 focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <span className="text-[9px] text-emerald-600 block mt-0.5">Batas keterlambatan</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Aturan Pulang */}
+              <div className="p-3.5 bg-indigo-50 rounded-2xl border border-indigo-200/80 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-indigo-950 uppercase tracking-wide">
+                    2. Jam Presensi Pulang
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const now = new Date();
+                      const cur = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+                      setQuickCheckOutStart(cur);
+                      const later = new Date(now.getTime() + 120 * 60000);
+                      const latStr = `${String(later.getHours()).padStart(2, '0')}:${String(later.getMinutes()).padStart(2, '0')}`;
+                      setQuickCheckOutEnd(latStr);
+                    }}
+                    className="text-[10px] font-bold text-indigo-700 bg-indigo-200/60 hover:bg-indigo-200 px-2 py-0.5 rounded cursor-pointer"
+                  >
+                    ⚡ Buka Pulang Jam Sekarang
+                  </button>
+                </div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 block mb-1">
+                      Jam Mulai Pulang (Dibuka):
+                    </label>
+                    <input
+                      type="time"
+                      required
+                      value={quickCheckOutStart}
+                      onChange={(e) => setQuickCheckOutStart(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-white text-indigo-700 focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <span className="text-[9px] text-slate-400 block mt-0.5">Tombol pulang dibuka</span>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-600 block mb-1">
+                      Batas Akhir Pulang:
+                    </label>
+                    <input
+                      type="time"
+                      required
+                      value={quickCheckOutEnd}
+                      onChange={(e) => setQuickCheckOutEnd(e.target.value)}
+                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-white focus:ring-2 focus:ring-indigo-500"
+                    />
+                    <span className="text-[9px] text-slate-400 block mt-0.5">Penutupan presensi pulang</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsQuickSessionEditOpen(false)}
+                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSavingQuickSession}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 flex items-center gap-1.5 transition-colors"
+                >
+                  <Save className="w-4 h-4" />
+                  <span>{isSavingQuickSession ? 'Menyimpan...' : 'Simpan Jam Sesi'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

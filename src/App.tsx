@@ -163,7 +163,7 @@ export default function App() {
         return <UserManager currentUser={currentUser} initialTab="departments" />;
 
       case 'jadwal':
-        return <ScheduleManager currentUser={currentUser} />;
+        return <UserManager currentUser={currentUser} initialTab="sessions" />;
 
       case 'izin':
         return <LeaveManager currentUser={currentUser} />;

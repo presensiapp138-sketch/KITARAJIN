@@ -31,6 +31,8 @@ import {
   getAttendanceForUser,
   getAllAttendanceRecords,
   groupAttendanceByDateAndUser,
+  getAllSchedules,
+  getAllDepartments,
 } from '../../services/storage';
 
 interface OverviewDashboardProps {
@@ -50,6 +52,12 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
     totalAdmins: users.filter((u) => u.role === 'admin').length,
     totalStaff: users.filter((u) => u.role === 'karyawan').length,
   };
+
+  const allSchedules = getAllSchedules();
+  const allDepartments = getAllDepartments();
+  const userDept = allDepartments.find((d) => d.id === currentUser.departmentId);
+  const userAssignedSessions = allSchedules.filter((s) => (currentUser.assignedSessionIds || []).includes(s.id));
+  const activeSessionsList = userAssignedSessions.length > 0 ? userAssignedSessions : allSchedules;
 
   const todayStr = new Date().toISOString().split('T')[0];
   const userRecords = getAttendanceForUser(currentUser.id);
@@ -403,27 +411,54 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
       )}
 
       {currentUser.role === 'karyawan' && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-3">
             <div className="flex items-center justify-between text-slate-400">
-              <span className="text-xs font-bold uppercase tracking-wider">Status Jadwal Saya</span>
+              <span className="text-xs font-bold uppercase tracking-wider">Jadwal Sesi Anda</span>
               <Clock className="w-5 h-5 text-emerald-600" />
             </div>
-            <div className="text-xl font-extrabold text-slate-900 mt-2">Senin – Jumat (07:00 - 15:30)</div>
-            <p className="text-xs text-slate-500 mt-1">
-              Presensi masuk dibuka mulai 06:30 WIB. Pastikan berada di dalam radius sekolah.
-            </p>
+            <div className="space-y-1.5 pt-1">
+              <div className="text-xs font-bold text-slate-700">Sesi yang Tersedia Untuk Anda:</div>
+              <div className="space-y-1.5">
+                {activeSessionsList.map((sch) => (
+                  <div
+                    key={sch.id}
+                    className="p-2.5 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between text-xs"
+                  >
+                    <span className="font-bold text-slate-900">{sch.sessionName || sch.name}</span>
+                    <span className="font-mono text-[11px] text-emerald-800 font-bold bg-white px-2 py-0.5 rounded-md border border-slate-200">
+                      Masuk: {sch.checkInStart}-{sch.checkInDeadline} &bull; Pulang: {sch.checkOutStart} WIB
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1 italic">
+                * Pilih sesi yang sesuai saat presensi mandiri.
+              </p>
+            </div>
           </div>
 
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
-            <div className="flex items-center justify-between text-slate-400">
-              <span className="text-xs font-bold uppercase tracking-wider">Pengajuan Izin & Tugas</span>
-              <FileText className="w-5 h-5 text-indigo-600" />
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between text-slate-400">
+                <span className="text-xs font-bold uppercase tracking-wider">Pengajuan Izin & Tugas</span>
+                <FileText className="w-5 h-5 text-indigo-600" />
+              </div>
+              <div className="text-xl font-extrabold text-slate-900 mt-2">Layanan Mandiri Staf</div>
+              <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                Ajukan permohonan izin/cuti atau serahkan dokumentasi laporan tugas dinas langsung melalui menu terkait. Data akan otomatis terhubung ke Kepala Sekolah &amp; Admin.
+              </p>
             </div>
-            <div className="text-xl font-extrabold text-slate-900 mt-2">Layanan Cepat Staf</div>
-            <p className="text-xs text-slate-500 mt-1">
-              Ajukan permohonan cuti sakit atau serahkan laporan dokumentasi tugas lewat menu terkait.
-            </p>
+            <div className="pt-4 border-t border-slate-100 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onNavigateTo('presensi')}
+                className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Camera className="w-4 h-4" />
+                <span>Buka Kamera &amp; Pilih Sesi Presensi</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -558,7 +593,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
 
               return (
                 <div
-                  key={`${pair.date}_${pair.userId}`}
+                  key={`${pair.date}_${pair.userId}_${pair.masukRecord?.sessionId || pair.pulangRecord?.sessionId || 'default'}`}
                   className="p-4 rounded-2xl border border-slate-200/80 bg-slate-50/50 hover:bg-slate-50 transition-colors space-y-3"
                 >
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200/60">
@@ -567,8 +602,13 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                         <Calendar className="w-4 h-4" />
                       </div>
                       <div>
-                        <div className="font-bold text-slate-900 text-xs">
-                          {pair.date} &bull; <span className="text-slate-700">{pair.userName}</span>
+                        <div className="font-bold text-slate-900 text-xs flex items-center gap-1.5 flex-wrap">
+                          <span>{pair.date}</span> &bull; <span className="text-slate-700">{pair.userName}</span>
+                          {(pair.masukRecord?.sessionName || pair.pulangRecord?.sessionName) && (
+                            <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-sky-100 text-sky-800 border border-sky-200">
+                              {pair.masukRecord?.sessionName || pair.pulangRecord?.sessionName}
+                            </span>
+                          )}
                         </div>
                         <div className="text-[10px] text-slate-400 font-mono">
                           NIP: {pair.nip} &bull; <span className="capitalize">{pair.role.replace('_', ' ')}</span>

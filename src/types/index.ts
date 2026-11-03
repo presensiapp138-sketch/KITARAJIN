@@ -21,6 +21,7 @@ export interface User {
   passwordHash: string; // Enkripsi SHA-256 + salt
   role: UserRole;
   departmentId?: string;
+  departmentName?: string; // Nama departemen yang diketik secara manual oleh Admin/Kepala Sekolah
   position: string; // Jabatan: e.g. Kepala Sekolah, Admin TU, Guru, Staff Dapur, Satpam
   scheduleId?: string;
   assignedSessionIds?: string[]; // Sesi presensi aktif yang ditugaskan ke karyawan ini (e.g. ['sesi-1', 'sesi-2'])

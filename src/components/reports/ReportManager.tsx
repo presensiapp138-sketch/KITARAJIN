@@ -643,10 +643,17 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                     const hasMasuk = Boolean(p.masukRecord);
                     const hasPulang = Boolean(p.pulangRecord);
 
+                    const sessionName = p.masukRecord?.sessionName || p.pulangRecord?.sessionName;
+
                     return (
-                      <tr key={`${p.date}_${p.userId}`} className="hover:bg-slate-50/80 transition-colors">
+                      <tr key={`${p.date}_${p.userId}_${p.masukRecord?.sessionId || p.pulangRecord?.sessionId || 'default'}`} className="hover:bg-slate-50/80 transition-colors">
                         <td className="py-3.5 px-4 whitespace-nowrap align-top">
                           <div className="font-bold text-slate-900">{p.date}</div>
+                          {sessionName && (
+                            <span className="inline-block mt-1 px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-sky-100 text-sky-800 border border-sky-200">
+                              {sessionName}
+                            </span>
+                          )}
                         </td>
 
                         <td className="py-3.5 px-4 align-top">

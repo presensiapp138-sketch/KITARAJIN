@@ -338,7 +338,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
 
             return (
               <div
-                key={`${pair.date}_${pair.userId}`}
+                key={`${pair.date}_${pair.userId}_${pair.masukRecord?.sessionId || pair.pulangRecord?.sessionId || 'default'}`}
                 className="bg-white rounded-3xl border border-slate-200/80 p-5 sm:p-6 shadow-xs hover:border-emerald-300 transition-all space-y-4"
               >
                 {/* Header Card: Tanggal & Nama Pegawai */}
@@ -348,13 +348,18 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                       <Calendar className="w-5 h-5" />
                     </div>
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold text-slate-900 text-sm">
                           {formatDateIndo(pair.date)}
                         </span>
                         {isToday && (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800">
                             Hari Ini
+                          </span>
+                        )}
+                        {(pair.masukRecord?.sessionName || pair.pulangRecord?.sessionName) && (
+                          <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-sky-100 text-sky-800 border border-sky-200">
+                            {pair.masukRecord?.sessionName || pair.pulangRecord?.sessionName}
                           </span>
                         )}
                       </div>
