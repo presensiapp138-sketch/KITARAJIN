@@ -52,6 +52,7 @@ import {
   groupAttendanceByDateAndUser,
 } from '../../services/storage';
 import { analyzeFaceFromCanvas, calculateFaceSimilarity } from '../../services/faceService';
+import { TimeInput24 } from '../common/TimeInput24';
 
 interface AttendanceSelfServiceProps {
   currentUser: User;
@@ -571,7 +572,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
       setResultMessage({
         type: 'success',
         title: `Presensi ${attendanceType.toUpperCase()} Berhasil!`,
-        description: `Status: ${status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}. Sesi: ${userSchedule?.sessionName || userSchedule?.name || 'Reguler'}. Jam: ${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB. Verifikasi Wajah (${Math.round(similarityScore * 100)}%) dan Validasi GPS (${gpsDistance}m) Sah.`,
+        description: `Status: ${status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}. Sesi: ${userSchedule?.sessionName || userSchedule?.name || 'Reguler'}. Jam: ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })} WIB. Verifikasi Wajah (${Math.round(similarityScore * 100)}%) dan Validasi GPS (${gpsDistance}m) Sah.`,
       });
       loadData();
     } else {
@@ -1371,9 +1372,10 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                             </button>
                             <div className="text-[11px] space-y-0.5">
                               <div className="font-bold font-mono">
-                                {new Date(pair.masukRecord.timestamp).toLocaleTimeString([], {
+                                {new Date(pair.masukRecord.timestamp).toLocaleTimeString('id-ID', {
                                   hour: '2-digit',
                                   minute: '2-digit',
+                                  hour12: false,
                                 })}{' '}
                                 WIB
                               </div>
@@ -1436,9 +1438,10 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                             </button>
                             <div className="text-[11px] space-y-0.5">
                               <div className="font-bold font-mono">
-                                {new Date(pair.pulangRecord.timestamp).toLocaleTimeString([], {
+                                {new Date(pair.pulangRecord.timestamp).toLocaleTimeString('id-ID', {
                                   hour: '2-digit',
                                   minute: '2-digit',
+                                  hour12: false,
                                 })}{' '}
                                 WIB
                               </div>
@@ -1531,9 +1534,14 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
               {/* Aturan Masuk */}
               <div className="p-3.5 bg-emerald-50 rounded-2xl border border-emerald-200/80 space-y-2.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-emerald-950 uppercase tracking-wide">
-                    1. Jam Presensi Masuk
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-bold text-emerald-950 uppercase tracking-wide">
+                      1. Jam Presensi Masuk
+                    </span>
+                    <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-1.5 py-0.5 rounded">
+                      24 Jam
+                    </span>
+                  </div>
                   <button
                     type="button"
                     onClick={() => {
@@ -1546,7 +1554,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                     }}
                     className="text-[10px] font-bold text-emerald-700 bg-emerald-200/60 hover:bg-emerald-200 px-2 py-0.5 rounded cursor-pointer"
                   >
-                    ⚡ Buka Masuk Jam Sekarang
+                    ⚡ Jam Sekarang
                   </button>
                 </div>
                 <div className="grid grid-cols-2 gap-2.5">
@@ -1554,27 +1562,22 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                     <label className="text-[10px] font-bold text-slate-600 block mb-1">
                       Jam Mulai Masuk (Dibuka):
                     </label>
-                    <input
-                      type="time"
-                      required
+                    <TimeInput24
                       value={quickCheckInStart}
-                      onChange={(e) => setQuickCheckInStart(e.target.value)}
-                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-white focus:ring-2 focus:ring-emerald-500"
+                      onChange={setQuickCheckInStart}
                     />
-                    <span className="text-[9px] text-slate-400 block mt-0.5">Tombol masuk dibuka</span>
+                    <span className="text-[9px] text-slate-400 block mt-0.5">Tombol masuk dibuka (00:00 - 23:59)</span>
                   </div>
                   <div>
                     <label className="text-[10px] font-bold text-emerald-900 block mb-1">
                       Batas Tepat Waktu:
                     </label>
-                    <input
-                      type="time"
-                      required
+                    <TimeInput24
                       value={quickCheckInDeadline}
-                      onChange={(e) => setQuickCheckInDeadline(e.target.value)}
-                      className="w-full px-2.5 py-1.5 rounded-xl border border-emerald-300 text-xs font-mono font-bold bg-white text-emerald-700 focus:ring-2 focus:ring-emerald-500"
+                      onChange={setQuickCheckInDeadline}
+                      className="border-emerald-300 text-emerald-800"
                     />
-                    <span className="text-[9px] text-emerald-600 block mt-0.5">Batas keterlambatan</span>
+                    <span className="text-[9px] text-emerald-600 block mt-0.5">Batas keterlambatan (00:00 - 23:59)</span>
                   </div>
                 </div>
               </div>
@@ -1582,9 +1585,14 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
               {/* Aturan Pulang */}
               <div className="p-3.5 bg-indigo-50 rounded-2xl border border-indigo-200/80 space-y-2.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-indigo-950 uppercase tracking-wide">
-                    2. Jam Presensi Pulang
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-bold text-indigo-950 uppercase tracking-wide">
+                      2. Jam Presensi Pulang
+                    </span>
+                    <span className="text-[10px] bg-indigo-100 text-indigo-800 font-bold px-1.5 py-0.5 rounded">
+                      24 Jam
+                    </span>
+                  </div>
                   <button
                     type="button"
                     onClick={() => {
@@ -1597,7 +1605,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                     }}
                     className="text-[10px] font-bold text-indigo-700 bg-indigo-200/60 hover:bg-indigo-200 px-2 py-0.5 rounded cursor-pointer"
                   >
-                    ⚡ Buka Pulang Jam Sekarang
+                    ⚡ Jam Sekarang
                   </button>
                 </div>
                 <div className="grid grid-cols-2 gap-2.5">
@@ -1605,25 +1613,20 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                     <label className="text-[10px] font-bold text-slate-600 block mb-1">
                       Jam Mulai Pulang (Dibuka):
                     </label>
-                    <input
-                      type="time"
-                      required
+                    <TimeInput24
                       value={quickCheckOutStart}
-                      onChange={(e) => setQuickCheckOutStart(e.target.value)}
-                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-white text-indigo-700 focus:ring-2 focus:ring-indigo-500"
+                      onChange={setQuickCheckOutStart}
+                      className="border-indigo-300 text-indigo-800"
                     />
-                    <span className="text-[9px] text-slate-400 block mt-0.5">Tombol pulang dibuka</span>
+                    <span className="text-[9px] text-slate-400 block mt-0.5">Tombol pulang dibuka (00:00 - 23:59)</span>
                   </div>
                   <div>
                     <label className="text-[10px] font-bold text-slate-600 block mb-1">
                       Batas Akhir Pulang:
                     </label>
-                    <input
-                      type="time"
-                      required
+                    <TimeInput24
                       value={quickCheckOutEnd}
-                      onChange={(e) => setQuickCheckOutEnd(e.target.value)}
-                      className="w-full px-2.5 py-1.5 rounded-xl border border-slate-300 text-xs font-mono font-bold bg-white focus:ring-2 focus:ring-indigo-500"
+                      onChange={setQuickCheckOutEnd}
                     />
                     <span className="text-[9px] text-slate-400 block mt-0.5">Penutupan presensi pulang</span>
                   </div>

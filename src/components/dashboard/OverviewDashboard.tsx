@@ -207,9 +207,10 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                   <div className="flex items-center gap-1.5 font-mono font-bold text-slate-900 text-sm">
                     <Clock className="w-4 h-4 text-emerald-600" />
                     <span>
-                      {new Date(todayMasuk.timestamp).toLocaleTimeString([], {
+                      {new Date(todayMasuk.timestamp).toLocaleTimeString('id-ID', {
                         hour: '2-digit',
                         minute: '2-digit',
+                        hour12: false,
                       })}{' '}
                       WIB
                     </span>
@@ -273,7 +274,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                       setPreviewPhoto({
                         url: todayPulang.photoRef,
                         title: `Absen Pulang - ${currentUser.name}`,
-                        subtitle: `Hari Ini &bull; ${new Date(todayPulang.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB`,
+                        subtitle: `Hari Ini &bull; ${new Date(todayPulang.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })} WIB`,
                       })
                     }
                     className="relative group shrink-0 cursor-pointer"
@@ -294,9 +295,10 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                   <div className="flex items-center gap-1.5 font-mono font-bold text-slate-900 text-sm">
                     <Clock className="w-4 h-4 text-indigo-600" />
                     <span>
-                      {new Date(todayPulang.timestamp).toLocaleTimeString([], {
+                      {new Date(todayPulang.timestamp).toLocaleTimeString('id-ID', {
                         hour: '2-digit',
                         minute: '2-digit',
+                        hour12: false,
                       })}{' '}
                       WIB
                     </span>
@@ -677,7 +679,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                                 setPreviewPhoto({
                                   url: pair.masukRecord!.photoRef,
                                   title: `Absen Masuk - ${pair.userName}`,
-                                  subtitle: `${pair.date} &bull; ${new Date(pair.masukRecord!.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB`,
+                                  subtitle: `${pair.date} &bull; ${new Date(pair.masukRecord!.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })} WIB`,
                                 })
                               }
                               className="shrink-0 group relative cursor-pointer"
@@ -692,9 +694,10 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                           )}
                           <div className="text-[11px] space-y-0.5">
                             <div className="font-bold font-mono">
-                              {new Date(pair.masukRecord.timestamp).toLocaleTimeString([], {
+                              {new Date(pair.masukRecord.timestamp).toLocaleTimeString('id-ID', {
                                 hour: '2-digit',
                                 minute: '2-digit',
+                                hour12: false,
                               })}{' '}
                               WIB
                             </div>
@@ -741,7 +744,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                                 setPreviewPhoto({
                                   url: pair.pulangRecord!.photoRef,
                                   title: `Absen Pulang - ${pair.userName}`,
-                                  subtitle: `${pair.date} &bull; ${new Date(pair.pulangRecord!.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB`,
+                                  subtitle: `${pair.date} &bull; ${new Date(pair.pulangRecord!.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })} WIB`,
                                 })
                               }
                               className="shrink-0 group relative cursor-pointer"
@@ -756,9 +759,10 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                           )}
                           <div className="text-[11px] space-y-0.5">
                             <div className="font-bold font-mono">
-                              {new Date(pair.pulangRecord.timestamp).toLocaleTimeString([], {
+                              {new Date(pair.pulangRecord.timestamp).toLocaleTimeString('id-ID', {
                                 hour: '2-digit',
                                 minute: '2-digit',
+                                hour12: false,
                               })}{' '}
                               WIB
                             </div>

@@ -50,6 +50,8 @@ import {
   assignUsersToSession,
   getAuditLogs,
 } from '../../services/storage';
+import { TimeInput24 } from '../common/TimeInput24';
+
 
 interface UserManagerProps {
   currentUser: User;
@@ -851,88 +853,85 @@ export const UserManager: React.FC<UserManagerProps> = ({
 
                     {/* Form Pengaturan Jam Presensi Masuk & Pulang */}
                     <div className="space-y-3 pt-2">
-                      {/* Aturan Masuk */}
+                      {/* Aturan Masuk (Format 24 Jam) */}
                       <div className="p-3 bg-emerald-50/80 rounded-xl border border-emerald-200/80 space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="text-[10px] font-extrabold uppercase text-emerald-900 tracking-wider flex items-center gap-1">
                             <Clock className="w-3 h-3 text-emerald-700" />
-                            <span>1. Jam Presensi Masuk</span>
+                            <span>1. Jam Masuk (Format 24 Jam)</span>
                           </span>
-                          <span className="text-[10px] text-emerald-700 font-semibold font-mono">
-                            {sessionTimeInputs[sched.id]?.checkInStart || sched.checkInStart} - {sessionTimeInputs[sched.id]?.checkInDeadline || sched.checkInDeadline}
+                          <span className="text-[10px] text-emerald-800 font-bold font-mono">
+                            {sessionTimeInputs[sched.id]?.checkInStart || sched.checkInStart} - {sessionTimeInputs[sched.id]?.checkInDeadline || sched.checkInDeadline} WIB
                           </span>
                         </div>
-                        <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                           <div>
-                            <label className="text-[10px] text-slate-600 font-semibold block mb-0.5">
+                            <label className="text-[10px] text-slate-600 font-semibold block mb-1">
                               Mulai Dibuka:
                             </label>
-                            <input
-                              type="time"
+                            <TimeInput24
                               value={sessionTimeInputs[sched.id]?.checkInStart ?? sched.checkInStart}
-                              onChange={(e) => updateSessionTimeField(sched.id, 'checkInStart', e.target.value)}
-                              className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white text-slate-800 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                              title="Waktu presensi masuk mulai bisa dilakukan oleh karyawan"
+                              onChange={(val) => updateSessionTimeField(sched.id, 'checkInStart', val)}
+                              variant="default"
+                              className="w-full"
                             />
-                            <span className="text-[9px] text-slate-400 block mt-0.5">Jam buka masuk</span>
+                            <span className="text-[9px] text-slate-400 block mt-0.5">Jam buka masuk (00-23 WIB)</span>
                           </div>
                           <div>
-                            <label className="text-[10px] text-emerald-800 font-semibold block mb-0.5">
+                            <label className="text-[10px] text-emerald-900 font-semibold block mb-1">
                               Batas Tepat Waktu:
                             </label>
-                            <input
-                              type="time"
+                            <TimeInput24
                               value={sessionTimeInputs[sched.id]?.checkInDeadline ?? sched.checkInDeadline}
-                              onChange={(e) => updateSessionTimeField(sched.id, 'checkInDeadline', e.target.value)}
-                              className="w-full px-2 py-1.5 rounded-lg border border-emerald-300 text-xs font-mono font-bold bg-white text-emerald-700 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                              title="Batas waktu sebelum tercatat Terlambat"
+                              onChange={(val) => updateSessionTimeField(sched.id, 'checkInDeadline', val)}
+                              variant="emerald"
+                              className="w-full"
                             />
-                            <span className="text-[9px] text-emerald-600 block mt-0.5">Batas keterlambatan</span>
+                            <span className="text-[9px] text-emerald-600 block mt-0.5">Batas keterlambatan (00-23 WIB)</span>
                           </div>
                         </div>
                       </div>
 
-                      {/* Aturan Pulang */}
+                      {/* Aturan Pulang (Format 24 Jam) */}
                       <div className="p-3 bg-indigo-50/80 rounded-xl border border-indigo-200/80 space-y-2">
                         <div className="flex items-center justify-between">
                           <span className="text-[10px] font-extrabold uppercase text-indigo-900 tracking-wider flex items-center gap-1">
                             <Clock className="w-3 h-3 text-indigo-700" />
-                            <span>2. Jam Presensi Pulang</span>
+                            <span>2. Jam Pulang (Format 24 Jam)</span>
                           </span>
-                          <span className="text-[10px] text-indigo-700 font-semibold font-mono">
-                            {sessionTimeInputs[sched.id]?.checkOutStart || sched.checkOutStart} - {sessionTimeInputs[sched.id]?.checkOutEnd || sched.checkOutEnd || '18:00'}
+                          <span className="text-[10px] text-indigo-800 font-bold font-mono">
+                            {sessionTimeInputs[sched.id]?.checkOutStart || sched.checkOutStart} - {sessionTimeInputs[sched.id]?.checkOutEnd || sched.checkOutEnd || '18:00'} WIB
                           </span>
                         </div>
-                        <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                           <div>
-                            <label className="text-[10px] text-slate-600 font-semibold block mb-0.5">
+                            <label className="text-[10px] text-slate-600 font-semibold block mb-1">
                               Mulai Pulang:
                             </label>
-                            <input
-                              type="time"
+                            <TimeInput24
                               value={sessionTimeInputs[sched.id]?.checkOutStart ?? sched.checkOutStart}
-                              onChange={(e) => updateSessionTimeField(sched.id, 'checkOutStart', e.target.value)}
-                              className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white text-indigo-700 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                              title="Waktu presensi kepulangan mulai bisa dilakukan oleh karyawan"
+                              onChange={(val) => updateSessionTimeField(sched.id, 'checkOutStart', val)}
+                              variant="indigo"
+                              className="w-full"
                             />
-                            <span className="text-[9px] text-slate-400 block mt-0.5">Jam buka pulang</span>
+                            <span className="text-[9px] text-slate-400 block mt-0.5">Jam buka pulang (00-23 WIB)</span>
                           </div>
                           <div>
-                            <label className="text-[10px] text-slate-600 font-semibold block mb-0.5">
-                              Batas Akhir:
+                            <label className="text-[10px] text-slate-600 font-semibold block mb-1">
+                              Batas Akhir Pulang:
                             </label>
-                            <input
-                              type="time"
+                            <TimeInput24
                               value={sessionTimeInputs[sched.id]?.checkOutEnd ?? (sched.checkOutEnd || '18:00')}
-                              onChange={(e) => updateSessionTimeField(sched.id, 'checkOutEnd', e.target.value)}
-                              className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                              title="Batas waktu presensi kepulangan berakhir"
+                              onChange={(val) => updateSessionTimeField(sched.id, 'checkOutEnd', val)}
+                              variant="default"
+                              className="w-full"
                             />
-                            <span className="text-[9px] text-slate-400 block mt-0.5">Batas akhir sesi</span>
+                            <span className="text-[9px] text-slate-400 block mt-0.5">Batas akhir sesi (00-23 WIB)</span>
                           </div>
                         </div>
                       </div>
                     </div>
+
 
                     {/* PILIH NAMA KARYAWAN YANG HARUS PRESENSI DI SESI INI */}
                     <div className="pt-3 border-t border-slate-100 space-y-2">
@@ -1480,32 +1479,32 @@ export const UserManager: React.FC<UserManagerProps> = ({
 
               {/* Aturan Masuk */}
               <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200/80 space-y-3">
-                <span className="text-xs font-extrabold text-emerald-900 uppercase tracking-wider block">
-                  Aturan Jam Presensi Masuk
-                </span>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-emerald-900 uppercase tracking-wider block">
+                    Aturan Jam Presensi Masuk (Format 24 Jam)
+                  </span>
+                  <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2 py-0.5 rounded-full">
+                    24 Jam (00-23 WIB)
+                  </span>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   <div>
                     <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
                       Jam Buka Masuk
                     </label>
-                    <input
-                      type="time"
-                      required
+                    <TimeInput24
                       value={sessionCheckInStart}
-                      onChange={(e) => setSessionCheckInStart(e.target.value)}
-                      className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white"
+                      onChange={setSessionCheckInStart}
                     />
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
                       Batas Tepat Waktu
                     </label>
-                    <input
-                      type="time"
-                      required
+                    <TimeInput24
                       value={sessionCheckInDeadline}
-                      onChange={(e) => setSessionCheckInDeadline(e.target.value)}
-                      className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white text-emerald-700"
+                      onChange={setSessionCheckInDeadline}
+                      className="border-emerald-300 text-emerald-800"
                     />
                   </div>
                   <div>
@@ -1526,32 +1525,32 @@ export const UserManager: React.FC<UserManagerProps> = ({
 
               {/* Aturan Pulang */}
               <div className="p-3.5 rounded-2xl bg-indigo-50/70 border border-indigo-200/80 space-y-3">
-                <span className="text-xs font-extrabold text-indigo-900 uppercase tracking-wider block">
-                  Aturan Jam Presensi Pulang
-                </span>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-indigo-900 uppercase tracking-wider block">
+                    Aturan Jam Presensi Pulang (Format 24 Jam)
+                  </span>
+                  <span className="text-[10px] bg-indigo-100 text-indigo-800 font-bold px-2 py-0.5 rounded-full">
+                    24 Jam (00-23 WIB)
+                  </span>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                   <div>
                     <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
                       Mulai Buka Pulang
                     </label>
-                    <input
-                      type="time"
-                      required
+                    <TimeInput24
                       value={sessionCheckOutStart}
-                      onChange={(e) => setSessionCheckOutStart(e.target.value)}
-                      className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white text-indigo-700"
+                      onChange={setSessionCheckOutStart}
+                      className="border-indigo-300 text-indigo-800"
                     />
                   </div>
                   <div>
                     <label className="block text-[10px] font-bold text-slate-600 uppercase mb-1">
                       Batas Akhir Pulang
                     </label>
-                    <input
-                      type="time"
-                      required
+                    <TimeInput24
                       value={sessionCheckOutEnd}
-                      onChange={(e) => setSessionCheckOutEnd(e.target.value)}
-                      className="w-full px-2 py-1.5 rounded-lg border border-slate-300 text-xs font-mono font-bold bg-white"
+                      onChange={setSessionCheckOutEnd}
                     />
                   </div>
                 </div>

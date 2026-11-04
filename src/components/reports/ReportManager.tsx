@@ -197,10 +197,10 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
         const d = departments.find((dept) => dept.id === u?.departmentId);
         const deptName = d?.name || '-';
         const masukTime = p.masukRecord
-          ? new Date(p.masukRecord.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          ? new Date(p.masukRecord.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })
           : '-';
         const pulangTime = p.pulangRecord
-          ? new Date(p.pulangRecord.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          ? new Date(p.pulangRecord.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })
           : '-';
         const dur = getWorkDuration(p.masukRecord?.timestamp, p.pulangRecord?.timestamp) || '-';
         const kelengkapan =
@@ -258,7 +258,7 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
         const u = users.find((user) => user.id === r.userId);
         const d = departments.find((dept) => dept.id === u?.departmentId);
         const deptName = d?.name || '-';
-        const timeStr = new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const timeStr = new Date(r.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false });
 
         return [
           `"${r.id}"`,
@@ -690,9 +690,10 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                                 <div className="flex items-center gap-1.5 font-bold text-slate-900 font-mono">
                                   <Clock className="w-3 h-3 text-emerald-600" />
                                   <span>
-                                    {new Date(p.masukRecord.timestamp).toLocaleTimeString([], {
+                                    {new Date(p.masukRecord.timestamp).toLocaleTimeString('id-ID', {
                                       hour: '2-digit',
                                       minute: '2-digit',
+                                      hour12: false,
                                     })}{' '}
                                     WIB
                                   </span>
@@ -743,9 +744,10 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                                 <div className="flex items-center gap-1.5 font-bold text-slate-900 font-mono">
                                   <Clock className="w-3 h-3 text-indigo-600" />
                                   <span>
-                                    {new Date(p.pulangRecord.timestamp).toLocaleTimeString([], {
+                                    {new Date(p.pulangRecord.timestamp).toLocaleTimeString('id-ID', {
                                       hour: '2-digit',
                                       minute: '2-digit',
+                                      hour12: false,
                                     })}{' '}
                                     WIB
                                   </span>
@@ -832,7 +834,7 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                   filteredRecords.map((r) => {
                     const u = users.find((user) => user.id === r.userId);
                     const d = departments.find((dept) => dept.id === u?.departmentId);
-                    const timeStr = new Date(r.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    const timeStr = new Date(r.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false });
 
                     return (
                       <tr key={r.id} className="hover:bg-slate-50/80 transition-colors">
