@@ -180,6 +180,7 @@ export interface AuditLog {
 export interface AppSettings {
   schoolName: string;
   schoolAddress: string;
+  schoolEmail?: string;
   appTitle: string;
   storageMode: 'local_secure_vault' | 'google_workspace_sync' | 'hybrid';
   googleSheetSpreadsheetId?: string;
@@ -193,3 +194,4 @@ export interface AppSettings {
   isGoogleConnected?: boolean;
   googleConnectedAt?: string;
 }
+

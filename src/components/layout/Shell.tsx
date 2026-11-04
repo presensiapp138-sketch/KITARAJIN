@@ -31,7 +31,11 @@ import {
   Phone,
   Save,
   CheckCircle,
+  Eye,
+  EyeOff,
+  Lock,
 } from 'lucide-react';
+
 import { User, UserRole } from '../../types';
 import { getNavItemsForRole, NavItem } from '../../config/navigation';
 import { updateUser } from '../../services/storage';
@@ -76,6 +80,8 @@ export const Shell: React.FC<ShellProps> = ({
   const [editName, setEditName] = useState(currentUser.name);
   const [editEmail, setEditEmail] = useState(currentUser.email || '');
   const [editPhone, setEditPhone] = useState(currentUser.phone || '');
+  const [editPassword, setEditPassword] = useState('');
+  const [showEditPassword, setShowEditPassword] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [profileMsg, setProfileMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -83,6 +89,7 @@ export const Shell: React.FC<ShellProps> = ({
     setEditName(currentUser.name);
     setEditEmail(currentUser.email || '');
     setEditPhone(currentUser.phone || '');
+    setEditPassword('');
   }, [currentUser]);
 
   const handleSaveProfile = async (e: React.FormEvent) => {
@@ -95,15 +102,24 @@ export const Shell: React.FC<ShellProps> = ({
       setProfileMsg({ type: 'error', text: 'Email tidak boleh kosong.' });
       return;
     }
+    if (editPassword.trim() && editPassword.trim().length < 6) {
+      setProfileMsg({ type: 'error', text: 'Password minimal 6 karakter.' });
+      return;
+    }
 
     setIsSaving(true);
     setProfileMsg(null);
 
-    const res = await updateUser(currentUser, currentUser.id, {
+    const updatePayload: any = {
       name: editName.trim(),
       email: editEmail.trim(),
       phone: editPhone.trim(),
-    });
+    };
+    if (editPassword.trim()) {
+      updatePayload.rawPassword = editPassword.trim();
+    }
+
+    const res = await updateUser(currentUser, currentUser.id, updatePayload);
 
     if (res.success) {
       const updated = {
@@ -113,13 +129,15 @@ export const Shell: React.FC<ShellProps> = ({
         phone: editPhone.trim(),
       };
       if (onUpdateCurrentUser) onUpdateCurrentUser(updated);
-      setProfileMsg({ type: 'success', text: 'Profil berhasil diperbarui!' });
-      setTimeout(() => setProfileModalOpen(false), 800);
+      setProfileMsg({ type: 'success', text: editPassword.trim() ? 'Profil dan Password login berhasil diperbarui!' : 'Profil berhasil diperbarui!' });
+      setEditPassword('');
+      setTimeout(() => setProfileModalOpen(false), 900);
     } else {
       setProfileMsg({ type: 'error', text: res.message });
     }
     setIsSaving(false);
   };
+
 
   const navItems = getNavItemsForRole(currentUser.role);
 
@@ -315,8 +333,9 @@ export const Shell: React.FC<ShellProps> = ({
         </aside>
 
         {/* Main Content Area */}
-        <main className="flex-1 min-w-0 pb-20 lg:pb-6">{children}</main>
+        <main className="flex-1 min-w-0 pb-6">{children}</main>
       </div>
+
 
       {/* Mobile Drawer */}
       {mobileDrawerOpen && (
@@ -408,53 +427,7 @@ export const Shell: React.FC<ShellProps> = ({
         </div>
       )}
 
-      {/* Mobile Fixed Bottom Navigation Bar */}
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200 px-3 py-1.5 flex items-center justify-around shadow-lg">
-        <button
-          type="button"
-          onClick={() => onSelectMenu('dashboard')}
-          className={`flex flex-col items-center py-1 px-2 text-[10px] font-medium transition-colors ${
-            activeMenuId === 'dashboard' ? 'text-emerald-600 font-bold' : 'text-slate-500'
-          }`}
-        >
-          <LayoutDashboard className="w-5 h-5 mb-0.5" />
-          <span>Dashboard</span>
-        </button>
-
-        {/* Big Prominent Attendance Button */}
-        <button
-          type="button"
-          onClick={() => onSelectMenu('presensi')}
-          className="relative -top-3 flex flex-col items-center group"
-        >
-          <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 group-active:scale-95 transition-transform">
-            <Camera className="w-6 h-6" />
-          </div>
-          <span className="text-[10px] font-bold text-emerald-700 mt-0.5">Presensi</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => onSelectMenu('riwayat')}
-          className={`flex flex-col items-center py-1 px-2 text-[10px] font-medium transition-colors ${
-            activeMenuId === 'riwayat' ? 'text-emerald-600 font-bold' : 'text-slate-500'
-          }`}
-        >
-          <CalendarCheck className="w-5 h-5 mb-0.5" />
-          <span>Riwayat</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setMobileDrawerOpen(true)}
-          className="flex flex-col items-center py-1 px-2 text-[10px] font-medium text-slate-500 hover:text-slate-800"
-        >
-          <Menu className="w-5 h-5 mb-0.5" />
-          <span>Menu Lain</span>
-        </button>
-      </nav>
-
-      {/* Modal Cepat Ubah Profil (Nama & Email) */}
+      {/* Modal Cepat Ubah Profil (Nama & Email & Password) */}
       {profileModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4 animate-in fade-in zoom-in-95 duration-150">
@@ -467,7 +440,7 @@ export const Shell: React.FC<ShellProps> = ({
                   <h3 className="font-extrabold text-slate-900 text-sm">
                     Ubah Profil {meta.badge}
                   </h3>
-                  <p className="text-[11px] text-slate-500">Perbarui Nama Lengkap dan Alamat Email Anda</p>
+                  <p className="text-[11px] text-slate-500">Perbarui Nama Lengkap, Email, dan Password Login</p>
                 </div>
               </div>
               <button
@@ -542,6 +515,35 @@ export const Shell: React.FC<ShellProps> = ({
                   />
                 </div>
               </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Ganti Password Login (Opsional)
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                  <input
+                    type={showEditPassword ? 'text' : 'password'}
+                    value={editPassword}
+                    onChange={(e) => setEditPassword(e.target.value)}
+                    placeholder="Minimal 6 karakter jika ingin ubah..."
+                    className="w-full pl-9 pr-10 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowEditPassword(!showEditPassword)}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 p-0.5"
+                    tabIndex={-1}
+                    title={showEditPassword ? 'Sembunyikan password' : 'Lihat password'}
+                  >
+                    {showEditPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <span className="text-[10px] text-slate-400 mt-1 block">
+                  Kosongkan bila tidak ingin mengganti password login saat ini.
+                </span>
+              </div>
+
 
               <div className="flex items-center justify-between pt-2">
                 {currentUser.role === 'kepala_sekolah' ? (

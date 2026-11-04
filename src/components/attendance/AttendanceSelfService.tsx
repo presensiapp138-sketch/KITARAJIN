@@ -180,14 +180,26 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     }
   };
 
-  // Filter sesi yang berlaku khusus untuk karyawan ini
+  // Filter sesi yang berlaku khusus untuk karyawan ini (Hapus jadwal lama seperti kebersihan, sarpras, satpam, reguler guru)
   const userAllowedSchedules = useMemo(() => {
+    const validSchedules = allSchedules.filter((s) => {
+      const combined = `${s.name || ''} ${s.sessionName || ''}`.toLowerCase();
+      return (
+        !combined.includes('kebersihan') &&
+        !combined.includes('sarpras') &&
+        !combined.includes('satpam') &&
+        !combined.includes('reguler guru') &&
+        !combined.includes('keamanan')
+      );
+    });
+
     if (currentUser.assignedSessionIds && currentUser.assignedSessionIds.length > 0) {
-      const filtered = allSchedules.filter((s) => currentUser.assignedSessionIds?.includes(s.id));
+      const filtered = validSchedules.filter((s) => currentUser.assignedSessionIds?.includes(s.id));
       if (filtered.length > 0) return filtered;
     }
-    return allSchedules;
+    return validSchedules;
   }, [allSchedules, currentUser.assignedSessionIds]);
+
 
   // Evaluasi kepatuhan jam presensi terhadap jadwal kerja / sesi aktif
   const getScheduleStatus = () => {
@@ -698,96 +710,19 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                 </div>
               </div>
 
-              {/* INDIKATOR WAJIB MEMILIH SESI */}
-              {!hasUserExplicitlySelectedSession && userAllowedSchedules.length > 1 ? (
-                <div className="p-3 bg-amber-50 border-2 border-amber-300 rounded-2xl flex items-center gap-2.5 text-xs text-amber-900 font-bold animate-pulse">
-                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>Wajib Pilih Sesi: Silakan klik salah satu sesi yang akan Anda ikuti hari ini (Sesi 1, Sesi 2, atau Sesi 3) di bawah ini sebelum mengambil foto.</span>
-                </div>
-              ) : (
-                <div className="p-2.5 bg-emerald-50/80 border border-emerald-200 rounded-2xl flex items-center justify-between text-xs text-emerald-950 font-bold">
-                  <span className="flex items-center gap-1.5">
-                    <Check className="w-4 h-4 text-emerald-600" />
-                    <span>Sesi Terpilih: <strong>{userSchedule?.sessionName || userSchedule?.name}</strong></span>
-                  </span>
-                  <span className="text-[10px] font-mono text-emerald-700 bg-white px-2 py-0.5 rounded-lg border border-emerald-200">
-                    Masuk: {userSchedule?.checkInStart}-{userSchedule?.checkInDeadline} | Pulang: {userSchedule?.checkOutStart} WIB
-                  </span>
-                </div>
-              )}
-
-              {/* RINGKASAN STATUS PRESENSI HARI INI PER SESI (SESI 1, SESI 2, SESI 3) */}
-              <div className="space-y-2">
-                <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500 block">
-                  Status Presensi Hari Ini Per Sesi Anda
-                </span>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  {userAllowedSchedules.map((sch) => {
-                    const todayIso = currentNow.toISOString().split('T')[0];
-                    const recMasuk = userRecords.find(
-                      (r) => r.date === todayIso && r.type === 'masuk' && r.sessionId === sch.id
-                    );
-                    const recPulang = userRecords.find(
-                      (r) => r.date === todayIso && r.type === 'pulang' && r.sessionId === sch.id
-                    );
-                    const isSelected = userSchedule?.id === sch.id;
-
-                    return (
-                      <div
-                        key={sch.id}
-                        onClick={() => handleSelectSession(sch)}
-                        className={`p-3 rounded-2xl border text-xs cursor-pointer transition-all ${
-                          isSelected
-                            ? 'bg-emerald-50/90 border-emerald-500 ring-2 ring-emerald-500/20'
-                            : 'bg-slate-50/70 border-slate-200 hover:bg-slate-100/80'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between pb-1 mb-1.5 border-b border-slate-200/60">
-                          <span className={`font-extrabold ${isSelected ? 'text-emerald-900' : 'text-slate-800'}`}>
-                            {sch.sessionName || sch.name}
-                          </span>
-                          {isSelected && (
-                            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                          )}
-                        </div>
-
-                        {/* Status Masuk */}
-                        <div className="space-y-1 text-[11px]">
-                          <div className="flex items-center justify-between text-slate-600">
-                            <span>Masuk:</span>
-                            {recMasuk ? (
-                              <span className="font-bold font-mono text-emerald-800">
-                                {new Date(recMasuk.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </span>
-                            ) : (
-                              <span className="text-slate-400 italic">Belum</span>
-                            )}
-                          </div>
-
-                          {/* Status Pulang */}
-                          <div className="flex items-center justify-between text-slate-600">
-                            <span>Pulang:</span>
-                            {recPulang ? (
-                              <span className="font-bold font-mono text-indigo-800">
-                                {new Date(recPulang.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                              </span>
-                            ) : (
-                              <span className="text-slate-400 italic">Belum</span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* TOMBOL PEMILIH SESI 1, SESI 2, SESI 3 & ATUR JAM SESI */}
-              <div className="p-3.5 bg-slate-50/90 rounded-2xl border border-slate-200/90 space-y-2">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700">
+              {/* PILIH SESI ANDA (LANGSUNG TAMPIL KETIKA KLIK PRESENSI MANDIRI) */}
+              <div className="p-4 bg-slate-50/90 rounded-2xl border border-slate-200 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200">
+                  <div className="flex items-center gap-2">
                     <Clock className="w-4 h-4 text-emerald-600" />
-                    <span>Pilih Sesi yang Akan Dipresensikan:</span>
+                    <div>
+                      <h3 className="font-extrabold text-xs sm:text-sm text-slate-900">
+                        Pilih Sesi Anda
+                      </h3>
+                      <p className="text-[10px] text-slate-500">
+                        Klik sesi yang Anda ikuti hari ini (Sesi 1, Sesi 2, atau Sesi 3)
+                      </p>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2">
                     {(currentUser.role === 'kepala_sekolah' || currentUser.role === 'admin') && (
@@ -801,40 +736,85 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                         <span>Atur Jam {userSchedule?.sessionName || 'Sesi'}</span>
                       </button>
                     )}
-                    <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/70 px-2 py-0.5 rounded-full border border-emerald-200">
-                      Aturan Diatur Admin/KS
+                    <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/80 px-2 py-0.5 rounded-full border border-emerald-200">
+                      Sinkron Admin &amp; KS
                     </span>
                   </div>
                 </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                   {userAllowedSchedules.map((sch) => {
+                    const todayIso = currentNow.toISOString().split('T')[0];
+                    const recMasuk = userRecords.find(
+                      (r) => r.date === todayIso && r.type === 'masuk' && r.sessionId === sch.id
+                    );
+                    const recPulang = userRecords.find(
+                      (r) => r.date === todayIso && r.type === 'pulang' && r.sessionId === sch.id
+                    );
                     const isSelected = userSchedule?.id === sch.id;
+
                     return (
                       <button
                         key={sch.id}
                         type="button"
                         onClick={() => handleSelectSession(sch)}
-                        className={`p-2.5 rounded-xl text-left transition-all border cursor-pointer ${
+                        className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
                           isSelected
-                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
-                            : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-md ring-2 ring-emerald-400/40'
+                            : 'bg-white border-slate-200/90 text-slate-800 hover:bg-slate-100/90 shadow-2xs'
                         }`}
                       >
-                        <div className="font-extrabold text-xs flex items-center justify-between">
-                          <span>{sch.sessionName || sch.name}</span>
-                          {isSelected && <span>✓ Aktif</span>}
+                        <div>
+                          <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-white/20">
+                            <span className="font-extrabold text-xs">
+                              {sch.sessionName || sch.name}
+                            </span>
+                            {isSelected ? (
+                              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-white text-emerald-800">
+                                ✓ Aktif
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 font-medium">
+                                Pilih
+                              </span>
+                            )}
+                          </div>
+
+                          <div className={`space-y-0.5 text-[10px] font-mono ${isSelected ? 'text-emerald-100' : 'text-slate-500'}`}>
+                            <div>Masuk: {sch.checkInStart} - {sch.checkInDeadline}</div>
+                            <div>Pulang: {sch.checkOutStart} - {sch.checkOutEnd || '18:00'}</div>
+                          </div>
                         </div>
-                        <div className={`text-[10px] font-mono mt-1 ${isSelected ? 'text-emerald-100' : 'text-slate-600'}`}>
-                          Masuk: {sch.checkInStart} - {sch.checkInDeadline}
-                        </div>
-                        <div className={`text-[10px] font-mono ${isSelected ? 'text-emerald-100' : 'text-slate-600'}`}>
-                          Pulang: {sch.checkOutStart} - {sch.checkOutEnd || '18:00'}
+
+                        {/* Status Presensi Hari Ini */}
+                        <div className={`mt-2 pt-1.5 border-t text-[10px] space-y-0.5 ${isSelected ? 'border-white/20 text-white' : 'border-slate-100 text-slate-600'}`}>
+                          <div className="flex items-center justify-between">
+                            <span>Masuk:</span>
+                            {recMasuk ? (
+                              <span className={`font-bold font-mono ${isSelected ? 'text-emerald-100' : 'text-emerald-700'}`}>
+                                {new Date(recMasuk.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ✓
+                              </span>
+                            ) : (
+                              <span className={isSelected ? 'text-emerald-200/70 italic' : 'text-slate-400 italic'}>Belum</span>
+                            )}
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Pulang:</span>
+                            {recPulang ? (
+                              <span className={`font-bold font-mono ${isSelected ? 'text-indigo-100' : 'text-indigo-700'}`}>
+                                {new Date(recPulang.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ✓
+                              </span>
+                            ) : (
+                              <span className={isSelected ? 'text-emerald-200/70 italic' : 'text-slate-400 italic'}>Belum</span>
+                            )}
+                          </div>
                         </div>
                       </button>
                     );
                   })}
                 </div>
               </div>
+
 
               {/* Selector Masuk vs Pulang & Switch Kamera */}
               <div className="flex items-center justify-between">

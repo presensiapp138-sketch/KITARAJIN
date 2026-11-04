@@ -30,7 +30,10 @@ import {
   Sparkles,
   Save,
   Check,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
+
 import { User, UserRole, Department, Schedule } from '../../types';
 import {
   getAllUsers,
@@ -87,6 +90,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
   const [formName, setFormName] = useState('');
   const [formUsername, setFormUsername] = useState('');
   const [formPassword, setFormPassword] = useState('');
+  const [showFormPassword, setShowFormPassword] = useState(false);
   const [formRole, setFormRole] = useState<'admin' | 'karyawan'>('karyawan');
   const [formDepartmentId, setFormDepartmentId] = useState('');
   const [formDepartmentName, setFormDepartmentName] = useState('');
@@ -189,6 +193,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
     setFormPosition('');
     setFormEmail('');
     setFormPhone('');
+    setShowFormPassword(false);
     setFeedback(null);
     setIsUserModalOpen(true);
   };
@@ -200,6 +205,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
     setFormName(user.name);
     setFormUsername(user.username);
     setFormPassword('');
+    setShowFormPassword(false);
     setFormRole(user.role === 'admin' ? 'admin' : 'karyawan');
     setFormDepartmentId(deptVal);
     setFormDepartmentName(deptVal);
@@ -1262,16 +1268,28 @@ export const UserManager: React.FC<UserManagerProps> = ({
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
                     {editingUser ? 'Reset Password (Opsional)' : 'Password Awal'} {!editingUser && <span className="text-rose-500">*</span>}
                   </label>
-                  <input
-                    type="password"
-                    required={!editingUser}
-                    value={formPassword}
-                    onChange={(e) => setFormPassword(e.target.value)}
-                    placeholder={editingUser ? 'Ketik jika ingin ubah...' : 'Minimal 6 karakter'}
-                    className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      type={showFormPassword ? 'text' : 'password'}
+                      required={!editingUser}
+                      value={formPassword}
+                      onChange={(e) => setFormPassword(e.target.value)}
+                      placeholder={editingUser ? 'Ketik jika ingin ubah...' : 'Minimal 6 karakter'}
+                      className="w-full pl-3 pr-10 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowFormPassword(!showFormPassword)}
+                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                      tabIndex={-1}
+                      title={showFormPassword ? 'Sembunyikan password' : 'Lihat password'}
+                    >
+                      {showFormPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
                 </div>
               </div>
+
 
               {/* Jabatan & Departemen Manual */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

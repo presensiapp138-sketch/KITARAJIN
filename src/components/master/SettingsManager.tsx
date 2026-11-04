@@ -32,7 +32,11 @@ import {
   Radio,
   Smartphone,
   Laptop,
+  Eye,
+  EyeOff,
+  Key,
 } from 'lucide-react';
+
 import { AppSettings, User } from '../../types';
 import {
   getAppSettings,
@@ -99,6 +103,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
   // Form State Identitas Sekolah
   const [schoolName, setSchoolName] = useState(settings.schoolName);
+  const [schoolEmail, setSchoolEmail] = useState(settings.schoolEmail || 'kepsek@sekolah.sch.id');
   const [schoolAddress, setSchoolAddress] = useState(settings.schoolAddress);
   const [appTitle, setAppTitle] = useState(settings.appTitle);
   const [minFaceMatchThreshold, setMinFaceMatchThreshold] = useState(
@@ -109,6 +114,13 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [sheetIdInput, setSheetIdInput] = useState(settings.googleSheetSpreadsheetId || '');
   const [driveIdInput, setDriveIdInput] = useState(settings.googleDriveFolderId || '');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Ubah Password Kepala Sekolah State
+  const [ksPassword, setKsPassword] = useState('');
+  const [ksConfirmPassword, setKsConfirmPassword] = useState('');
+  const [showKsPassword, setShowKsPassword] = useState(false);
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+
 
   // Google OAuth State
   const [googleUserEmail, setGoogleUserEmail] = useState<string | null>(null);
@@ -144,6 +156,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     const data = getAppSettings();
     setSettings(data);
     setSchoolName(data.schoolName);
+    setSchoolEmail(data.schoolEmail || 'kepsek@sekolah.sch.id');
     setSchoolAddress(data.schoolAddress);
     setAppTitle(data.appTitle);
     setMinFaceMatchThreshold(Math.round((data.minFaceMatchThreshold || 0.75) * 100));
@@ -549,29 +562,75 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     setIsUpdatingProfile(false);
   };
 
-  // Simpan Pengaturan Sekolah
+  // Simpan Pengaturan Sekolah (Nama Sekolah, Email, Judul Aplikasi, Alamat Lengkap)
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     setFeedback(null);
 
     const res = updateAppSettings(currentUser, {
-      schoolName,
-      schoolAddress,
-      appTitle,
+      schoolName: schoolName.trim(),
+      schoolAddress: schoolAddress.trim(),
+      schoolEmail: schoolEmail.trim(),
+      appTitle: appTitle.trim(),
       minFaceMatchThreshold: minFaceMatchThreshold / 100,
       requireStrictGps,
       requireStrictFaceVerification: requireStrictFace,
     });
 
     if (res.success) {
-      setFeedback({ type: 'success', message: 'Pengaturan identitas sekolah dan presensi berhasil disimpan.' });
+      setFeedback({
+        type: 'success',
+        message: 'Pengaturan identitas sekolah (Nama Sekolah, Email, Judul Aplikasi, Alamat Lengkap) berhasil disimpan dan disinkronkan ke database!',
+      });
       setSettings(getAppSettings());
     } else {
       setFeedback({ type: 'error', message: res.message });
     }
     setIsSubmitting(false);
   };
+
+  // Ubah Password Login Kepala Sekolah
+  const handleUpdateKsPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ksPassword.trim()) {
+      setFeedback({ type: 'error', message: 'Password baru tidak boleh kosong.' });
+      return;
+    }
+    if (ksPassword.trim().length < 6) {
+      setFeedback({ type: 'error', message: 'Password baru minimal harus 6 karakter.' });
+      return;
+    }
+    if (ksPassword !== ksConfirmPassword) {
+      setFeedback({ type: 'error', message: 'Konfirmasi password tidak cocok dengan password baru.' });
+      return;
+    }
+
+    setIsUpdatingPassword(true);
+    setFeedback(null);
+
+    try {
+      const res = await updateUser(currentUser, currentUser.id, {
+        rawPassword: ksPassword.trim(),
+      });
+
+      if (res.success) {
+        setFeedback({
+          type: 'success',
+          message: 'Password login Kepala Sekolah BERHASIL DIPERBARUI dan disinkronkan! Silakan gunakan password baru ini untuk login berikutnya.',
+        });
+        setKsPassword('');
+        setKsConfirmPassword('');
+      } else {
+        setFeedback({ type: 'error', message: res.message });
+      }
+    } catch (err: any) {
+      setFeedback({ type: 'error', message: `Gagal memperbarui password: ${err?.message || 'Error'}` });
+    } finally {
+      setIsUpdatingPassword(false);
+    }
+  };
+
 
   return (
     <div className="space-y-6">
@@ -757,8 +816,95 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       </div>
 
       {/* ============================================================== */}
+      {/* KARTU: UBAH PASSWORD LOGIN KEPALA SEKOLAH                      */}
+      {/* ============================================================== */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
+        <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
+            <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center font-bold">
+              <Key className="w-4 h-4" />
+            </div>
+            <div>
+              <span>Ubah Password Login Kepala Sekolah</span>
+              <p className="text-xs font-normal text-slate-500">
+                Ganti kata sandi login akun Kepala Sekolah (Super Admin) untuk keamanan akses.
+              </p>
+            </div>
+          </div>
+          <span className="px-2.5 py-1 text-xs font-bold rounded-full bg-amber-100 text-amber-800">
+            Keamanan Akun
+          </span>
+        </div>
+
+        <form onSubmit={handleUpdateKsPassword} className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                Password Baru <span className="text-rose-500">*</span>
+              </label>
+              <div className="relative">
+                <Lock className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                <input
+                  type={showKsPassword ? 'text' : 'password'}
+                  required
+                  value={ksPassword}
+                  onChange={(e) => setKsPassword(e.target.value)}
+                  placeholder="Minimal 6 karakter"
+                  className="w-full pl-9 pr-10 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKsPassword(!showKsPassword)}
+                  className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                  tabIndex={-1}
+                  title={showKsPassword ? 'Sembunyikan password' : 'Lihat password'}
+                >
+                  {showKsPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <span className="text-[10px] text-slate-400 mt-1 block">
+                Kata sandi baru untuk login akun Kepala Sekolah.
+              </span>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                Konfirmasi Password Baru <span className="text-rose-500">*</span>
+              </label>
+              <div className="relative">
+                <Lock className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                <input
+                  type={showKsPassword ? 'text' : 'password'}
+                  required
+                  value={ksConfirmPassword}
+                  onChange={(e) => setKsConfirmPassword(e.target.value)}
+                  placeholder="Ketik ulang password baru"
+                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                />
+              </div>
+              <span className="text-[10px] text-slate-400 mt-1 block">
+                Pastikan sama persis dengan password baru di sebelah kiri.
+              </span>
+            </div>
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <button
+              type="submit"
+              disabled={isUpdatingPassword || !ksPassword.trim()}
+              className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-md transition-colors flex items-center gap-2 disabled:opacity-50 cursor-pointer"
+            >
+              <Key className="w-3.5 h-3.5" />
+              <span>{isUpdatingPassword ? 'Memperbarui Password...' : 'Ubah Password Kepala Sekolah'}</span>
+            </button>
+          </div>
+        </form>
+      </div>
+
+      {/* ============================================================== */}
       {/* KARTU SINKRONISASI REAL-TIME MULTI-DEVICE (FIRESTORE CLOUD)     */}
       {/* ============================================================== */}
+
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
           <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
@@ -1166,32 +1312,48 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             <span>Identitas Sekolah</span>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                Nama Sekolah / Instansi
+                Nama Sekolah / Instansi <span className="text-rose-500">*</span>
               </label>
               <input
                 type="text"
                 required
                 value={schoolName}
                 onChange={(e) => setSchoolName(e.target.value)}
+                placeholder="Contoh: SMA Negeri 1 Prestasi"
                 className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
               />
             </div>
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                Judul Aplikasi
+                Judul Aplikasi <span className="text-rose-500">*</span>
               </label>
               <input
                 type="text"
                 required
                 value={appTitle}
                 onChange={(e) => setAppTitle(e.target.value)}
+                placeholder="KITARAJIN Presensi & Penugasan"
+                className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                Alamat Email Sekolah / Instansi <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="email"
+                required
+                value={schoolEmail}
+                onChange={(e) => setSchoolEmail(e.target.value)}
+                placeholder="info@sekolah.sch.id"
                 className="w-full px-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
               />
             </div>
           </div>
+
 
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase mb-1">

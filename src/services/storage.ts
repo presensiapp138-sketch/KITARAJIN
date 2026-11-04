@@ -896,8 +896,21 @@ export function getAllSchedules(): Schedule[] {
   const data = localStorage.getItem(STORAGE_KEYS.SCHEDULES);
   let list: Schedule[] = data ? JSON.parse(data) : [];
 
+  // Hapus jadwal lama non-sesi (misal "Tim Kebersihan & Sarpras", "Jadwal Reguler Guru & Staf TU", "Shift Pagi Keamanan & Satpam")
+  const originalLength = list.length;
+  list = list.filter((s) => {
+    const combined = `${s.name || ''} ${s.sessionName || ''}`.toLowerCase();
+    const isLegacy =
+      combined.includes('kebersihan') ||
+      combined.includes('sarpras') ||
+      combined.includes('satpam') ||
+      combined.includes('reguler guru') ||
+      combined.includes('keamanan');
+    return !isLegacy;
+  });
+  let hasChanges = list.length !== originalLength;
+
   // Pastikan Sesi 1, Sesi 2, Sesi 3 selalu tersedia untuk fleksibilitas sesi per karyawan
-  let hasChanges = false;
   for (const initSched of INITIAL_SCHEDULES) {
     if (!list.some((s) => s.id === initSched.id || s.sessionName === initSched.sessionName)) {
       list.push(initSched);
@@ -911,6 +924,7 @@ export function getAllSchedules(): Schedule[] {
 
   return list;
 }
+
 
 export function updateUserSessions(
   actor: User,
@@ -1254,6 +1268,7 @@ export function getAppSettings(): AppSettings {
     ? JSON.parse(data)
     : {
         schoolName: 'SMA Negeri 1 Prestasi',
+        schoolEmail: 'kepsek@sekolah.sch.id',
         schoolAddress: 'Jl. Pendidikan No. 45, Kompleks Akademika',
         appTitle: 'KITARAJIN Presensi & Penugasan',
         storageMode: 'local_secure_vault',
@@ -1278,12 +1293,17 @@ export function updateAppSettings(actor: User, updates: Partial<AppSettings>): {
   };
 
   localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(merged));
-  syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', merged);
+  try {
+    syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', merged);
+  } catch (err) {
+    console.warn('Sync settings ke cloud warning:', err);
+  }
 
   logAuditAction(actor, 'UPDATE_SETTINGS', 'Settings', 'global', 'Memperbarui pengaturan sistem dan sekolah.');
 
-  return { success: true, message: 'Pengaturan berhasil diperbarui.' };
+  return { success: true, message: 'Pengaturan sekolah berhasil disimpan dan disinkronkan.' };
 }
+
 
 
 /**
