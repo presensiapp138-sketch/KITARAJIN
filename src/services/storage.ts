@@ -902,14 +902,18 @@ export function updateUserSessions(
   userId: string,
   sessionIds: string[]
 ): { success: boolean; message: string } {
-  if (actor.role === 'karyawan') {
-    return { success: false, message: 'Hanya Kepala Sekolah dan Admin yang dapat mengatur sesi presensi karyawan.' };
+  if (actor.role === 'karyawan' && actor.id !== userId) {
+    return { success: false, message: 'Hanya Kepala Sekolah dan Admin yang dapat mengatur sesi presensi.' };
   }
 
   const users = getAllUsers();
   const idx = users.findIndex((u) => u.id === userId);
   if (idx === -1) {
-    return { success: false, message: 'Karyawan tidak ditemukan.' };
+    return { success: false, message: 'Pegawai tidak ditemukan.' };
+  }
+
+  if (actor.role === 'admin' && users[idx].role === 'kepala_sekolah') {
+    return { success: false, message: 'Admin tidak dapat mengubah sesi presensi Kepala Sekolah.' };
   }
 
   users[idx].assignedSessionIds = sessionIds;
@@ -917,12 +921,16 @@ export function updateUserSessions(
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   syncRecordToCloud(SYNC_COLLECTIONS.USERS, userId, users[idx]);
 
+  if (actor.id === userId) {
+    saveSession(users[idx]);
+  }
+
   logAuditAction(
     actor,
     'UPDATE_USER_SESSIONS',
     'Users',
     userId,
-    `Mengatur sesi presensi karyawan ${users[idx].name}: [${sessionIds.join(', ')}]`
+    `Mengatur sesi presensi ${users[idx].name} (${users[idx].role}): [${sessionIds.join(', ')}]`
   );
 
   return { success: true, message: `Sesi presensi untuk ${users[idx].name} berhasil disimpan.` };
@@ -934,14 +942,18 @@ export function toggleUserSession(
   sessionId: string,
   enable: boolean
 ): { success: boolean; message: string } {
-  if (actor.role === 'karyawan') {
+  if (actor.role === 'karyawan' && actor.id !== userId) {
     return { success: false, message: 'Hanya Kepala Sekolah dan Admin yang berwenang mengatur sesi.' };
   }
 
   const users = getAllUsers();
   const idx = users.findIndex((u) => u.id === userId);
   if (idx === -1) {
-    return { success: false, message: 'Karyawan tidak ditemukan.' };
+    return { success: false, message: 'Pegawai tidak ditemukan.' };
+  }
+
+  if (actor.role === 'admin' && users[idx].role === 'kepala_sekolah') {
+    return { success: false, message: 'Admin tidak dapat mengubah sesi presensi Kepala Sekolah.' };
   }
 
   const curSessions = new Set(users[idx].assignedSessionIds || ['sesi-1', 'sesi-2', 'sesi-3']);
@@ -956,12 +968,16 @@ export function toggleUserSession(
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   syncRecordToCloud(SYNC_COLLECTIONS.USERS, userId, users[idx]);
 
+  if (actor.id === userId) {
+    saveSession(users[idx]);
+  }
+
   logAuditAction(
     actor,
     'TOGGLE_USER_SESSION',
     'Users',
     userId,
-    `${enable ? 'Menambahkan' : 'Mencabut'} penugasan ${sessionId} untuk karyawan ${users[idx].name}.`
+    `${enable ? 'Menambahkan' : 'Mencabut'} penugasan ${sessionId} untuk ${users[idx].name} (${users[idx].role}).`
   );
 
   return {
@@ -983,22 +999,31 @@ export function assignUsersToSession(
   let updatedCount = 0;
 
   users.forEach((u) => {
-    if (u.role === 'karyawan') {
-      const curSessions = new Set(u.assignedSessionIds || ['sesi-1', 'sesi-2', 'sesi-3']);
-      const shouldHave = targetUserIds.includes(u.id);
-      if (shouldHave && !curSessions.has(sessionId)) {
-        curSessions.add(sessionId);
-        u.assignedSessionIds = Array.from(curSessions);
-        u.updatedAt = new Date().toISOString();
-        syncRecordToCloud(SYNC_COLLECTIONS.USERS, u.id, u);
-        updatedCount++;
-      } else if (!shouldHave && curSessions.has(sessionId)) {
-        curSessions.delete(sessionId);
-        u.assignedSessionIds = Array.from(curSessions);
-        u.updatedAt = new Date().toISOString();
-        syncRecordToCloud(SYNC_COLLECTIONS.USERS, u.id, u);
-        updatedCount++;
+    // Kepala Sekolah berwenang mengatur KS, Admin, dan Karyawan
+    // Admin berwenang mengatur Admin dan Karyawan, tapi dilarang ubah KS
+    const isAllowedToModify = actor.role === 'kepala_sekolah' || u.role !== 'kepala_sekolah';
+    if (!isAllowedToModify) return;
+
+    const curSessions = new Set(u.assignedSessionIds || ['sesi-1', 'sesi-2', 'sesi-3']);
+    const shouldHave = targetUserIds.includes(u.id);
+    if (shouldHave && !curSessions.has(sessionId)) {
+      curSessions.add(sessionId);
+      u.assignedSessionIds = Array.from(curSessions);
+      u.updatedAt = new Date().toISOString();
+      syncRecordToCloud(SYNC_COLLECTIONS.USERS, u.id, u);
+      if (u.id === actor.id) {
+        saveSession(u);
       }
+      updatedCount++;
+    } else if (!shouldHave && curSessions.has(sessionId)) {
+      curSessions.delete(sessionId);
+      u.assignedSessionIds = Array.from(curSessions);
+      u.updatedAt = new Date().toISOString();
+      syncRecordToCloud(SYNC_COLLECTIONS.USERS, u.id, u);
+      if (u.id === actor.id) {
+        saveSession(u);
+      }
+      updatedCount++;
     }
   });
 
@@ -1008,10 +1033,10 @@ export function assignUsersToSession(
     'UPDATE_SESSION_ROSTER',
     'Schedules',
     sessionId,
-    `Memperbarui penugasan karyawan untuk ${sessionId} (${targetUserIds.length} karyawan terdaftar).`
+    `Memperbarui penugasan pegawai untuk ${sessionId} (${targetUserIds.length} pegawai terdaftar).`
   );
 
-  return { success: true, message: `Berhasil mengatur ${targetUserIds.length} karyawan untuk sesi ini.` };
+  return { success: true, message: `Berhasil mengatur ${targetUserIds.length} pegawai untuk sesi ini.` };
 }
 
 export function createSchedule(
