@@ -97,6 +97,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
   // Kepala Sekolah Profile Form State
   const [ksName, setKsName] = useState(currentUser.name);
+  const [ksNip, setKsNip] = useState(currentUser.nip || '');
   const [ksEmail, setKsEmail] = useState(currentUser.email || '');
   const [ksPhone, setKsPhone] = useState(currentUser.phone || '');
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
@@ -169,6 +170,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     const session = getCurrentSession();
     if (session) {
       setKsName(session.name);
+      setKsNip(session.nip || '');
       setKsEmail(session.email || '');
       setKsPhone(session.phone || '');
     }
@@ -507,11 +509,15 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     setIsCheckingDb(false);
   };
 
-  // Update Profil Kepala Sekolah (Nama & Email)
+  // Update Profil Kepala Sekolah (Nama, NIP & Email)
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!ksName.trim()) {
       setFeedback({ type: 'error', message: 'Nama Kepala Sekolah tidak boleh kosong.' });
+      return;
+    }
+    if (!ksNip.trim()) {
+      setFeedback({ type: 'error', message: 'NIP Kepala Sekolah tidak boleh kosong.' });
       return;
     }
     if (!ksEmail.trim()) {
@@ -524,6 +530,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
     const res = await updateUser(currentUser, currentUser.id, {
       name: ksName.trim(),
+      nip: ksNip.trim(),
       email: ksEmail.trim(),
       phone: ksPhone.trim(),
     });
@@ -531,9 +538,11 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     if (res.success) {
       const cleanEmail = ksEmail.trim();
       const cleanName = ksName.trim();
+      const cleanNip = ksNip.trim();
       const updatedUser = {
         ...currentUser,
         name: cleanName,
+        nip: cleanNip,
         email: cleanEmail,
         phone: ksPhone.trim(),
       };
@@ -710,7 +719,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                   required
                   value={ksName}
                   onChange={(e) => setKsName(e.target.value)}
-                  placeholder="Contoh: Drs. H. Mulyadi, M.Pd."
+                  placeholder="Nama lengkap & gelar Kepala Sekolah"
                   className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
@@ -785,6 +794,26 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                NIP / Identitas Pegawai Kepala Sekolah <span className="text-rose-500">*</span>
+              </label>
+              <div className="relative">
+                <ShieldCheck className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                <input
+                  type="text"
+                  required
+                  value={ksNip}
+                  onChange={(e) => setKsNip(e.target.value)}
+                  placeholder="Contoh: 197508122000031001"
+                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                />
+              </div>
+              <span className="text-[10px] text-slate-400 mt-1 block">
+                NIP resmi Kepala Sekolah untuk tanda tangan laporan & presensi.
+              </span>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
                 Username Login (Terkunci)
               </label>
               <div className="relative">
@@ -797,7 +826,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 />
               </div>
               <span className="text-[10px] text-slate-400 mt-1 block">
-                NIP: {currentUser.nip} &bull; Peran: {currentUser.role}
+                Username sistem login &bull; Peran: {currentUser.role}
               </span>
             </div>
           </div>
@@ -809,7 +838,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md transition-colors flex items-center gap-2 disabled:opacity-50 cursor-pointer"
             >
               <Save className="w-3.5 h-3.5" />
-              <span>{isUpdatingProfile ? 'Menyimpan & Menghubungkan...' : 'Perbarui Nama, Email & Hubungkan Akun Google'}</span>
+              <span>{isUpdatingProfile ? 'Menyimpan & Menghubungkan...' : 'Perbarui Nama, NIP, Email & Hubungkan Akun Google'}</span>
             </button>
           </div>
         </form>

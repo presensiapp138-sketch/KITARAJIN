@@ -36,9 +36,9 @@ import {
   Lock,
 } from 'lucide-react';
 
-import { User, UserRole } from '../../types';
+import { User, UserRole, AppSettings } from '../../types';
 import { getNavItemsForRole, NavItem } from '../../config/navigation';
-import { updateUser } from '../../services/storage';
+import { updateUser, getAppSettings } from '../../services/storage';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
 
 interface ShellProps {
@@ -78,6 +78,7 @@ export const Shell: React.FC<ShellProps> = ({
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [editName, setEditName] = useState(currentUser.name);
+  const [editNip, setEditNip] = useState(currentUser.nip || '');
   const [editEmail, setEditEmail] = useState(currentUser.email || '');
   const [editPhone, setEditPhone] = useState(currentUser.phone || '');
   const [editPassword, setEditPassword] = useState('');
@@ -85,8 +86,25 @@ export const Shell: React.FC<ShellProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [profileMsg, setProfileMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  const [settings, setSettings] = useState<AppSettings>(() => getAppSettings());
+
+  React.useEffect(() => {
+    const handleSettingsUpdate = () => {
+      setSettings(getAppSettings());
+    };
+    window.addEventListener('kitarajin_settings_updated', handleSettingsUpdate);
+    window.addEventListener('kitarajin_cloud_sync', handleSettingsUpdate);
+    window.addEventListener('storage', handleSettingsUpdate);
+    return () => {
+      window.removeEventListener('kitarajin_settings_updated', handleSettingsUpdate);
+      window.removeEventListener('kitarajin_cloud_sync', handleSettingsUpdate);
+      window.removeEventListener('storage', handleSettingsUpdate);
+    };
+  }, []);
+
   React.useEffect(() => {
     setEditName(currentUser.name);
+    setEditNip(currentUser.nip || '');
     setEditEmail(currentUser.email || '');
     setEditPhone(currentUser.phone || '');
     setEditPassword('');
@@ -96,6 +114,10 @@ export const Shell: React.FC<ShellProps> = ({
     e.preventDefault();
     if (!editName.trim()) {
       setProfileMsg({ type: 'error', text: 'Nama tidak boleh kosong.' });
+      return;
+    }
+    if (!editNip.trim()) {
+      setProfileMsg({ type: 'error', text: 'NIP / ID tidak boleh kosong.' });
       return;
     }
     if (!editEmail.trim()) {
@@ -112,6 +134,7 @@ export const Shell: React.FC<ShellProps> = ({
 
     const updatePayload: any = {
       name: editName.trim(),
+      nip: editNip.trim(),
       email: editEmail.trim(),
       phone: editPhone.trim(),
     };
@@ -125,6 +148,7 @@ export const Shell: React.FC<ShellProps> = ({
       const updated = {
         ...currentUser,
         name: editName.trim(),
+        nip: editNip.trim(),
         email: editEmail.trim(),
         phone: editPhone.trim(),
       };
@@ -185,17 +209,17 @@ export const Shell: React.FC<ShellProps> = ({
                 }}
                 className="flex items-center gap-2.5 text-left"
               >
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white shadow-md shadow-emerald-500/20">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 flex items-center justify-center text-white shadow-md shadow-emerald-500/20 shrink-0">
                   <UserCheck className="w-6 h-6" />
                 </div>
-                <div>
+                <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="font-extrabold text-xl tracking-tight text-slate-900">
-                      KITA<span className="text-emerald-600">RAJIN</span>
+                    <span className="font-extrabold text-lg sm:text-xl tracking-tight text-slate-900 truncate max-w-[200px] sm:max-w-xs">
+                      {settings.appTitle || 'KITARAJIN'}
                     </span>
                   </div>
-                  <p className="text-[11px] text-slate-500 hidden sm:block">
-                    Presensi Wajah &amp; GPS &bull; Pengelolaan Akun
+                  <p className="text-[11px] font-medium text-slate-500 hidden sm:block truncate max-w-[220px] md:max-w-[320px]">
+                    {settings.schoolName || 'Presensi Wajah & GPS'}
                   </p>
                 </div>
               </button>
@@ -358,9 +382,13 @@ export const Shell: React.FC<ShellProps> = ({
                   <div className="w-8 h-8 rounded-lg bg-emerald-600 flex items-center justify-center text-white shadow-xs">
                     <UserCheck className="w-5 h-5" />
                   </div>
-                  <div>
-                    <span className="font-extrabold text-slate-900 text-sm block">Menu Navigasi</span>
-                    <span className="text-[10px] text-slate-400 block font-mono">KITARAJIN Presensi</span>
+                  <div className="min-w-0">
+                    <span className="font-extrabold text-slate-900 text-sm block truncate max-w-[170px]">
+                      {settings.appTitle || 'Menu Navigasi'}
+                    </span>
+                    <span className="text-[10px] text-slate-500 block truncate max-w-[170px] font-medium">
+                      {settings.schoolName || 'KITARAJIN Presensi'}
+                    </span>
                   </div>
                 </div>
                 <button
@@ -493,6 +521,23 @@ export const Shell: React.FC<ShellProps> = ({
                     onChange={(e) => setEditName(e.target.value)}
                     placeholder="Nama Lengkap"
                     className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  NIP / Nomor Identitas Pegawai <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <ShieldCheck className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                  <input
+                    type="text"
+                    required
+                    value={editNip}
+                    onChange={(e) => setEditNip(e.target.value)}
+                    placeholder="NIP / ID Pegawai"
+                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   />
                 </div>
               </div>

@@ -221,7 +221,7 @@ export default function App() {
       onSelectMenu={(menuId) => setActiveMenuId(menuId)}
       onUpdateCurrentUser={(updated) => setCurrentUser(updated)}
     >
-      <div key={`${activeMenuId}_${syncVersion}`}>
+      <div key={activeMenuId}>
         {renderContent()}
       </div>
     </Shell>

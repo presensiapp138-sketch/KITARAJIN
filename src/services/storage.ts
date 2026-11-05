@@ -196,7 +196,7 @@ export async function initializeDatabase(): Promise<void> {
       action: 'INIT_SYSTEM',
       targetEntity: 'Users',
       targetId: 'all',
-      details: 'Sistem diinisialisasi pertama kali dengan akun Kepala Sekolah dan seed akun awal.',
+      details: 'Sistem diinisialisasi pertama kali untuk manajemen presensi sekolah.',
       timestamp: new Date().toISOString(),
     };
     localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify([initialLog]));
@@ -263,91 +263,11 @@ export async function initializeDatabase(): Promise<void> {
     localStorage.setItem(STORAGE_KEYS.FACE_REGISTRY, JSON.stringify(seedFaces));
   }
 
-  // Initial Attendance Seeds
+  // Initial Attendance Records (Murni data presensi riil, riwayat demo dihapus)
   if (!localStorage.getItem(STORAGE_KEYS.ATTENDANCE)) {
-    const today = new Date().toISOString().split('T')[0];
-    const seedAttendance: AttendanceRecord[] = [
-      {
-        id: 'att-seed-01',
-        userId: 'usr-ks-01',
-        nip: '197508122000031001',
-        userName: 'Drs. H. Mulyadi, M.Pd.',
-        role: 'kepala_sekolah',
-        date: today,
-        type: 'masuk',
-        timestamp: `${today}T06:58:20.000Z`,
-        status: 'tepat_waktu',
-        latitude: -6.2088,
-        longitude: 106.8456,
-        distanceFromLocationMeters: 8,
-        isLocationValid: true,
-        isFaceValid: true,
-        faceSimilarityScore: 0.94,
-        photoRef: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-        deviceInfo: 'Chrome on Mobile',
-        notes: 'Presensi masuk pimpinan',
-      },
-      {
-        id: 'att-seed-02',
-        userId: 'usr-adm-01',
-        nip: '198802102011011002',
-        userName: 'Ahmad Fauzi, S.Kom.',
-        role: 'admin',
-        date: today,
-        type: 'masuk',
-        timestamp: `${today}T07:05:10.000Z`,
-        status: 'tepat_waktu',
-        latitude: -6.2089,
-        longitude: 106.8457,
-        distanceFromLocationMeters: 14,
-        isLocationValid: true,
-        isFaceValid: true,
-        faceSimilarityScore: 0.89,
-        photoRef: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-        deviceInfo: 'Chrome on Android',
-        notes: 'Presensi masuk admin',
-      },
-      {
-        id: 'att-seed-03',
-        userId: 'usr-stf-01',
-        nip: '199004152014022003',
-        userName: 'Siti Rahmawati, S.Pd.',
-        role: 'karyawan',
-        date: today,
-        type: 'masuk',
-        timestamp: `${today}T07:12:44.000Z`,
-        status: 'tepat_waktu',
-        latitude: -6.2087,
-        longitude: 106.8455,
-        distanceFromLocationMeters: 18,
-        isLocationValid: true,
-        isFaceValid: true,
-        faceSimilarityScore: 0.91,
-        photoRef: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80',
-        deviceInfo: 'Safari on iPhone',
-      },
-      {
-        id: 'att-seed-04',
-        userId: 'usr-stf-02',
-        nip: '199208202018031004',
-        userName: 'Budi Santoso',
-        role: 'karyawan',
-        date: today,
-        type: 'masuk',
-        timestamp: `${today}T07:22:15.000Z`,
-        status: 'terlambat',
-        latitude: -6.2090,
-        longitude: 106.8458,
-        distanceFromLocationMeters: 22,
-        isLocationValid: true,
-        isFaceValid: true,
-        faceSimilarityScore: 0.86,
-        photoRef: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
-        deviceInfo: 'Chrome on Mobile',
-        notes: 'Terlambat 7 menit akibat kemacetan lalu lintas',
-      },
-    ];
-    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(seedAttendance));
+    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify([]));
+  } else {
+    purgeDemoAttendanceRecords();
   }
 
   // Initial Leave Requests Seeds
@@ -718,6 +638,57 @@ export async function updateUser(
   users[index] = targetUser;
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   syncRecordToCloud(SYNC_COLLECTIONS.USERS, targetUser.id, targetUser);
+
+  // Synchronize Face Registry for this user if name or NIP changed
+  if (updates.name || updates.nip) {
+    try {
+      const faces = getAllFaceRegistry();
+      let facesChanged = false;
+      const updatedFaces = faces.map((f) => {
+        if (f.userId === userId) {
+          facesChanged = true;
+          const updatedFace = {
+            ...f,
+            userName: targetUser.name,
+            nip: targetUser.nip,
+            updatedAt: new Date().toISOString(),
+          };
+          syncRecordToCloud(SYNC_COLLECTIONS.FACE_REGISTRY, updatedFace.id, updatedFace);
+          return updatedFace;
+        }
+        return f;
+      });
+      if (facesChanged) {
+        localStorage.setItem(STORAGE_KEYS.FACE_REGISTRY, JSON.stringify(updatedFaces));
+      }
+    } catch (err) {
+      console.warn('Error syncing face registry on user update:', err);
+    }
+
+    // Synchronize Audit Logs actorName for this user and sanitize initial seed log
+    try {
+      const logs = getAuditLogs();
+      let logsChanged = false;
+      const updatedLogs = logs.map((log) => {
+        if (log.actorUserId === userId) {
+          logsChanged = true;
+          const updatedLog = {
+            ...log,
+            actorName: targetUser.name,
+            details: log.id === 'log-seed-01' ? 'Sistem diinisialisasi pertama kali untuk manajemen presensi sekolah.' : log.details,
+          };
+          syncRecordToCloud(SYNC_COLLECTIONS.AUDIT_LOGS, updatedLog.id, updatedLog);
+          return updatedLog;
+        }
+        return log;
+      });
+      if (logsChanged) {
+        localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(updatedLogs));
+      }
+    } catch (err) {
+      console.warn('Error syncing audit logs on user update:', err);
+    }
+  }
 
   // Update current session if actor edited themselves
   if (actor.id === userId) {
@@ -1301,6 +1272,10 @@ export function updateAppSettings(actor: User, updates: Partial<AppSettings>): {
 
   logAuditAction(actor, 'UPDATE_SETTINGS', 'Settings', 'global', 'Memperbarui pengaturan sistem dan sekolah.');
 
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('kitarajin_settings_updated', { detail: merged }));
+  }
+
   return { success: true, message: 'Pengaturan sekolah berhasil disimpan dan disinkronkan.' };
 }
 
@@ -1431,7 +1406,41 @@ export function deleteFaceRegistry(actor: User, registryId: string): { success: 
 
 export function getAllAttendanceRecords(): AttendanceRecord[] {
   const data = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
-  return data ? JSON.parse(data) : [];
+  if (!data) return [];
+  const parsed: AttendanceRecord[] = JSON.parse(data);
+  return parsed.filter((r) => !r.id.startsWith('att-seed-'));
+}
+
+/**
+ * Hapus riwayat presensi akun demo dari localStorage dan Cloud Firestore
+ */
+export function purgeDemoAttendanceRecords(): { count: number } {
+  try {
+    const data = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
+    if (!data) return { count: 0 };
+    const records: AttendanceRecord[] = JSON.parse(data);
+    const demoRecords = records.filter(
+      (r) => r.id.startsWith('att-seed-') || (r.notes && r.notes.toLowerCase().includes('seed'))
+    );
+    if (demoRecords.length === 0) return { count: 0 };
+
+    const realRecords = records.filter(
+      (r) => !r.id.startsWith('att-seed-') && !(r.notes && r.notes.toLowerCase().includes('seed'))
+    );
+    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(realRecords));
+
+    for (const dr of demoRecords) {
+      try {
+        deleteRecordFromCloud(SYNC_COLLECTIONS.ATTENDANCE, dr.id);
+      } catch {
+        // ignore
+      }
+    }
+    return { count: demoRecords.length };
+  } catch (err) {
+    console.warn('Error purging demo attendance:', err);
+    return { count: 0 };
+  }
 }
 
 export function getAttendanceForUser(userId: string): AttendanceRecord[] {

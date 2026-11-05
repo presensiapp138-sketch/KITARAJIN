@@ -39,7 +39,17 @@ export const AuditLogManager: React.FC<AuditLogManagerProps> = ({ currentUser })
 
   useEffect(() => {
     loadData();
+    const handleSync = () => loadData();
+    window.addEventListener('kitarajin_cloud_sync', handleSync);
+    return () => window.removeEventListener('kitarajin_cloud_sync', handleSync);
   }, []);
+
+  const handlePurgeSeedLogs = () => {
+    const rawLogs = getAuditLogs();
+    const realLogs = rawLogs.filter((l) => !l.id.startsWith('log-seed-'));
+    localStorage.setItem('kitarajin_table_audit_logs', JSON.stringify(realLogs));
+    setLogs(realLogs);
+  };
 
   const filteredLogs = logs.filter((log) => {
     if (selectedEntity !== 'all' && log.targetEntity !== selectedEntity) return false;
@@ -107,6 +117,16 @@ export const AuditLogManager: React.FC<AuditLogManagerProps> = ({ currentUser })
         </div>
 
         <div className="flex items-center gap-2">
+          {currentUser.role === 'kepala_sekolah' && logs.some((l) => l.id.startsWith('log-seed-')) && (
+            <button
+              type="button"
+              onClick={handlePurgeSeedLogs}
+              className="px-3 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 font-semibold text-xs transition-colors"
+              title="Bersihkan catatan audit bawaan awal"
+            >
+              Bersihkan Log Awal
+            </button>
+          )}
           <button
             type="button"
             onClick={loadData}
