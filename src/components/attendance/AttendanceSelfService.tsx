@@ -584,13 +584,12 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     }
   };
 
-  // ==============================================================
-  // DATA FILTERING UNTUK TAB RIWAYAT PRESENSI
-  // ==============================================================
   const getFilteredRecords = () => {
-    let records = historyScope === 'self' ? userRecords : allAttendanceRecords;
+    // Karyawan hanya boleh melihat riwayat presensi pribadi (Request 2)
+    const isRestrictedKaryawan = currentUser.role === 'karyawan';
+    let records = (isRestrictedKaryawan || historyScope === 'self') ? userRecords : allAttendanceRecords;
 
-    if (historyScope === 'team' && selectedStaffId !== 'all') {
+    if (!isRestrictedKaryawan && historyScope === 'team' && selectedStaffId !== 'all') {
       records = records.filter((r) => r.userId === selectedStaffId);
     }
 
@@ -780,20 +779,15 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                               </span>
                             )}
                           </div>
-
-                          <div className={`space-y-0.5 text-[10px] font-mono ${isSelected ? 'text-emerald-100' : 'text-slate-500'}`}>
-                            <div>Masuk: {sch.checkInStart} - {sch.checkInDeadline}</div>
-                            <div>Pulang: {sch.checkOutStart} - {sch.checkOutEnd || '18:00'}</div>
-                          </div>
                         </div>
 
-                        {/* Status Presensi Hari Ini */}
+                        {/* Status Presensi Hari Ini - Bersih tanpa tampilan jam/menit */}
                         <div className={`mt-2 pt-1.5 border-t text-[10px] space-y-0.5 ${isSelected ? 'border-white/20 text-white' : 'border-slate-100 text-slate-600'}`}>
                           <div className="flex items-center justify-between">
                             <span>Masuk:</span>
                             {recMasuk ? (
-                              <span className={`font-bold font-mono ${isSelected ? 'text-emerald-100' : 'text-emerald-700'}`}>
-                                {new Date(recMasuk.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ✓
+                              <span className={`font-bold ${isSelected ? 'text-emerald-100' : 'text-emerald-700'}`}>
+                                Tercatat ✓
                               </span>
                             ) : (
                               <span className={isSelected ? 'text-emerald-200/70 italic' : 'text-slate-400 italic'}>Belum</span>
@@ -802,8 +796,8 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                           <div className="flex items-center justify-between">
                             <span>Pulang:</span>
                             {recPulang ? (
-                              <span className={`font-bold font-mono ${isSelected ? 'text-indigo-100' : 'text-indigo-700'}`}>
-                                {new Date(recPulang.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} ✓
+                              <span className={`font-bold ${isSelected ? 'text-indigo-100' : 'text-indigo-700'}`}>
+                                Tercatat ✓
                               </span>
                             ) : (
                               <span className={isSelected ? 'text-emerald-200/70 italic' : 'text-slate-400 italic'}>Belum</span>
@@ -1096,38 +1090,20 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                 <div className="space-y-3 text-xs">
                   <div className="font-bold text-slate-900 text-sm">{userSchedule.name}</div>
 
-                  <div className="space-y-1.5">
-                    {/* Sesi Masuk */}
-                    <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-100 text-[11px] space-y-1">
-                      <div className="font-bold text-emerald-900 flex items-center justify-between">
-                        <span>Sesi Presensi Masuk</span>
-                        <span className="font-mono text-emerald-700">
-                          {userSchedule.checkInStart} - {userSchedule.checkInDeadline}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-slate-600 text-[10px]">
-                        <span>Buka Presensi: <strong>{userSchedule.checkInStart} WIB</strong></span>
-                        <span>Toleransi: <strong className="text-amber-700">+{userSchedule.lateToleranceMinutes} mnt</strong></span>
-                      </div>
+                  <div className="p-3 rounded-2xl bg-emerald-50/70 border border-emerald-100 text-xs space-y-1">
+                    <div className="font-bold text-emerald-900 flex items-center justify-between">
+                      <span>Status Sesi</span>
+                      <span className="font-bold text-emerald-700 bg-white px-2 py-0.5 rounded-md border border-emerald-200 text-[10px]">
+                        ✓ Aktif Digunakan
+                      </span>
                     </div>
-
-                    {/* Sesi Pulang */}
-                    <div className="p-2.5 rounded-xl bg-indigo-50/70 border border-indigo-100 text-[11px] space-y-1">
-                      <div className="font-bold text-indigo-900 flex items-center justify-between">
-                        <span>Sesi Presensi Pulang</span>
-                        <span className="font-mono text-indigo-700">
-                          {userSchedule.checkOutStart} - {userSchedule.checkOutEnd || '18:00'}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between text-slate-600 text-[10px]">
-                        <span>Mulai Pulang: <strong>{userSchedule.checkOutStart} WIB</strong></span>
-                        <span>Batas Akhir: <strong>{userSchedule.checkOutEnd || '18:00'} WIB</strong></span>
-                      </div>
-                    </div>
+                    <p className="text-[11px] text-slate-600 leading-relaxed">
+                      Sesi ini dipilih untuk presensi Anda hari ini. Gunakan tombol <strong>Masuk</strong> atau <strong>Pulang</strong> lalu verifikasi melalui kamera dan titik lokasi sekolah.
+                    </p>
                   </div>
 
                   {userSchedule.ruleNotes && (
-                    <p className="text-[10px] text-slate-500 italic bg-slate-50 p-2 rounded-lg border border-slate-200/50">
+                    <p className="text-[10px] text-slate-500 italic bg-slate-50 p-2.5 rounded-xl border border-slate-200/50">
                       &bull; {userSchedule.ruleNotes}
                     </p>
                   )}

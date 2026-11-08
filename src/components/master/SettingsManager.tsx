@@ -23,6 +23,7 @@ import {
   Mail,
   User as UserIcon,
   Phone,
+  Clock,
   CloudUpload,
   Sparkles,
   Lock,
@@ -100,6 +101,12 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [ksNip, setKsNip] = useState(currentUser.nip || '');
   const [ksEmail, setKsEmail] = useState(currentUser.email || '');
   const [ksPhone, setKsPhone] = useState(currentUser.phone || '');
+  const [schedules, setSchedules] = useState(() => getAllSchedules());
+  const [ksAssignedSessions, setKsAssignedSessions] = useState<string[]>(
+    currentUser.assignedSessionIds && currentUser.assignedSessionIds.length > 0
+      ? currentUser.assignedSessionIds
+      : ['sesi-1', 'sesi-2', 'sesi-3']
+  );
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
 
   // Form State Identitas Sekolah
@@ -533,6 +540,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       nip: ksNip.trim(),
       email: ksEmail.trim(),
       phone: ksPhone.trim(),
+      assignedSessionIds: ksAssignedSessions,
     });
 
     if (res.success) {
@@ -545,6 +553,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         nip: cleanNip,
         email: cleanEmail,
         phone: ksPhone.trim(),
+        assignedSessionIds: ksAssignedSessions,
       };
       if (onUpdateCurrentUser) {
         onUpdateCurrentUser(updatedUser);
@@ -829,6 +838,55 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 Username sistem login &bull; Peran: {currentUser.role}
               </span>
             </div>
+
+            {/* Sesi Presensi yang Berlaku untuk Kepala Sekolah */}
+            <div className="md:col-span-2 p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-800 uppercase flex items-center gap-1.5">
+                  <Clock className="w-4 h-4 text-emerald-600" />
+                  <span>Sesi Presensi yang Berlaku untuk Kepala Sekolah:</span>
+                </label>
+                <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/80 px-2 py-0.5 rounded-full">
+                  Atur Sesi Mandiri
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-500">
+                Centang sesi yang dapat diambil oleh Kepala Sekolah saat melakukan presensi mandiri:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                {schedules.map((sch) => {
+                  const isChecked = ksAssignedSessions.includes(sch.id);
+                  return (
+                    <label
+                      key={sch.id}
+                      className={`flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition-all ${
+                        isChecked
+                          ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-bold'
+                          : 'bg-white border-slate-200 text-slate-600'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => {
+                          if (isChecked) {
+                            if (ksAssignedSessions.length === 1) {
+                              setFeedback({ type: 'error', message: 'Kepala Sekolah harus memiliki minimal 1 sesi aktif.' });
+                              return;
+                            }
+                            setKsAssignedSessions(ksAssignedSessions.filter((id) => id !== sch.id));
+                          } else {
+                            setKsAssignedSessions([...ksAssignedSessions, sch.id]);
+                          }
+                        }}
+                        className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer"
+                      />
+                      <span className="text-xs">{sch.sessionName || sch.name}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
           </div>
 
           <div className="flex justify-end pt-2">
@@ -838,7 +896,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md transition-colors flex items-center gap-2 disabled:opacity-50 cursor-pointer"
             >
               <Save className="w-3.5 h-3.5" />
-              <span>{isUpdatingProfile ? 'Menyimpan & Menghubungkan...' : 'Perbarui Nama, NIP, Email & Hubungkan Akun Google'}</span>
+              <span>{isUpdatingProfile ? 'Menyimpan & Menghubungkan...' : 'Perbarui Nama, NIP, Sesi, Email & Hubungkan Akun Google'}</span>
             </button>
           </div>
         </form>

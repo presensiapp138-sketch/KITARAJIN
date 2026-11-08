@@ -32,6 +32,7 @@ import {
   Check,
   Eye,
   EyeOff,
+  FileDown,
 } from 'lucide-react';
 
 import { User, UserRole, Department, Schedule } from '../../types';
@@ -49,7 +50,9 @@ import {
   toggleUserSession,
   assignUsersToSession,
   getAuditLogs,
+  getAttendanceForUser,
 } from '../../services/storage';
+import { generateAttendancePdfReport } from '../../services/pdfReportService';
 import { TimeInput24 } from '../common/TimeInput24';
 
 
@@ -434,8 +437,10 @@ export const UserManager: React.FC<UserManagerProps> = ({
   };
 
   const handleAssignAllEmployeesToSession = (sessionId: string) => {
-    const employeeIds = users.filter((u) => u.role === 'karyawan').map((u) => u.id);
-    const res = assignUsersToSession(currentUser, sessionId, employeeIds);
+    const targetIds = currentUser.role === 'kepala_sekolah'
+      ? users.map((u) => u.id)
+      : users.filter((u) => u.role === 'karyawan').map((u) => u.id);
+    const res = assignUsersToSession(currentUser, sessionId, targetIds);
     if (res.success) {
       setFeedback({ type: 'success', message: res.message });
       loadData();
@@ -756,6 +761,17 @@ export const UserManager: React.FC<UserManagerProps> = ({
                             <div className="flex items-center justify-end gap-1.5">
                               <button
                                 type="button"
+                                onClick={() => {
+                                  const userRecs = getAttendanceForUser(u.id);
+                                  generateAttendancePdfReport(u, userRecs, 'bulan_ini');
+                                }}
+                                className="p-1.5 rounded-lg border border-sky-200 text-sky-700 bg-sky-50 hover:bg-sky-100 transition-colors cursor-pointer"
+                                title={`Unduh Rekap PDF resmi: ${u.name}`}
+                              >
+                                <FileDown className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => openEditUserModal(u)}
                                 className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
                                 title="Edit Akun & Jadwal Sesi"
@@ -986,7 +1002,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
                         <div className="p-3 bg-white rounded-xl border-2 border-emerald-500/80 shadow-lg space-y-2.5 animate-in fade-in">
                           <div className="flex items-center justify-between gap-1 pb-1.5 border-b border-slate-100">
                             <span className="text-[11px] font-extrabold text-slate-900">
-                              Centang Karyawan Wajib Presensi:
+                              {currentUser.role === 'kepala_sekolah' ? 'Centang Civitas (KS, Admin, Guru, Tendik):' : 'Centang Karyawan Wajib Presensi:'}
                             </span>
                             <div className="flex items-center gap-1">
                               <button
@@ -1010,7 +1026,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
                             <Search className="w-3 h-3 absolute left-2.5 top-2 text-slate-400" />
                             <input
                               type="text"
-                              placeholder="Cari nama karyawan..."
+                              placeholder="Cari nama pegawai..."
                               value={sessionEmployeeSearch}
                               onChange={(e) => setSessionEmployeeSearch(e.target.value)}
                               className="w-full pl-7 pr-2 py-1 rounded-lg border border-slate-200 text-[11px] focus:ring-1 focus:ring-emerald-500 focus:outline-none"
@@ -1019,7 +1035,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
 
                           <div className="max-h-40 overflow-y-auto space-y-1 pr-1 divide-y divide-slate-100">
                             {users
-                              .filter((u) => u.role === 'karyawan')
+                              .filter((u) => currentUser.role === 'kepala_sekolah' ? true : u.role === 'karyawan')
                               .filter((u) => !sessionEmployeeSearch || u.name.toLowerCase().includes(sessionEmployeeSearch.toLowerCase()))
                               .map((u) => {
                                 const userSessions = u.assignedSessionIds && u.assignedSessionIds.length > 0 ? u.assignedSessionIds : ['sesi-1', 'sesi-2', 'sesi-3'];
@@ -1039,9 +1055,16 @@ export const UserManager: React.FC<UserManagerProps> = ({
                                         className="w-3.5 h-3.5 rounded text-emerald-600 focus:ring-emerald-500 cursor-pointer"
                                       />
                                       <div>
-                                        <div className="text-[11px] font-bold text-slate-800">{u.name}</div>
+                                        <div className="text-[11px] font-bold text-slate-800 flex items-center gap-1">
+                                          <span>{u.name}</span>
+                                          {u.role !== 'karyawan' && (
+                                            <span className="text-[8px] font-bold px-1 rounded bg-purple-100 text-purple-800">
+                                              {u.role === 'kepala_sekolah' ? 'KS' : 'Admin'}
+                                            </span>
+                                          )}
+                                        </div>
                                         <div className="text-[9px] text-slate-400">
-                                          {dept ? dept.name : 'Umum'} &bull; NIP: {u.nip}
+                                          {dept ? dept.name : (u.role === 'kepala_sekolah' ? 'Kepala Sekolah' : u.role === 'admin' ? 'Admin' : 'Umum')} &bull; NIP: {u.nip}
                                         </div>
                                       </div>
                                     </div>

@@ -23,6 +23,7 @@ import {
   Eye,
   X,
   FileText,
+  FileDown,
 } from 'lucide-react';
 import {
   User,
@@ -41,6 +42,9 @@ import {
   getAppSettings,
   groupAttendanceByDateAndUser,
 } from '../../services/storage';
+import { exportAttendanceToExcel } from '../../services/excelReportService';
+import { generateAttendancePdfReport } from '../../services/pdfReportService';
+import { printAttendanceDocument } from '../../services/printReportService';
 
 interface ReportManagerProps {
   currentUser: User;
@@ -63,6 +67,7 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
   const [selectedRole, setSelectedRole] = useState<'all' | UserRole>('all');
   const [selectedDeptId, setSelectedDeptId] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
+  const [selectedUserId, setSelectedUserId] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'rekap_harian' | 'log_transaksi'>('rekap_harian');
 
@@ -126,6 +131,11 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
 
     // Filter Role (Karyawan can only see their own anyway)
     if (currentUser.role !== 'karyawan' && selectedRole !== 'all' && r.role !== selectedRole) {
+      return false;
+    }
+
+    // Filter Pegawai Spesifik / Individu
+    if (currentUser.role !== 'karyawan' && selectedUserId !== 'all' && r.userId !== selectedUserId) {
       return false;
     }
 
@@ -371,8 +381,41 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
     }
   };
 
+  const getPeriodLabel = () => {
+    if (periodType === 'hari_ini') return 'Harian';
+    if (periodType === 'minggu_ini') return 'Pekan Ini';
+    if (periodType === 'bulan_ini') return 'Bulanan';
+    return `Periode ${startDate} s/d ${endDate}`;
+  };
+
+  const getActiveTargetUser = (): User | undefined => {
+    if (currentUser.role === 'karyawan') return currentUser;
+    if (selectedUserId !== 'all') {
+      return users.find((u) => u.id === selectedUserId);
+    }
+    return undefined;
+  };
+
+  const handleExportExcel = () => {
+    const targetUser = getActiveTargetUser();
+    exportAttendanceToExcel(filteredRecords, getPeriodLabel(), targetUser);
+  };
+
+  const handleExportPdf = () => {
+    const targetUser = getActiveTargetUser();
+    const periodKey = periodType === 'custom' ? 'bulan_ini' : periodType;
+    generateAttendancePdfReport(targetUser, filteredRecords, periodKey);
+  };
+
   const handlePrint = () => {
-    window.print();
+    const targetUser = getActiveTargetUser();
+    printAttendanceDocument(filteredRecords, getPeriodLabel(), targetUser);
+  };
+
+  const handleDownloadPersonPdf = (user: User) => {
+    const userRecs = records.filter((r) => r.userId === user.id);
+    const periodKey = periodType === 'custom' ? 'bulan_ini' : periodType;
+    generateAttendancePdfReport(user, userRecs, periodKey);
   };
 
   return (
@@ -396,30 +439,52 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
         <div className="flex items-center gap-2 flex-wrap">
           <button
             type="button"
-            onClick={handleCopyForGoogleSheets}
-            className="px-3.5 py-2 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5"
-            title="Salin data siap tempel ke Google Spreadsheet"
+            onClick={handleExportExcel}
+            className="px-3.5 py-2 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+            title="Unduh Tabel Excel Lengkap (.xls) dengan Kop Surat &amp; Format Rapi"
           >
-            {copyFeedback ? <CheckCircle className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-emerald-600" />}
-            <span>{copyFeedback ? 'Tersalin ke Clipboard!' : 'Salin ke Google Sheets'}</span>
+            <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />
+            <span>Unduh Excel (.xls)</span>
           </button>
 
           <button
             type="button"
-            onClick={handleExportCSV}
-            className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5"
+            onClick={handleExportPdf}
+            className="px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+            title="Unduh Dokumen PDF Resmi Kop Sekolah &amp; Tanda Tangan KS"
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>Unduh CSV</span>
+            <FileDown className="w-3.5 h-3.5" />
+            <span>Unduh Rekap PDF</span>
           </button>
 
           <button
             type="button"
             onClick={handlePrint}
-            className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600"
-            title="Cetak Laporan"
+            className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+            title="Cetak Lembar Presensi Resmi (Bukan Cetak Layar Aplikasi)"
           >
-            <Printer className="w-4 h-4" />
+            <Printer className="w-3.5 h-3.5 text-slate-600" />
+            <span>Cetak Dokumen</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleCopyForGoogleSheets}
+            className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 text-xs font-semibold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+            title="Salin data siap tempel ke Google Spreadsheet"
+          >
+            {copyFeedback ? <CheckCircle className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-slate-400" />}
+            <span>{copyFeedback ? 'Tersalin!' : 'Salin Data'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleExportCSV}
+            className="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-600 text-xs font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+            title="Unduh format CSV mentah"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>CSV</span>
           </button>
         </div>
       </div>
@@ -511,7 +576,7 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
         </div>
 
         {/* Dropdown Filters & Search */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-3 border-t border-slate-100">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-3 pt-3 border-t border-slate-100">
           {/* Search by Name / NIP */}
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3" />
@@ -524,8 +589,28 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
             />
           </div>
 
-          {/* Filter Role (for non-karyawan) */}
+          {/* Filter Pegawai Spesifik / Individu */}
           {currentUser.role !== 'karyawan' ? (
+            <select
+              value={selectedUserId}
+              onChange={(e) => setSelectedUserId(e.target.value)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-700 bg-white"
+            >
+              <option value="all">Semua Pegawai &amp; Civitas ({users.length})</option>
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name} ({u.role === 'kepala_sekolah' ? 'Kepala Sekolah' : u.role === 'admin' ? 'Admin' : 'Guru/Staf'})
+                </option>
+              ))}
+            </select>
+          ) : (
+            <div className="px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-500 bg-slate-50 flex items-center">
+              Laporan Saya Sendiri
+            </div>
+          )}
+
+          {/* Filter Role (for non-karyawan) */}
+          {currentUser.role !== 'karyawan' && (
             <select
               value={selectedRole}
               onChange={(e) => setSelectedRole(e.target.value as any)}
@@ -536,10 +621,6 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
               <option value="admin">Admin</option>
               <option value="karyawan">Karyawan / Guru / Staf</option>
             </select>
-          ) : (
-            <div className="px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-500 bg-slate-50 flex items-center">
-              Laporan Saya Sendiri
-            </div>
           )}
 
           {/* Filter Departemen */}
@@ -626,12 +707,13 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                   <th className="py-3 px-4">2. Absen Pulang</th>
                   <th className="py-3 px-4">Durasi Kerja</th>
                   <th className="py-3 px-4">Status Kelengkapan</th>
+                  <th className="py-3 px-4 text-right">Aksi Unduh</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {pairedRecords.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="py-12 text-center text-slate-400 text-xs">
+                    <td colSpan={7} className="py-12 text-center text-slate-400 text-xs">
                       Tidak ada catatan presensi yang cocok dengan kriteria filter di atas.
                     </td>
                   </tr>
@@ -800,6 +882,23 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                                 : 'Belum Presensi'}
                             </span>
                           </span>
+                        </td>
+
+                        {/* AKSI UNDUH PDF PER PERSON */}
+                        <td className="py-3.5 px-4 whitespace-nowrap align-top text-right">
+                          {u ? (
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadPersonPdf(u)}
+                              className="px-2.5 py-1 rounded-lg border border-sky-300 bg-sky-50 hover:bg-sky-100 text-sky-800 text-[10px] font-bold shadow-2xs transition-colors inline-flex items-center gap-1 cursor-pointer"
+                              title={`Unduh Rekap PDF resmi: ${u.name}`}
+                            >
+                              <FileDown className="w-3 h-3 text-sky-700" />
+                              <span>PDF</span>
+                            </button>
+                          ) : (
+                            <span className="text-slate-300 text-[10px]">-</span>
+                          )}
                         </td>
                       </tr>
                     );

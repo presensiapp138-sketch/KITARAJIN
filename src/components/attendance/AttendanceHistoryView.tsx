@@ -21,8 +21,11 @@ import {
   Calendar,
   Layers,
   ChevronRight,
-  ShieldCheck,
   RefreshCw,
+  Printer,
+  Download,
+  FileSpreadsheet,
+  FileDown,
 } from 'lucide-react';
 import { User, DailyAttendancePair, AttendanceRecord } from '../../types';
 import {
@@ -31,6 +34,9 @@ import {
   groupAttendanceByDateAndUser,
   getAllUsers,
 } from '../../services/storage';
+import { exportAttendanceToExcel } from '../../services/excelReportService';
+import { generateAttendancePdfReport } from '../../services/pdfReportService';
+import { printAttendanceDocument } from '../../services/printReportService';
 
 interface AttendanceHistoryViewProps {
   currentUser: User;
@@ -58,7 +64,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
 
   const loadData = () => {
     let rawRecords: AttendanceRecord[] = [];
-    if (scopeFilter === 'my') {
+    if (currentUser.role === 'karyawan' || scopeFilter === 'my') {
       rawRecords = getAttendanceForUser(currentUser.id);
     } else {
       rawRecords = getAllAttendanceRecords();
@@ -142,6 +148,41 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
     const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
     const diffMins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
     return `${diffHrs} Jam ${diffMins} Menit`;
+  };
+
+  // Convert filtered pairs to flat AttendanceRecord array for exporters
+  const getFilteredAttendanceRecords = (): AttendanceRecord[] => {
+    const list: AttendanceRecord[] = [];
+    filteredPairs.forEach((p) => {
+      if (p.masukRecord) list.push(p.masukRecord);
+      if (p.pulangRecord) list.push(p.pulangRecord);
+    });
+    return list;
+  };
+
+  const getPeriodLabel = () => {
+    if (dateFilter === 'today') return 'Harian (Hari Ini)';
+    if (dateFilter === 'week') return 'Pekan Ini (7 Hari Terakhir)';
+    if (dateFilter === 'month') return 'Bulan Ini';
+    return 'Semua Periode';
+  };
+
+  const handleExportExcel = () => {
+    const records = getFilteredAttendanceRecords();
+    const targetUser = currentUser.role === 'karyawan' || scopeFilter === 'my' ? currentUser : undefined;
+    exportAttendanceToExcel(records, getPeriodLabel(), targetUser);
+  };
+
+  const handleExportPdf = () => {
+    const records = getFilteredAttendanceRecords();
+    const targetUser = currentUser.role === 'karyawan' || scopeFilter === 'my' ? currentUser : undefined;
+    generateAttendancePdfReport(targetUser, records, dateFilter);
+  };
+
+  const handlePrintDocument = () => {
+    const records = getFilteredAttendanceRecords();
+    const targetUser = currentUser.role === 'karyawan' || scopeFilter === 'my' ? currentUser : undefined;
+    printAttendanceDocument(records, getPeriodLabel(), targetUser);
   };
 
   return (
@@ -316,6 +357,44 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
             <RefreshCw className="w-3.5 h-3.5" />
             <span>Segarkan Data</span>
           </button>
+        </div>
+
+        {/* Action Toolbar: Unduh Excel, PDF & Cetak Dokumen Resmi (Bukan Cetak Aplikasi) */}
+        <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2.5">
+          <div className="text-[11px] text-slate-500 font-medium">
+            Menampilkan <strong>{filteredPairs.length}</strong> catatan presensi &bull; {getPeriodLabel()}
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={handleExportExcel}
+              className="px-3 py-1.5 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
+              title="Unduh Tabel Excel Lengkap &amp; Rapi (.xls)"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />
+              <span>Unduh Excel (.xls)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleExportPdf}
+              className="px-3 py-1.5 rounded-xl border border-sky-300 bg-sky-50 hover:bg-sky-100 text-sky-800 text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
+              title="Unduh Dokumen PDF Resmi Kop Sekolah"
+            >
+              <FileDown className="w-3.5 h-3.5 text-sky-700" />
+              <span>Unduh PDF</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handlePrintDocument}
+              className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold shadow-2xs transition-colors flex items-center gap-1.5 cursor-pointer"
+              title="Cetak Lembar Presensi Resmi (Bukan Cetak UI Aplikasi)"
+            >
+              <Printer className="w-3.5 h-3.5 text-slate-600" />
+              <span>Cetak Dokumen</span>
+            </button>
+          </div>
         </div>
       </div>
 

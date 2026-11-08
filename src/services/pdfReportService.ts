@@ -6,16 +6,16 @@
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { User, AttendanceRecord, AppSettings, Department, DailyAttendancePair } from '../types';
-import { groupAttendanceByDateAndUser } from './storage';
+import { groupAttendanceByDateAndUser, getAppSettings, getAllUsers, getAllDepartments } from './storage';
 
 export interface GeneratePdfOptions {
-  settings: AppSettings;
+  settings?: AppSettings;
   records: AttendanceRecord[];
   targetUser?: User | null; // Jika null/undefined, maka unduh laporan rekap seluruh staf
-  allUsers: User[];
-  departments: Department[];
-  startDate: string;
-  endDate: string;
+  allUsers?: User[];
+  departments?: Department[];
+  startDate?: string;
+  endDate?: string;
   periodLabel?: string; // e.g. 'Harian', 'Pekan Ini', 'Bulanan'
   ksUser?: User | null;
 }
@@ -23,18 +23,56 @@ export interface GeneratePdfOptions {
 /**
  * Menghasilkan file PDF resmi dengan format KOP Surat Sekolah dan tanda tangan pimpinan
  */
-export function generateAttendancePdfReport(options: GeneratePdfOptions): void {
-  const {
-    settings,
-    records,
-    targetUser,
-    allUsers,
-    departments,
-    startDate,
-    endDate,
-    periodLabel,
-    ksUser,
-  } = options;
+export function generateAttendancePdfReport(options: GeneratePdfOptions): void;
+export function generateAttendancePdfReport(
+  targetUser: User | null | undefined,
+  records: AttendanceRecord[],
+  periodKeyOrLabel?: string
+): void;
+export function generateAttendancePdfReport(
+  userOrOptions: User | null | undefined | GeneratePdfOptions,
+  recordsArg?: AttendanceRecord[],
+  periodArg?: string
+): void {
+  let settings: AppSettings;
+  let records: AttendanceRecord[];
+  let targetUser: User | null | undefined;
+  let allUsers: User[];
+  let departments: Department[];
+  let startDate: string;
+  let endDate: string;
+  let periodLabel: string | undefined;
+  let ksUser: User | null | undefined;
+
+  // Cek apakah argumen pertama adalah options object
+  if (userOrOptions && typeof userOrOptions === 'object' && 'records' in userOrOptions && Array.isArray((userOrOptions as any).records)) {
+    const opts = userOrOptions as GeneratePdfOptions;
+    settings = opts.settings || getAppSettings();
+    records = opts.records;
+    targetUser = opts.targetUser;
+    allUsers = opts.allUsers || getAllUsers();
+    departments = opts.departments || getAllDepartments();
+    startDate = opts.startDate || '';
+    endDate = opts.endDate || '';
+    periodLabel = opts.periodLabel;
+    ksUser = opts.ksUser || allUsers.find((u) => u.role === 'kepala_sekolah');
+  } else {
+    settings = getAppSettings();
+    records = recordsArg || [];
+    targetUser = userOrOptions as User | null | undefined;
+    allUsers = getAllUsers();
+    departments = getAllDepartments();
+    startDate = '';
+    endDate = '';
+    periodLabel = periodArg === 'hari_ini' || periodArg === 'today'
+      ? 'Harian'
+      : periodArg === 'minggu_ini' || periodArg === 'week'
+      ? 'Pekan Ini'
+      : periodArg === 'bulan_ini' || periodArg === 'month'
+      ? 'Bulanan'
+      : periodArg || 'Rekapitulasi Kehadiran';
+    ksUser = allUsers.find((u) => u.role === 'kepala_sekolah');
+  }
 
   // Filter records jika targetUser dispesifikasikan
   const effectiveRecords = targetUser
