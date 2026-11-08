@@ -379,7 +379,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
         setIsLocating(false);
         setGpsError('Izin akses lokasi GPS ditolak atau sensor tidak aktif. Harap aktifkan izin lokasi.');
       },
-      { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     );
   };
 
