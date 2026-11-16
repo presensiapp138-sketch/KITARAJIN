@@ -24,6 +24,7 @@ import {
   syncRecordToCloud,
   deleteRecordFromCloud,
   pullUsersFromCloudAndMerge,
+  SEED_BASELINE_ISO,
   SYNC_COLLECTIONS,
 } from './firestoreSync';
 
@@ -141,8 +142,8 @@ export async function initializeDatabase(): Promise<void> {
         position: 'Kepala Sekolah',
         phone: '081234567890',
         isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        createdAt: SEED_BASELINE_ISO,
+        updatedAt: SEED_BASELINE_ISO,
       },
       {
         id: 'usr-adm-01',
@@ -157,8 +158,8 @@ export async function initializeDatabase(): Promise<void> {
         position: 'Admin Tata Usaha',
         phone: '081398765432',
         isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        createdAt: SEED_BASELINE_ISO,
+        updatedAt: SEED_BASELINE_ISO,
       },
       {
         id: 'usr-stf-01',
@@ -173,8 +174,8 @@ export async function initializeDatabase(): Promise<void> {
         position: 'Guru Matematika',
         phone: '085712345678',
         isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        createdAt: SEED_BASELINE_ISO,
+        updatedAt: SEED_BASELINE_ISO,
       },
       {
         id: 'usr-stf-02',
@@ -189,8 +190,8 @@ export async function initializeDatabase(): Promise<void> {
         position: 'Staf Keamanan',
         phone: '089612345678',
         isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        createdAt: SEED_BASELINE_ISO,
+        updatedAt: SEED_BASELINE_ISO,
       },
     ];
 
@@ -206,7 +207,7 @@ export async function initializeDatabase(): Promise<void> {
       targetEntity: 'Users',
       targetId: 'all',
       details: 'Sistem diinisialisasi pertama kali untuk manajemen presensi sekolah.',
-      timestamp: new Date().toISOString(),
+      timestamp: SEED_BASELINE_ISO,
     };
     localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify([initialLog]));
   }
@@ -341,7 +342,7 @@ export async function initializeDatabase(): Promise<void> {
       requireStrictGps: true,
       minFaceMatchThreshold: 0.75,
       themeColor: '#059669',
-      lastSyncTimestamp: new Date().toISOString(),
+      lastSyncTimestamp: SEED_BASELINE_ISO,
     };
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(defaultSettings));
   }
@@ -408,7 +409,7 @@ export async function authenticateUser(identifier: string, rawPassword: string):
   const cleanId = identifier.trim().toLowerCase();
 
   const findUserInList = (list: User[]): User | undefined => {
-    let found = list.find((u) => {
+    const found = list.find((u) => {
       return (
         u.username.toLowerCase() === cleanId ||
         (u.email && u.email.toLowerCase() === cleanId) ||
@@ -416,16 +417,8 @@ export async function authenticateUser(identifier: string, rawPassword: string):
       );
     });
 
-    if (!found && (cleanId === 'presensiapp138@gmail.com' || cleanId.includes('presensi') || cleanId.includes('kepsek') || cleanId.includes('mulyadi'))) {
-      const ksUser = list.find((u) => u.role === 'kepala_sekolah');
-      if (ksUser) {
-        found = ksUser;
-        if (ksUser.email !== identifier.trim()) {
-          ksUser.email = identifier.trim();
-          ksUser.updatedAt = new Date().toISOString();
-          localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(list));
-        }
-      }
+    if (!found && (cleanId === 'presensiapp138@gmail.com' || cleanId.includes('presensi') || cleanId.includes('kepsek'))) {
+      return list.find((u) => u.role === 'kepala_sekolah');
     }
     return found;
   };
@@ -582,7 +575,17 @@ export async function createUser(
 
   users.push(newUser);
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
-  syncRecordToCloud(SYNC_COLLECTIONS.USERS, newUser.id, newUser);
+  await syncRecordToCloud(SYNC_COLLECTIONS.USERS, newUser.id, newUser);
+  {
+    const curSettings = getAppSettings();
+    const mutatedSettings = {
+      ...curSettings,
+      lastUserMutationAt: new Date().toISOString(),
+      lastSyncTimestamp: new Date().toISOString(),
+    };
+    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(mutatedSettings));
+    syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', mutatedSettings).catch(() => {});
+  }
   import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
 
   logAuditAction(
@@ -593,10 +596,14 @@ export async function createUser(
     `Membuat akun baru ${newUser.name} (${newUser.role}) dengan NIP ${newUser.nip}.`
   );
 
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: 'users' } }));
+  }
+
   return {
     success: true,
     user: newUser,
-    message: `Akun ${newUser.name} berhasil dibuat dan disinkronkan.`,
+    message: `Akun ${newUser.name} berhasil dibuat dan disinkronkan ke database cloud.`,
   };
 }
 
@@ -627,23 +634,25 @@ export async function updateUser(
   }
 
   // Cek keunikan NIP jika diubah
-  if (updates.nip && updates.nip !== targetUser.nip) {
-    if (users.some((u) => u.id !== userId && u.nip === updates.nip)) {
-      return { success: false, message: `NIP "${updates.nip}" sudah digunakan akun lain.` };
+  if (updates.nip && updates.nip.trim() !== targetUser.nip) {
+    const cleanNip = updates.nip.trim();
+    if (users.some((u) => u.id !== userId && u.nip === cleanNip)) {
+      return { success: false, message: `NIP "${cleanNip}" sudah digunakan akun lain.` };
     }
-    targetUser.nip = updates.nip;
+    targetUser.nip = cleanNip;
   }
 
   // Cek keunikan Username jika diubah
-  if (updates.username && updates.username.toLowerCase() !== targetUser.username.toLowerCase()) {
-    if (users.some((u) => u.id !== userId && u.username.toLowerCase() === updates.username!.toLowerCase())) {
-      return { success: false, message: `Username "${updates.username}" sudah digunakan.` };
+  if (updates.username && updates.username.trim().toLowerCase() !== targetUser.username.toLowerCase()) {
+    const cleanUsername = updates.username.trim();
+    if (users.some((u) => u.id !== userId && u.username.toLowerCase() === cleanUsername.toLowerCase())) {
+      return { success: false, message: `Username "${cleanUsername}" sudah digunakan.` };
     }
-    targetUser.username = updates.username;
+    targetUser.username = cleanUsername;
   }
 
-  if (updates.name) targetUser.name = updates.name;
-  if (updates.position) targetUser.position = updates.position;
+  if (updates.name) targetUser.name = updates.name.trim();
+  if (updates.position) targetUser.position = updates.position.trim();
   if (updates.departmentName !== undefined) {
     targetUser.departmentName = updates.departmentName.trim();
     targetUser.departmentId = updates.departmentName.trim();
@@ -653,8 +662,8 @@ export async function updateUser(
   }
   if (updates.scheduleId !== undefined) targetUser.scheduleId = updates.scheduleId;
   if (updates.assignedSessionIds !== undefined) targetUser.assignedSessionIds = updates.assignedSessionIds;
-  if (updates.email !== undefined) targetUser.email = updates.email;
-  if (updates.phone !== undefined) targetUser.phone = updates.phone;
+  if (updates.email !== undefined) targetUser.email = updates.email?.trim() || undefined;
+  if (updates.phone !== undefined) targetUser.phone = updates.phone?.trim() || undefined;
   if (updates.isActive !== undefined) targetUser.isActive = updates.isActive;
 
   // Jika ada reset password
@@ -664,10 +673,21 @@ export async function updateUser(
     targetUser.savedPassword = cleanNewPass;
   }
 
-  targetUser.updatedAt = new Date().toISOString();
+  const mutationIso = new Date().toISOString();
+  targetUser.updatedAt = mutationIso;
   users[index] = targetUser;
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
-  syncRecordToCloud(SYNC_COLLECTIONS.USERS, targetUser.id, targetUser);
+  await syncRecordToCloud(SYNC_COLLECTIONS.USERS, targetUser.id, targetUser);
+  {
+    const curSettings = getAppSettings();
+    const mutatedSettings = {
+      ...curSettings,
+      lastUserMutationAt: mutationIso,
+      lastSyncTimestamp: mutationIso,
+    };
+    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(mutatedSettings));
+    syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', mutatedSettings).catch(() => {});
+  }
   import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
 
   // Synchronize Face Registry for this user if name or NIP changed
@@ -734,7 +754,11 @@ export async function updateUser(
     `Memperbarui profil akun ${targetUser.name} (${targetUser.role}).`
   );
 
-  return { success: true, message: `Data akun ${targetUser.name} berhasil diperbarui.` };
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: 'users' } }));
+  }
+
+  return { success: true, message: `Data akun ${targetUser.name} berhasil diperbarui dan disinkronkan ke database.` };
 }
 
 /**
@@ -914,15 +938,20 @@ export function getAllSchedules(): Schedule[] {
   let hasChanges = list.length !== originalLength;
 
   // Pastikan Sesi 1, Sesi 2, Sesi 3 selalu tersedia untuk fleksibilitas sesi per karyawan
+  const addedSchedules: Schedule[] = [];
   for (const initSched of INITIAL_SCHEDULES) {
     if (!list.some((s) => s.id === initSched.id || s.sessionName === initSched.sessionName)) {
       list.push(initSched);
+      addedSchedules.push(initSched);
       hasChanges = true;
     }
   }
 
   if (hasChanges || !data) {
     localStorage.setItem(STORAGE_KEYS.SCHEDULES, JSON.stringify(list));
+    for (const sched of addedSchedules) {
+      syncRecordToCloud(SYNC_COLLECTIONS.SCHEDULES, sched.id, sched).catch(() => {});
+    }
   }
 
   return list;
@@ -1309,7 +1338,7 @@ export function getAppSettings(): AppSettings {
         requireStrictGps: true,
         minFaceMatchThreshold: 0.75,
         themeColor: '#059669',
-        lastSyncTimestamp: new Date().toISOString(),
+        lastSyncTimestamp: SEED_BASELINE_ISO,
       };
 }
 

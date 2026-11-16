@@ -193,6 +193,7 @@ export interface AppSettings {
   themeColor: string;
   lastSyncTimestamp?: string;
   lastWorkspaceUserSyncAt?: string;
+  lastUserMutationAt?: string;
   googleAccountEmail?: string;
   isGoogleConnected?: boolean;
   googleConnectedAt?: string;

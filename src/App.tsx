@@ -26,7 +26,11 @@ import { AssignmentManager } from './components/operations/AssignmentManager';
 import { ReportManager } from './components/reports/ReportManager';
 import { AuditLogManager } from './components/audit/AuditLogManager';
 import { AlertCircle } from 'lucide-react';
-import { startMultiDeviceRealtimeSync } from './services/firestoreSync';
+import {
+  startMultiDeviceRealtimeSync,
+  pullAllCloudDataOnStartup,
+  autoSyncCloudInBackground,
+} from './services/firestoreSync';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -35,8 +39,14 @@ export default function App() {
   const [syncVersion, setSyncVersion] = useState<number>(0);
 
   useEffect(() => {
+    let isMounted = true;
     async function init() {
+      // Tarik seluruh data Cloud Firestore lebih dulu (agar Vercel / domain baru langsung mewarisi akun & database tersinkron)
+      await pullAllCloudDataOnStartup();
       await initializeDatabase();
+      // Pastikan seluruh data lokal & antrean tertunda otomatis tersinkron ke cloud tanpa perlu di-klik
+      autoSyncCloudInBackground().catch(() => {});
+      if (!isMounted) return;
       const session = getCurrentSession();
       if (session) {
         setCurrentUser(session);
@@ -59,6 +69,7 @@ export default function App() {
     });
 
     return () => {
+      isMounted = false;
       stopSync();
     };
   }, []);

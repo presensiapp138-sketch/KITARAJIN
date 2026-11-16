@@ -110,13 +110,84 @@ export const LOCAL_STORAGE_KEYS: Record<string, string> = {
   settings: 'kitarajin_table_settings',
 };
 
+const CLOUD_OUTBOX_KEY = 'kitarajin_cloud_outbox';
+
+interface OutboxEntry {
+  op: 'set' | 'delete';
+  col: string;
+  id: string;
+  data?: Record<string, any>;
+  queuedAt: string;
+}
+
 let isSyncInitialized = false;
 let activeUnsubscribes: Unsubscribe[] = [];
 let cloudConnectionActive = false;
 let lastSyncTime: string = new Date().toISOString();
+let isAutoSyncRunning = false;
+
+export const SEED_BASELINE_ISO = '2020-01-01T00:00:00.000Z';
+export const SEED_BASELINE_MS = Date.parse(SEED_BASELINE_ISO);
+
+function loadOutbox(): OutboxEntry[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(CLOUD_OUTBOX_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveOutbox(entries: OutboxEntry[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (entries.length === 0) {
+      localStorage.removeItem(CLOUD_OUTBOX_KEY);
+    } else {
+      localStorage.setItem(CLOUD_OUTBOX_KEY, JSON.stringify(entries.slice(-300)));
+    }
+  } catch {
+    // ignore quota errors
+  }
+}
+
+function enqueueOutbox(entry: OutboxEntry): void {
+  const list = loadOutbox().filter((e) => !(e.col === entry.col && e.id === entry.id));
+  list.push(entry);
+  saveOutbox(list);
+}
+
+function removeFromOutbox(col: string, id: string): void {
+  const current = loadOutbox();
+  const next = current.filter((e) => !(e.col === col && e.id === id));
+  if (next.length !== current.length) {
+    saveOutbox(next);
+  }
+}
+
+function syncPendingWorkspaceFlagFromSettings(settingsObj: any): void {
+  if (!settingsObj || typeof window === 'undefined') return;
+  const syncedMs = Date.parse(settingsObj.lastWorkspaceUserSyncAt || '') || 0;
+  const mutatedMs = Date.parse(settingsObj.lastUserMutationAt || '') || 0;
+  if (syncedMs > 0 && syncedMs >= mutatedMs) {
+    const localPendingStr = localStorage.getItem('kitarajin_pending_workspace_users_sync');
+    const localPendingMs = Date.parse(localPendingStr || '') || 0;
+    if (!localPendingStr || syncedMs >= localPendingMs) {
+      localStorage.removeItem('kitarajin_pending_workspace_users_sync');
+    }
+    window.dispatchEvent(
+      new CustomEvent('kitarajin_workspace_sync', {
+        detail: { pending: false, lastSync: settingsObj.lastWorkspaceUserSyncAt },
+      })
+    );
+  }
+}
 
 /**
  * Gabungkan data array pengguna tanpa pernah menghapus username/password yang sudah ditambahkan
+ * serta memastikan akun seed awal (2020) TIDAK PERNAH menimpa akun yang sudah diubah di cloud!
  */
 export function mergeUserRecordsNonDestructive(
   localUsers: any[],
@@ -140,6 +211,8 @@ export function mergeUserRecordsNonDestructive(
     if (!l || !l.id) continue;
     const id = String(l.id);
     const existingRemote = byId.get(id);
+    const localMs = getUpdatedMs(l);
+    const isLocalBaselineSeed = localMs <= SEED_BASELINE_MS || Boolean(l.isSeedDefault);
 
     if (!existingRemote) {
       // Cek apakah ada username identik dengan ID berbeda (hindari duplikat username)
@@ -156,7 +229,8 @@ export function mergeUserRecordsNonDestructive(
 
       if (matchedKey) {
         const remoteByName = byId.get(matchedKey);
-        const localNewer = getUpdatedMs(l) > getUpdatedMs(remoteByName);
+        const remoteMs = getUpdatedMs(remoteByName);
+        const localNewer = !isLocalBaselineSeed && localMs > remoteMs;
         const winner = localNewer ? { ...remoteByName, ...l } : { ...l, ...remoteByName };
         if (!winner.savedPassword) {
           winner.savedPassword = l.savedPassword || remoteByName.savedPassword;
@@ -165,7 +239,7 @@ export function mergeUserRecordsNonDestructive(
           winner.passwordHash = l.passwordHash || remoteByName.passwordHash;
         }
         byId.set(matchedKey, winner);
-        if (localNewer || (!remoteByName.savedPassword && winner.savedPassword)) {
+        if (localNewer || (!isLocalBaselineSeed && !remoteByName.savedPassword && winner.savedPassword)) {
           toUpload.push(winner);
         }
       } else {
@@ -174,25 +248,27 @@ export function mergeUserRecordsNonDestructive(
         toUpload.push(l);
       }
     } else {
-      const localMs = getUpdatedMs(l);
       const remoteMs = getUpdatedMs(existingRemote);
-      const localNewer = localMs > remoteMs;
+      const localNewer = !isLocalBaselineSeed && localMs > remoteMs;
       const mergedUser = localNewer
         ? { ...existingRemote, ...l }
         : { ...l, ...existingRemote };
 
-      // Jangan pernah hilangkan savedPassword jika salah satu sisi memilikinya
-      const sameHash = !l.passwordHash || !existingRemote.passwordHash || l.passwordHash === existingRemote.passwordHash;
+      // Jangan pernah hilangkan savedPassword jika salah satu sisi memilikinya dan hash cocok
+      const sameHash =
+        !l.passwordHash ||
+        !existingRemote.passwordHash ||
+        l.passwordHash === existingRemote.passwordHash;
       if (!mergedUser.savedPassword && sameHash) {
         mergedUser.savedPassword = l.savedPassword || existingRemote.savedPassword;
       }
 
       byId.set(id, mergedUser);
 
-      // Jika lokal lebih baru atau memiliki savedPassword yang belum tersimpan di cloud
+      // Hanya upload ke cloud bila lokal benar-benar lebih baru atau melengkapi savedPassword tanpa menimpa perubahan remote
       if (
         localNewer ||
-        (mergedUser.savedPassword && !existingRemote.savedPassword)
+        (!isLocalBaselineSeed && mergedUser.savedPassword && !existingRemote.savedPassword && sameHash)
       ) {
         toUpload.push(mergedUser);
       }
@@ -260,29 +336,113 @@ export async function pullUsersFromCloudAndMerge(): Promise<any[]> {
 }
 
 /**
- * Kirim data per dokumen ke Cloud Firestore
+ * Tarik seluruh data Cloud Firestore saat aplikasi pertama kali dibuka (khususnya domain baru seperti Vercel)
+ * SEBELUM initializeDatabase() berjalan agar akun/pengaturan yang sudah diubah tidak pernah tertimpa data demo awal.
+ */
+export async function pullAllCloudDataOnStartup(): Promise<void> {
+  const fetchAll = async () => {
+    const collections = Object.values(SYNC_COLLECTIONS);
+    await Promise.allSettled(
+      collections.map(async (colName) => {
+        try {
+          const snapshot = await getDocs(collection(db, colName));
+          if (snapshot.empty) return;
+          cloudConnectionActive = true;
+          lastSyncTime = new Date().toISOString();
+
+          const storageKey = LOCAL_STORAGE_KEYS[colName];
+          if (colName === 'settings') {
+            const settingsDoc = snapshot.docs.find((d) => d.id === 'global')?.data();
+            if (settingsDoc) {
+              const localStr = localStorage.getItem(storageKey);
+              const localSettings = localStr ? JSON.parse(localStr) : null;
+              const remoteTs = Date.parse(settingsDoc.lastSyncTimestamp || '') || 0;
+              const localTs = Date.parse(localSettings?.lastSyncTimestamp || '') || 0;
+              const useLocal = Boolean(localSettings && localTs > SEED_BASELINE_MS && localTs > remoteTs);
+              const mergedSettings = useLocal
+                ? { ...settingsDoc, ...localSettings }
+                : { ...(localSettings || {}), ...settingsDoc };
+              localStorage.setItem(storageKey, JSON.stringify(mergedSettings));
+              syncPendingWorkspaceFlagFromSettings(mergedSettings);
+            }
+          } else if (colName === 'users') {
+            const remoteUsers = snapshot.docs.map((docSnap) => ({
+              id: docSnap.id,
+              ...docSnap.data(),
+            }));
+            const localStr = localStorage.getItem(storageKey);
+            const localUsers = localStr ? JSON.parse(localStr) : [];
+            const { merged, toUpload } = mergeUserRecordsNonDestructive(
+              Array.isArray(localUsers) ? localUsers : [],
+              remoteUsers
+            );
+            if (merged.length > 0) {
+              localStorage.setItem(storageKey, JSON.stringify(merged));
+            }
+            for (const u of toUpload) {
+              syncRecordToCloud(SYNC_COLLECTIONS.USERS, String(u.id), u).catch(() => {});
+            }
+          } else {
+            const remoteItems = snapshot.docs.map((docSnap) => ({
+              id: docSnap.id,
+              ...docSnap.data(),
+            }));
+            if (remoteItems.length > 0) {
+              localStorage.setItem(storageKey, JSON.stringify(remoteItems));
+            }
+          }
+        } catch (colErr) {
+          console.warn(`Startup pull note (${colName}):`, colErr);
+        }
+      })
+    );
+  };
+
+  try {
+    await Promise.race([
+      fetchAll(),
+      new Promise<void>((resolve) => setTimeout(resolve, 5500)),
+    ]);
+  } catch (err) {
+    console.warn('pullAllCloudDataOnStartup warning:', err);
+  }
+}
+
+/**
+ * Kirim data per dokumen ke Cloud Firestore (otomatis masuk antrean outbox bila jaringan terputus)
  */
 export async function syncRecordToCloud(
   collectionName: string,
   recordId: string,
   data: Record<string, any>
 ): Promise<void> {
+  const cleanData = JSON.parse(JSON.stringify(data));
   try {
-    const cleanData = JSON.parse(JSON.stringify(data));
     await setDoc(doc(db, collectionName, recordId), cleanData, { merge: true });
+    removeFromOutbox(collectionName, recordId);
     lastSyncTime = new Date().toISOString();
     cloudConnectionActive = true;
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: collectionName } }));
+    }
   } catch (err: any) {
     const msg = String(err?.message || err || '');
     if (msg.toLowerCase().includes('permission')) {
       handleFirestoreError(err, OperationType.WRITE, `${collectionName}/${recordId}`);
     }
-    console.warn(`Gagal sinkronisasi ${collectionName}/${recordId} ke Firestore:`, err);
+    enqueueOutbox({
+      op: 'set',
+      col: collectionName,
+      id: recordId,
+      data: cleanData,
+      queuedAt: new Date().toISOString(),
+    });
+    console.warn(`Antrean auto-sync cloud untuk ${collectionName}/${recordId}:`, err);
   }
 }
 
 /**
- * Hapus data dokumen dari Cloud Firestore
+ * Hapus data dokumen dari Cloud Firestore (otomatis masuk antrean outbox bila jaringan terputus)
  */
 export async function deleteRecordFromCloud(
   collectionName: string,
@@ -290,13 +450,181 @@ export async function deleteRecordFromCloud(
 ): Promise<void> {
   try {
     await deleteDoc(doc(db, collectionName, recordId));
+    removeFromOutbox(collectionName, recordId);
     lastSyncTime = new Date().toISOString();
+    cloudConnectionActive = true;
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: collectionName } }));
+    }
   } catch (err: any) {
     const msg = String(err?.message || err || '');
     if (msg.toLowerCase().includes('permission')) {
       handleFirestoreError(err, OperationType.DELETE, `${collectionName}/${recordId}`);
     }
-    console.warn(`Gagal menghapus ${collectionName}/${recordId} dari Firestore:`, err);
+    enqueueOutbox({
+      op: 'delete',
+      col: collectionName,
+      id: recordId,
+      queuedAt: new Date().toISOString(),
+    });
+    console.warn(`Antrean auto-delete cloud untuk ${collectionName}/${recordId}:`, err);
+  }
+}
+
+/**
+ * Proses otomatis seluruh antrean perubahan yang tertunda ke Cloud Firestore
+ */
+export async function flushCloudOutbox(): Promise<number> {
+  const queue = loadOutbox();
+  if (queue.length === 0) return 0;
+
+  let flushed = 0;
+  const remaining: OutboxEntry[] = [];
+
+  for (let i = 0; i < queue.length; i++) {
+    const entry = queue[i];
+    try {
+      if (entry.op === 'set' && entry.data) {
+        await setDoc(doc(db, entry.col, entry.id), entry.data, { merge: true });
+      } else if (entry.op === 'delete') {
+        await deleteDoc(doc(db, entry.col, entry.id));
+      }
+      flushed++;
+      cloudConnectionActive = true;
+      lastSyncTime = new Date().toISOString();
+    } catch (err: any) {
+      const msg = String(err?.message || err || '');
+      if (msg.toLowerCase().includes('permission')) {
+        handleFirestoreError(
+          err,
+          entry.op === 'delete' ? OperationType.DELETE : OperationType.WRITE,
+          `${entry.col}/${entry.id}`
+        );
+      }
+      remaining.push(...queue.slice(i));
+      cloudConnectionActive = false;
+      break;
+    }
+  }
+
+  saveOutbox(remaining);
+  if (flushed > 0 && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: 'outbox', flushed } }));
+  }
+  return flushed;
+}
+
+/**
+ * Sinkronisasi penuh otomatis di latar belakang tanpa klik pengguna:
+ * - Flush antrean offline
+ * - Pastikan data inisial / lokal yang belum ada di Firestore langsung terunggah non-destruktif
+ */
+export async function autoSyncCloudInBackground(): Promise<void> {
+  if (isAutoSyncRunning) return;
+  isAutoSyncRunning = true;
+
+  try {
+    await flushCloudOutbox();
+
+    // 1. Settings global
+    try {
+      const settingsSnap = await getDocs(collection(db, SYNC_COLLECTIONS.SETTINGS));
+      const remoteSettings = settingsSnap.docs.find((d) => d.id === 'global')?.data();
+      const localStr = localStorage.getItem(LOCAL_STORAGE_KEYS.settings);
+      const localSettings = localStr ? JSON.parse(localStr) : null;
+
+      if (localSettings) {
+        if (!remoteSettings) {
+          await setDoc(doc(db, SYNC_COLLECTIONS.SETTINGS, 'global'), JSON.parse(JSON.stringify(localSettings)), {
+            merge: true,
+          });
+        } else {
+          const remoteTs = Date.parse(remoteSettings.lastSyncTimestamp || '') || 0;
+          const localTs = Date.parse(localSettings.lastSyncTimestamp || '') || 0;
+          if (localTs > SEED_BASELINE_MS && localTs > remoteTs) {
+            const merged = { ...remoteSettings, ...localSettings };
+            await setDoc(doc(db, SYNC_COLLECTIONS.SETTINGS, 'global'), JSON.parse(JSON.stringify(merged)), {
+              merge: true,
+            });
+          }
+        }
+      }
+    } catch {
+      // ignore transient errors
+    }
+
+    // 2. Users (non-destruktif: hanya upload yang lebih baru atau akun baru lokal)
+    try {
+      const remoteSnap = await getDocs(collection(db, SYNC_COLLECTIONS.USERS));
+      const remoteUsers = remoteSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const localStr = localStorage.getItem(LOCAL_STORAGE_KEYS.users);
+      const localUsers = localStr ? JSON.parse(localStr) : [];
+      const { merged, toUpload } = mergeUserRecordsNonDestructive(
+        Array.isArray(localUsers) ? localUsers : [],
+        remoteUsers
+      );
+      if (merged.length > 0) {
+        localStorage.setItem(LOCAL_STORAGE_KEYS.users, JSON.stringify(merged));
+      }
+      for (const u of toUpload) {
+        if (u && u.id) {
+          await setDoc(doc(db, SYNC_COLLECTIONS.USERS, String(u.id)), JSON.parse(JSON.stringify(u)), {
+            merge: true,
+          });
+        }
+      }
+    } catch {
+      // ignore transient errors
+    }
+
+    // 3. Koleksi 8 tabel lainnya: unggah item lokal yang belum ada di Cloud Firestore
+    const otherCols = [
+      SYNC_COLLECTIONS.DEPARTMENTS,
+      SYNC_COLLECTIONS.SCHEDULES,
+      SYNC_COLLECTIONS.LOCATIONS,
+      SYNC_COLLECTIONS.FACE_REGISTRY,
+      SYNC_COLLECTIONS.ATTENDANCE,
+      SYNC_COLLECTIONS.LEAVE_REQUESTS,
+      SYNC_COLLECTIONS.ASSIGNMENTS,
+      SYNC_COLLECTIONS.AUDIT_LOGS,
+    ];
+
+    await Promise.allSettled(
+      otherCols.map(async (colName) => {
+        const storageKey = LOCAL_STORAGE_KEYS[colName];
+        const localStr = localStorage.getItem(storageKey);
+        if (!localStr) return;
+        let localArr: any[] = [];
+        try {
+          localArr = JSON.parse(localStr);
+        } catch {
+          return;
+        }
+        if (!Array.isArray(localArr) || localArr.length === 0) return;
+
+        const remoteSnap = await getDocs(collection(db, colName));
+        const remoteIds = new Set(remoteSnap.docs.map((d) => d.id));
+
+        for (const item of localArr) {
+          if (!item || !item.id) continue;
+          const id = String(item.id);
+          if (colName === SYNC_COLLECTIONS.ATTENDANCE && id.startsWith('att-seed-')) continue;
+          if (!remoteIds.has(id)) {
+            await setDoc(doc(db, colName, id), JSON.parse(JSON.stringify(item)), { merge: true });
+          }
+        }
+      })
+    );
+
+    cloudConnectionActive = true;
+    lastSyncTime = new Date().toISOString();
+  } catch (err) {
+    console.warn('autoSyncCloudInBackground note:', err);
+  } finally {
+    isAutoSyncRunning = false;
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: 'auto' } }));
+    }
   }
 }
 
@@ -311,6 +639,7 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
   isSyncInitialized = true;
 
   testFirestoreConnection();
+  autoSyncCloudInBackground().catch(() => {});
 
   const collectionsToWatch = Object.values(SYNC_COLLECTIONS);
 
@@ -322,7 +651,7 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
         lastSyncTime = new Date().toISOString();
 
         if (colName === 'settings') {
-          // Settings disimpan sebagai objek tunggal (merge agar ID sheet/drive tidak hilang)
+          // Settings disimpan sebagai objek tunggal (merge agar ID sheet/drive & status sinkron tidak hilang)
           const settingsDoc = snapshot.docs.find((d) => d.id === 'global')?.data();
           const localSettingsStr = localStorage.getItem(LOCAL_STORAGE_KEYS.settings);
           const localSettings = localSettingsStr ? JSON.parse(localSettingsStr) : null;
@@ -330,11 +659,12 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
           if (settingsDoc) {
             const remoteTs = Date.parse(settingsDoc.lastSyncTimestamp || '') || 0;
             const localTs = Date.parse(localSettings?.lastSyncTimestamp || '') || 0;
-            const mergedSettings =
-              localSettings && localTs > remoteTs
-                ? { ...settingsDoc, ...localSettings }
-                : { ...(localSettings || {}), ...settingsDoc };
+            const useLocal = Boolean(localSettings && localTs > SEED_BASELINE_MS && localTs > remoteTs);
+            const mergedSettings = useLocal
+              ? { ...settingsDoc, ...localSettings }
+              : { ...(localSettings || {}), ...settingsDoc };
             localStorage.setItem(LOCAL_STORAGE_KEYS.settings, JSON.stringify(mergedSettings));
+            syncPendingWorkspaceFlagFromSettings(mergedSettings);
           } else if (localSettings) {
             setDoc(doc(db, 'settings', 'global'), localSettings).catch(() => {});
           }
@@ -409,9 +739,32 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
     );
   });
 
+  const handleOnline = () => {
+    autoSyncCloudInBackground().catch(() => {});
+  };
+  const handleVisibility = () => {
+    if (document.visibilityState === 'visible') {
+      flushCloudOutbox().catch(() => {});
+    }
+  };
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', handleOnline);
+    document.addEventListener('visibilitychange', handleVisibility);
+  }
+  const outboxTimer = setInterval(() => {
+    if (loadOutbox().length > 0) {
+      flushCloudOutbox().catch(() => {});
+    }
+  }, 15000);
+
   return () => {
     activeUnsubscribes.forEach((unsub) => unsub());
     activeUnsubscribes = [];
+    clearInterval(outboxTimer);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', handleOnline);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    }
     isSyncInitialized = false;
   };
 }
@@ -419,11 +772,19 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
 /**
  * Cek status sinkronisasi cloud real-time saat ini
  */
-export function getCloudSyncStatus(): { isOnline: boolean; lastSync: string; databaseId: string } {
+export function getCloudSyncStatus(): {
+  isOnline: boolean;
+  lastSync: string;
+  databaseId: string;
+  pendingCount: number;
+  isSyncing: boolean;
+} {
   return {
     isOnline: cloudConnectionActive,
     lastSync: lastSyncTime,
     databaseId: firebaseConfig.firestoreDatabaseId,
+    pendingCount: loadOutbox().length,
+    isSyncing: isAutoSyncRunning,
   };
 }
 
@@ -448,9 +809,37 @@ export async function pushAllLocalDataToCloud(): Promise<{ success: boolean; tot
       }
     }
 
-    // 2. Koleksi 9 tabel lainnya
+    // 2. Koleksi Users: merge non-destruktif terlebih dahulu agar akun demo yang sudah diubah tidak pernah tertimpa
+    try {
+      const remoteSnap = await getDocs(collection(db, SYNC_COLLECTIONS.USERS));
+      const remoteUsers = remoteSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const localUsersStr = localStorage.getItem(LOCAL_STORAGE_KEYS.users);
+      const localUsersArr = localUsersStr ? JSON.parse(localUsersStr) : [];
+      const { merged } = mergeUserRecordsNonDestructive(
+        Array.isArray(localUsersArr) ? localUsersArr : [],
+        remoteUsers
+      );
+      if (merged.length > 0) {
+        localStorage.setItem(LOCAL_STORAGE_KEYS.users, JSON.stringify(merged));
+        for (const docItem of merged) {
+          if (docItem && docItem.id) {
+            try {
+              const cleanItem = JSON.parse(JSON.stringify(docItem));
+              await setDoc(doc(db, SYNC_COLLECTIONS.USERS, String(docItem.id)), cleanItem, { merge: true });
+              count++;
+            } catch (itemErr: any) {
+              console.warn(`Gagal upload users/${docItem.id}:`, itemErr);
+              lastError = itemErr?.message || 'Error item';
+            }
+          }
+        }
+      }
+    } catch (userErr: any) {
+      console.warn('Gagal merge users sebelum push cloud:', userErr);
+    }
+
+    // 3. Koleksi 8 tabel lainnya
     const collectionsToPush = [
-      { col: SYNC_COLLECTIONS.USERS, key: LOCAL_STORAGE_KEYS.users },
       { col: SYNC_COLLECTIONS.DEPARTMENTS, key: LOCAL_STORAGE_KEYS.departments },
       { col: SYNC_COLLECTIONS.SCHEDULES, key: LOCAL_STORAGE_KEYS.schedules },
       { col: SYNC_COLLECTIONS.LOCATIONS, key: LOCAL_STORAGE_KEYS.locations },

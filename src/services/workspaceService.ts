@@ -30,6 +30,7 @@ import { hashPassword } from './crypto';
 import {
   mergeUserRecordsNonDestructive,
   syncRecordToCloud,
+  SEED_BASELINE_ISO,
   SYNC_COLLECTIONS,
 } from './firestoreSync';
 import { User } from '../types';
@@ -60,7 +61,16 @@ export const DRIVE_USERS_BACKUP_FILENAME = 'KITARAJIN_Users_Database.json';
 export const DRIVE_FULL_BACKUP_FILENAME = 'KITARAJIN_Full_Database.json';
 
 export const hasPendingWorkspaceUserSync = (): boolean => {
-  return Boolean(localStorage.getItem(PENDING_WORKSPACE_SYNC_KEY));
+  const settings = getAppSettings();
+  const syncedMs = Date.parse(settings.lastWorkspaceUserSyncAt || '') || 0;
+  const mutatedMs = Date.parse(settings.lastUserMutationAt || '') || 0;
+  const localPendingStr = localStorage.getItem(PENDING_WORKSPACE_SYNC_KEY);
+  const localPendingMs = Date.parse(localPendingStr || '') || 0;
+
+  if (syncedMs > 0 && syncedMs >= mutatedMs && syncedMs >= localPendingMs) {
+    return false;
+  }
+  return Boolean(localPendingStr) || mutatedMs > syncedMs;
 };
 
 export const markPendingWorkspaceUserSync = (): void => {
@@ -660,7 +670,6 @@ async function parseSheetRowsToUsers(rows: any[][]): Promise<User[]> {
       : ['sesi-1', 'sesi-2', 'sesi-3'];
 
     const deptVal = idxDept !== -1 ? String(r[idxDept] || '').trim() : '';
-    const nowIso = new Date().toISOString();
 
     parsedUsers.push({
       id: id || `usr-sheet-${username || i}`,
@@ -676,8 +685,8 @@ async function parseSheetRowsToUsers(rows: any[][]): Promise<User[]> {
       position: idxPosition !== -1 ? String(r[idxPosition] || '').trim() : 'Pegawai',
       assignedSessionIds,
       isActive,
-      createdAt: idxCreated !== -1 && r[idxCreated] ? String(r[idxCreated]) : nowIso,
-      updatedAt: idxUpdated !== -1 && r[idxUpdated] ? String(r[idxUpdated]) : nowIso,
+      createdAt: idxCreated !== -1 && r[idxCreated] ? String(r[idxCreated]) : SEED_BASELINE_ISO,
+      updatedAt: idxUpdated !== -1 && r[idxUpdated] ? String(r[idxUpdated]) : SEED_BASELINE_ISO,
     });
   }
 
@@ -974,13 +983,15 @@ export async function syncUsersWithGoogleDrive(
   // Simpan fileId Drive agar sinkronisasi berikutnya langsung memperbarui file yang sama
   if (targetFileId) {
     const latestSettings = getAppSettings();
+    const syncIso = new Date().toISOString();
     const updatedSettings = {
       ...latestSettings,
       googleDriveUsersFileId: targetFileId,
-      lastWorkspaceUserSyncAt: new Date().toISOString(),
+      lastWorkspaceUserSyncAt: syncIso,
+      lastSyncTimestamp: syncIso,
     };
     localStorage.setItem('kitarajin_table_settings', JSON.stringify(updatedSettings));
-    syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', updatedSettings).catch(() => {});
+    await syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', updatedSettings);
   }
 
   return {
@@ -1038,13 +1049,15 @@ export async function syncAllUsersToDriveAndSheet(
   const savedSettings = {
     ...latestSettings,
     googleDriveUsersFileId: driveFileId || latestSettings.googleDriveUsersFileId,
+    googleSheetSpreadsheetId: sheetId || latestSettings.googleSheetSpreadsheetId,
+    googleDriveFolderId: folderId || latestSettings.googleDriveFolderId,
     lastWorkspaceUserSyncAt: nowIso,
     lastSyncTimestamp: nowIso,
     isGoogleConnected: true,
     storageMode: 'google_workspace_sync' as const,
   };
   localStorage.setItem('kitarajin_table_settings', JSON.stringify(savedSettings));
-  syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', savedSettings).catch(() => {});
+  await syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', savedSettings);
 
   clearPendingWorkspaceUserSync();
   if (typeof window !== 'undefined') {
@@ -1448,6 +1461,19 @@ export async function writeAllTabsData(accessToken: string, spreadsheetId: strin
     throw new Error(err.error?.message || 'Gagal menulis data ke tab Google Sheets.');
   }
 
+  const syncIso = new Date().toISOString();
+  const latestSettings = getAppSettings();
+  const updatedSettings = {
+    ...latestSettings,
+    googleSheetSpreadsheetId: cleanId || latestSettings.googleSheetSpreadsheetId,
+    lastWorkspaceUserSyncAt: syncIso,
+    lastSyncTimestamp: syncIso,
+    isGoogleConnected: true,
+    storageMode: 'google_workspace_sync' as const,
+  };
+  localStorage.setItem('kitarajin_table_settings', JSON.stringify(updatedSettings));
+  await syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', updatedSettings);
+
   clearPendingWorkspaceUserSync();
 }
 
@@ -1518,7 +1544,7 @@ export async function executeAutoCreateDatabase(
   await syncAllUsersToDriveAndSheet(token, { spreadsheetId, folderId });
   await syncFullAppDatabaseToDrive(token, folderId);
 
-  // 4. Simpan ke AppSettings
+  // 4. Simpan ke AppSettings (lokal & Cloud Firestore agar domain Vercel langsung mewarisi status tersinkron)
   if (onStepProgress) onStepProgress('Menyimpan ID database ke sistem KITARAJIN...');
   const nowIso = new Date().toISOString();
   updateAppSettings(currentUser, {
@@ -1529,6 +1555,7 @@ export async function executeAutoCreateDatabase(
     lastWorkspaceUserSyncAt: nowIso,
     lastSyncTimestamp: nowIso,
   });
+  await syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', getAppSettings());
 
   return {
     success: true,

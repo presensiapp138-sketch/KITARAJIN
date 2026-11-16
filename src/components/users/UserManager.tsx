@@ -695,31 +695,33 @@ export const UserManager: React.FC<UserManagerProps> = ({
                     Sinkronisasi Database Username &amp; Password (Drive &amp; Sheets)
                   </span>
                   <span
-                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
                       pendingWorkspaceSync
                         ? 'bg-amber-100 text-amber-900 border-amber-300'
-                        : hasRealAccessToken()
+                        : lastWorkspaceSyncAt || hasRealAccessToken()
                         ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                         : 'bg-sky-100 text-sky-800 border-sky-200'
                     }`}
                   >
                     {pendingWorkspaceSync
                       ? 'Perlu Sinkron ke Drive/Sheets'
+                      : lastWorkspaceSyncAt
+                      ? 'Sudah Tersinkron (Cloud, Drive & Sheets)'
                       : hasRealAccessToken()
                       ? 'Auto-Sync Drive/Sheets Aktif'
                       : 'Tersimpan di Cloud Firestore'}
                   </span>
                 </div>
                 <p className="text-[11px] sm:text-xs text-slate-600 leading-relaxed">
-                  Seluruh <strong>{users.length} akun</strong> otomatis tersimpan di Cloud Firestore dan digabungkan non-destruktif (tidak menghapus username &amp; password lama) ke Google Drive &amp; Google Sheets.
+                  Seluruh <strong>{users.length} akun</strong> (termasuk akun yang diubah nama/password) otomatis tersinkron di Cloud Firestore &amp; domain Vercel tanpa perlu sinkron ulang.
                   {getConnectedGoogleEmail() && (
                     <span className="ml-1 text-slate-700 font-semibold">
                       &bull; Akun Google: {getConnectedGoogleEmail()}
                     </span>
                   )}
                   {lastWorkspaceSyncAt && (
-                    <span className="ml-1 text-slate-500">
-                      &bull; Sinkron terakhir: {new Date(lastWorkspaceSyncAt).toLocaleString('id-ID')}
+                    <span className="ml-1 text-emerald-700 font-semibold">
+                      &bull; Tersinkron: {new Date(lastWorkspaceSyncAt).toLocaleString('id-ID')}
                     </span>
                   )}
                 </p>

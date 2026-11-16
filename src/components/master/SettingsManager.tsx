@@ -57,7 +57,6 @@ import {
 import {
   getCloudSyncStatus,
   testFirestoreConnection,
-  pushAllLocalDataToCloud,
 } from '../../services/firestoreSync';
 import {
   signInWithGoogle,
@@ -164,7 +163,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
   // Cloud Multi-Device Sync State
   const [cloudStatus, setCloudStatus] = useState(getCloudSyncStatus());
-  const [isPushingCloud, setIsPushingCloud] = useState(false);
   const [isTestingCloud, setIsTestingCloud] = useState(false);
   const [cloudMessage, setCloudMessage] = useState<string | null>(null);
 
@@ -250,24 +248,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       setCloudMessage('Terjadi kendala saat memeriksa koneksi cloud.');
     } finally {
       setIsTestingCloud(false);
-    }
-  };
-
-  const handleForcePushCloud = async () => {
-    setIsPushingCloud(true);
-    setCloudMessage(null);
-    try {
-      const res = await pushAllLocalDataToCloud();
-      setCloudStatus(getCloudSyncStatus());
-      if (res.success) {
-        setCloudMessage(`Berhasil menyinkronkan seluruh database (${res.totalUploaded} dokumen) ke Firestore Cloud! Semua HP, laptop, dan perangkat lain yang membuka link aplikasi akan langsung sinkron.`);
-      } else {
-        setCloudMessage('Data berhasil dikirim sebagian, periksa status koneksi jaringan.');
-      }
-    } catch (err: any) {
-      setCloudMessage(`Gagal menyinkronkan data ke cloud: ${err?.message || 'Error'}`);
-    } finally {
-      setIsPushingCloud(false);
     }
   };
 
@@ -1039,15 +1019,24 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               <Cloud className="w-4 h-4" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <span>Sinkronisasi Real-Time Multi-Device (Cloud Database)</span>
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  REAL-TIME AKTIF
+                  {cloudStatus.isSyncing
+                    ? 'MENYINKRONKAN OTOMATIS...'
+                    : cloudStatus.pendingCount > 0
+                    ? `ANTREAN OTOMATIS (${cloudStatus.pendingCount})`
+                    : 'OTOMATIS AKTIF'}
                 </span>
               </div>
               <p className="text-xs font-normal text-slate-500">
-                Data presensi, perizinan, dan penugasan sinkron otomatis dalam hitungan detik di semua HP, laptop, dan tablet pengguna, termasuk saat aplikasi di-share via link Vercel.
+                Setiap perubahan akun, presensi, perizinan, dan pengaturan langsung tersinkron otomatis ke Cloud Firestore tanpa perlu diklik.
+                {cloudStatus.lastSync && (
+                  <span className="ml-1 text-emerald-700 font-semibold">
+                    &bull; Terakhir: {new Date(cloudStatus.lastSync).toLocaleTimeString('id-ID')}
+                  </span>
+                )}
               </p>
             </div>
           </div>
@@ -1061,15 +1050,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             >
               <Radio className={`w-3.5 h-3.5 ${isTestingCloud ? 'animate-spin' : 'text-sky-600'}`} />
               <span>{isTestingCloud ? 'Memeriksa...' : 'Uji Koneksi Cloud'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleForcePushCloud}
-              disabled={isPushingCloud}
-              className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isPushingCloud ? 'animate-spin' : ''}`} />
-              <span>{isPushingCloud ? 'Menyinkronkan...' : 'Sinkronkan Semua Data Lokal ke Cloud'}</span>
             </button>
           </div>
         </div>
@@ -1128,10 +1108,16 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             </span>
             <div className="mt-1 flex items-center gap-1.5 text-xs font-bold text-slate-800">
               <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              <span>Siap Dibagikan ke Banyak Pengguna</span>
+              <span>
+                {settings.lastWorkspaceUserSyncAt && !pendingWorkspaceSync
+                  ? 'Sudah Tersinkron (Vercel Otomatis Ikut)'
+                  : 'Otomatis Sinkron via Cloud Firestore'}
+              </span>
             </div>
             <span className="text-[10px] text-slate-500 mt-1 block">
-              Data terpusat di server cloud, bukan memori lokal HP
+              {settings.lastWorkspaceUserSyncAt && !pendingWorkspaceSync
+                ? `Drive/Sheets & akun terbarukan aktif (${new Date(settings.lastWorkspaceUserSyncAt).toLocaleDateString('id-ID')}) — tidak perlu sinkron ulang di Vercel.`
+                : 'Akun & perubahan demo langsung aktif di domain Vercel tanpa pengaturan ulang.'}
             </span>
           </div>
         </div>

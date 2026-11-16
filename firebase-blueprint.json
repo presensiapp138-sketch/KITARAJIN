@@ -197,6 +197,7 @@
         "themeColor": { "type": "string" },
         "lastSyncTimestamp": { "type": "string" },
         "lastWorkspaceUserSyncAt": { "type": "string" },
+        "lastUserMutationAt": { "type": "string" },
         "googleAccountEmail": { "type": "string" },
         "isGoogleConnected": { "type": "boolean" },
         "googleConnectedAt": { "type": "string" }
