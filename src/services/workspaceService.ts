@@ -57,6 +57,7 @@ let isSigningIn = false;
 
 export const PENDING_WORKSPACE_SYNC_KEY = 'kitarajin_pending_workspace_users_sync';
 export const DRIVE_USERS_BACKUP_FILENAME = 'KITARAJIN_Users_Database.json';
+export const DRIVE_FULL_BACKUP_FILENAME = 'KITARAJIN_Full_Database.json';
 
 export const hasPendingWorkspaceUserSync = (): boolean => {
   return Boolean(localStorage.getItem(PENDING_WORKSPACE_SYNC_KEY));
@@ -158,20 +159,94 @@ export const initAuth = (
 export function formatAuthErrorMessage(error: any): string {
   if (!error) return 'Silakan otorisasi akun Google Anda untuk menyinkronkan ke Drive & Sheets.';
   const msg = typeof error === 'string' ? error : error.message || error.code || '';
+  const currentHost = typeof window !== 'undefined' ? window.location.hostname : '';
 
   if (msg.includes('auth/popup-blocked')) {
-    return 'Jendela popup login Google terhalang browser. Mohon izinkan popup lalu klik kembali tombol Hubungkan & Sinkronkan Google.';
+    return 'Jendela popup login Google terhalang browser. Mohon izinkan popup di browser Anda lalu klik kembali tombol Hubungkan Google.';
   }
   if (msg.includes('auth/popup-closed-by-user') || msg.includes('cancelled-popup-request')) {
     return 'Jendela login Google ditutup sebelum selesai. Klik kembali tombol Hubungkan Google untuk melanjutkan sinkronisasi Drive & Sheets.';
   }
-  if (msg.includes('auth/unauthorized-domain')) {
-    return 'Domain aplikasi belum diizinkan untuk popup Google. Silakan periksa konfigurasi domain OAuth.';
+  if (msg.includes('auth/unauthorized-domain') || msg.includes('origin_mismatch')) {
+    return `Domain aplikasi (${currentHost || 'domain saat ini'}) belum masuk daftar Authorized Domains / OAuth Origins di Google Console. Hubungkan ulang via AI Studio atau tambahkan "${currentHost}" pada Authorized Domains.`;
   }
   if (msg.toLowerCase().includes('401') || msg.toLowerCase().includes('invalid credentials')) {
     return 'Sesi akses Google telah berakhir. Silakan klik Hubungkan / Otorisasi Ulang Akun Google.';
   }
   return msg;
+}
+
+/**
+ * Fallback Google Identity Services (GIS) Token Client jika Firebase Popup menolak domain kustom
+ */
+async function signInWithGisFallback(emailHint?: string): Promise<{
+  user: FirebaseUser;
+  accessToken: string;
+} | null> {
+  const oauthClientId = (firebaseConfig as any)?.oAuthClientId;
+  const gsi = typeof window !== 'undefined' ? (window as any).google?.accounts?.oauth2 : null;
+  if (!oauthClientId || !gsi?.initTokenClient) {
+    return null;
+  }
+
+  return new Promise((resolve, reject) => {
+    try {
+      const client = gsi.initTokenClient({
+        client_id: oauthClientId,
+        scope: WORKSPACE_SCOPES.join(' '),
+        hint: emailHint && emailHint.includes('@') ? emailHint.trim() : undefined,
+        callback: async (tokenResponse: any) => {
+          if (tokenResponse?.error || !tokenResponse?.access_token) {
+            reject(
+              new Error(
+                tokenResponse?.error_description ||
+                  tokenResponse?.error ||
+                  'Gagal mendapatkan token akses melalui popup Google.'
+              )
+            );
+            return;
+          }
+
+          const token = tokenResponse.access_token as string;
+          let resolvedEmail = emailHint?.trim() || getConnectedGoogleEmail() || '';
+          let resolvedName = 'Pengguna Google';
+          try {
+            const infoRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+              headers: { Authorization: `Bearer ${token}` },
+            });
+            if (infoRes.ok) {
+              const info = await infoRes.json();
+              if (info?.email) resolvedEmail = info.email;
+              if (info?.name) resolvedName = info.name;
+            }
+          } catch {
+            // Gunakan emailHint jika userinfo opsional gagal
+          }
+
+          const fallbackUser = {
+            email: resolvedEmail || 'Akun Google Terhubung',
+            displayName: resolvedName,
+            uid: `gis-${Date.now()}`,
+            photoURL: null,
+          } as unknown as FirebaseUser;
+
+          cachedAccessToken = token;
+          cachedGoogleUser = fallbackUser;
+          if (resolvedEmail) {
+            localStorage.setItem('kitarajin_google_account_email', resolvedEmail);
+          }
+
+          resolve({ user: fallbackUser, accessToken: token });
+        },
+        error_callback: (err: any) => {
+          reject(new Error(err?.message || err?.type || 'Popup Google gagal dibuka atau dibatalkan.'));
+        },
+      });
+      client.requestAccessToken({ prompt: 'select_account' });
+    } catch (e: any) {
+      reject(e);
+    }
+  });
 }
 
 export const signInWithGoogle = async (
@@ -205,7 +280,19 @@ export const signInWithGoogle = async (
     }
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
-    console.warn('Google Sign In error:', error?.message || error);
+    const errMsg = String(error?.code || error?.message || error || '');
+    console.warn('Google Sign In primary popup note:', errMsg);
+
+    // Jika Firebase Auth melaporkan unauthorized-domain (misal saat dibuka dari domain custom), coba GIS fallback
+    if (errMsg.includes('unauthorized-domain')) {
+      try {
+        const gisResult = await signInWithGisFallback(emailHint);
+        if (gisResult) return gisResult;
+      } catch (gisErr: any) {
+        console.warn('GIS fallback error:', gisErr?.message || gisErr);
+      }
+    }
+
     const cleanMsg = formatAuthErrorMessage(error);
     throw new Error(cleanMsg);
   } finally {
@@ -1197,6 +1284,124 @@ export async function ensureSpreadsheetHas10Tabs(
 
 /**
  * Tulis Header & Data untuk seluruh 10 tab ke Google Sheets
+/**
+ * Sinkronkan seluruh 10 tabel data aplikasi sebagai JSON backup terpadu di folder Google Drive
+ */
+export async function syncFullAppDatabaseToDrive(
+  accessToken: string,
+  folderId?: string
+): Promise<{ fileId: string; fileUrl: string }> {
+  const settings = getAppSettings();
+  const cleanFolderId = cleanGoogleId(folderId || settings.googleDriveFolderId || '');
+
+  // Cari apakah file full backup sudah ada di folder Drive
+  const queryParts = [`name = '${DRIVE_FULL_BACKUP_FILENAME}'`, 'trashed = false'];
+  if (cleanFolderId) {
+    queryParts.push(`'${cleanFolderId}' in parents`);
+  }
+  let targetFileId = '';
+  try {
+    const searchRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+        queryParts.join(' and ')
+      )}&fields=files(id,name)`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }
+    );
+    if (searchRes.ok) {
+      const searchData = await searchRes.json();
+      if (Array.isArray(searchData.files) && searchData.files.length > 0) {
+        targetFileId = searchData.files[0].id;
+      }
+    }
+  } catch {
+    // Abaikan error pencarian dan lanjut membuat baru bila perlu
+  }
+
+  const snapshotPayload = JSON.stringify(
+    {
+      app: 'KITARAJIN',
+      syncedAt: new Date().toISOString(),
+      schoolName: settings.schoolName,
+      users: getAllUsers(),
+      departments: getAllDepartments(),
+      schedules: getAllSchedules(),
+      locations: getAllLocations(),
+      faceRegistry: getAllFaceRegistry(),
+      attendance: getAllAttendanceRecords(),
+      leaveRequests: getAllLeaveRequests(),
+      assignments: getAllAssignments(),
+      auditLogs: getAuditLogs().slice(0, 500),
+      settings,
+    },
+    null,
+    2
+  );
+
+  if (targetFileId) {
+    const patchRes = await fetch(
+      `https://www.googleapis.com/upload/drive/v3/files/${targetFileId}?uploadType=media`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: snapshotPayload,
+      }
+    );
+    if (!patchRes.ok) {
+      const err = await patchRes.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Gagal memperbarui backup lengkap Drive (${patchRes.status})`);
+    }
+  } else {
+    const boundary = 'kitarajin_full_backup_' + Date.now();
+    const metadata: Record<string, any> = {
+      name: DRIVE_FULL_BACKUP_FILENAME,
+      mimeType: 'application/json',
+      description: 'Database lengkap 10 tabel aplikasi KITARAJIN (tersinkron otomatis)',
+    };
+    if (cleanFolderId) {
+      metadata.parents = [cleanFolderId];
+    }
+
+    const multipartBody =
+      `--${boundary}\r\n` +
+      `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+      `${JSON.stringify(metadata)}\r\n` +
+      `--${boundary}\r\n` +
+      `Content-Type: application/json\r\n\r\n` +
+      `${snapshotPayload}\r\n` +
+      `--${boundary}--`;
+
+    const createRes = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+        },
+        body: multipartBody,
+      }
+    );
+    if (!createRes.ok) {
+      const err = await createRes.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Gagal membuat backup lengkap Drive (${createRes.status})`);
+    }
+    const created = await createRes.json();
+    targetFileId = created.id;
+  }
+
+  return {
+    fileId: targetFileId,
+    fileUrl: `https://drive.google.com/file/d/${targetFileId}/view`,
+  };
+}
+
+/**
+ * Tulis Header & Data untuk seluruh 10 tab ke Google Sheets
  * (Untuk Users: selalu merge non-destruktif dulu agar username & password yang sudah ada tidak pernah terhapus!)
  */
 export async function writeAllTabsData(accessToken: string, spreadsheetId: string): Promise<void> {
@@ -1205,9 +1410,10 @@ export async function writeAllTabsData(accessToken: string, spreadsheetId: strin
   // 1. Merge & sinkronkan Users terlebih dahulu (agar baris Users lama di Sheet/Drive TIDAK terhapus)
   await syncUsersWithGoogleSheet(accessToken, cleanId);
 
-  // 2. Sinkronkan juga ke Google Drive backup JSON
+  // 2. Sinkronkan juga ke Google Drive backup JSON (Users + Full Database)
   try {
     await syncUsersWithGoogleDrive(accessToken);
+    await syncFullAppDatabaseToDrive(accessToken);
   } catch (e) {
     console.warn('Backup Drive note saat writeAllTabsData:', e);
   }
@@ -1252,9 +1458,10 @@ export async function executeAutoCreateDatabase(
   currentUser: User,
   customSheetId?: string,
   customDriveId?: string,
-  onStepProgress?: (step: string) => void
+  onStepProgress?: (step: string) => void,
+  providedAccessToken?: string
 ): Promise<CreateDatabaseResult> {
-  let token = await getAccessToken();
+  let token = providedAccessToken || (await getAccessToken());
   const tabsCreated: string[] = TAB_DEFINITIONS.map((t) => t.name);
 
   if (!token) {
@@ -1295,40 +1502,64 @@ export async function executeAutoCreateDatabase(
 
   // 2. Google Sheets: Buat baru atau tambahkan 10 tab ke ID yang ditempel
   if (spreadsheetId) {
-    if (onStepProgress) onStepProgress(`Memeriksa & melengkapi 10 Tab di Spreadsheet (${spreadsheetId})...`);
+    if (onStepProgress) onStepProgress(`Memeriksa & menyinkronkan 10 Tab di Spreadsheet (${spreadsheetId})...`);
     const res = await ensureSpreadsheetHas10Tabs(token, spreadsheetId);
     spreadsheetId = res.spreadsheetId;
     spreadsheetUrl = res.spreadsheetUrl;
   } else {
-    if (onStepProgress) onStepProgress('Membuat Spreadsheet baru & mengonfigurasi 10 Tab...');
+    if (onStepProgress) onStepProgress('Membuat Spreadsheet baru & mengisi 10 Tab...');
     const res = await createGoogleSpreadsheetWithTabs(token, schoolName, folderId);
     spreadsheetId = res.spreadsheetId;
     spreadsheetUrl = res.spreadsheetUrl;
   }
 
-  // 3. Sinkronkan seluruh Username & Password ke Google Drive & Sheets tanpa menghapus data lama
-  if (onStepProgress) onStepProgress('Menyinkronkan Username & Password ke Google Drive & Sheets...');
+  // 3. Sinkronkan seluruh Username & Password + backup lengkap 10 tabel ke Google Drive & Sheets
+  if (onStepProgress) onStepProgress('Menyinkronkan seluruh data aplikasi & akun ke Google Drive & Sheets...');
   await syncAllUsersToDriveAndSheet(token, { spreadsheetId, folderId });
+  await syncFullAppDatabaseToDrive(token, folderId);
 
   // 4. Simpan ke AppSettings
   if (onStepProgress) onStepProgress('Menyimpan ID database ke sistem KITARAJIN...');
+  const nowIso = new Date().toISOString();
   updateAppSettings(currentUser, {
     googleSheetSpreadsheetId: spreadsheetId,
     googleDriveFolderId: folderId,
     storageMode: 'google_workspace_sync',
     isGoogleConnected: true,
-    lastWorkspaceUserSyncAt: new Date().toISOString(),
+    lastWorkspaceUserSyncAt: nowIso,
+    lastSyncTimestamp: nowIso,
   });
 
   return {
     success: true,
-    message: `Database berhasil dibuat & disinkronkan di Google Drive & Google Sheets! Semua Username & Password beserta 10 Tab (${tabsCreated.join(', ')}) telah aktif.`,
+    message: `Seluruh data aplikasi & ${getAllUsers().length} akun Username/Password berhasil disinkronkan ke Google Drive & Google Sheets (10 Tab: ${tabsCreated.join(', ')}) tanpa menghapus akun lama!`,
     spreadsheetId,
     spreadsheetUrl,
     folderId,
     folderUrl,
     tabsCreated,
   };
+}
+
+/**
+ * Sinkronkan seluruh data aplikasi (Users non-destruktif + seluruh 10 tab & backup Drive lengkap)
+ */
+export async function syncAllAppDataToDriveAndSheet(
+  currentUser: User,
+  options?: {
+    accessToken?: string;
+    spreadsheetId?: string;
+    folderId?: string;
+    onStepProgress?: (step: string) => void;
+  }
+): Promise<CreateDatabaseResult> {
+  return executeAutoCreateDatabase(
+    currentUser,
+    options?.spreadsheetId,
+    options?.folderId,
+    options?.onStepProgress,
+    options?.accessToken
+  );
 }
 
 /**

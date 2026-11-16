@@ -35,8 +35,6 @@ import {
   FileDown,
   CloudUpload,
   Database,
-  FolderOpen,
-  Key,
 } from 'lucide-react';
 
 import { User, UserRole, Department, Schedule } from '../../types';
@@ -60,7 +58,7 @@ import {
 import {
   getAccessToken,
   signInWithGoogle,
-  syncAllUsersToDriveAndSheet,
+  syncAllAppDataToDriveAndSheet,
   hasPendingWorkspaceUserSync,
   getConnectedGoogleEmail,
   hasRealAccessToken,
@@ -579,7 +577,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
         token = authRes.accessToken;
       }
 
-      const res = await syncAllUsersToDriveAndSheet(token);
+      const res = await syncAllAppDataToDriveAndSheet(currentUser, { accessToken: token });
       loadData();
       setFeedback({
         type: 'success',

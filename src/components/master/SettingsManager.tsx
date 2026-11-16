@@ -66,7 +66,6 @@ import {
   getGoogleUser,
   executeAutoCreateDatabase,
   checkRealGoogleDatabaseHealth,
-  writeAllTabsData,
   cleanGoogleId,
   initAuth,
   formatAuthErrorMessage,
@@ -74,6 +73,7 @@ import {
   unlinkGoogleAccount,
   getConnectedGoogleEmail,
   syncAllUsersToDriveAndSheet,
+  syncAllAppDataToDriveAndSheet,
   hasPendingWorkspaceUserSync,
   hasRealAccessToken,
 } from '../../services/workspaceService';
@@ -298,17 +298,17 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           }
         }
 
-        // Otomatis gabungkan & sinkronkan seluruh username & password ke Google Drive & Sheets
-        const syncRes = await syncAllUsersToDriveAndSheet(result.accessToken, {
-          spreadsheetId: cleanGoogleId(sheetIdInput) || settings.googleSheetSpreadsheetId,
-          folderId: cleanGoogleId(driveIdInput) || settings.googleDriveFolderId,
-        });
+        const existingSheetId = cleanGoogleId(sheetIdInput) || settings.googleSheetSpreadsheetId;
         setSettings(getAppSettings());
         setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
 
         setFeedback({
           type: 'success',
-          message: `Akun Google (${email}) terhubung dengan token OAuth resmi! ${syncRes.message}`,
+          message: `Akun Google (${email}) berhasil terhubung melalui popup Google! Silakan konfirmasi dialog untuk langsung menyinkronkan seluruh data aplikasi ke Google Drive & Sheets.`,
+        });
+
+        setWorkspaceConfirmModal({
+          type: existingSheetId ? 'sync_all_tabs' : 'create_db',
         });
       }
     } catch (err: any) {
@@ -410,17 +410,11 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     }
   };
 
-  // Sinkronisasi 10 tab saat ini ke Google Sheets & Drive (non-destruktif untuk Users)
+  // Sinkronisasi 10 tab & backup Drive lengkap (non-destruktif untuk Users)
   const executeConfirmSyncDataToSheets = async () => {
     setWorkspaceConfirmModal(null);
     const cleanSheet = cleanGoogleId(sheetIdInput) || settings.googleSheetSpreadsheetId;
-    if (!cleanSheet) {
-      setFeedback({
-        type: 'error',
-        message: 'Belum ada ID Spreadsheet yang ditautkan. Silakan klik tombol "Buat di Google Drive & Sheets" terlebih dahulu.',
-      });
-      return;
-    }
+    const cleanDrive = cleanGoogleId(driveIdInput) || settings.googleDriveFolderId;
 
     setIsSyncingData(true);
     setFeedback(null);
@@ -434,15 +428,22 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         setGoogleUserEmail(signinRes.user.email || ksEmail || null);
       }
 
-      await writeAllTabsData(token, cleanSheet);
+      const syncResult = await syncAllAppDataToDriveAndSheet(currentUser, {
+        accessToken: token,
+        spreadsheetId: cleanSheet,
+        folderId: cleanDrive,
+      });
+
+      if (syncResult.spreadsheetId) setSheetIdInput(syncResult.spreadsheetId);
+      if (syncResult.folderId) setDriveIdInput(syncResult.folderId);
       setSettings(getAppSettings());
       setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
 
       setFeedback({
         type: 'success',
-        message: 'Semua 10 tab data (termasuk gabungan Username & Password lama & baru) berhasil disinkronkan ke Google Sheets & Drive!',
+        message: syncResult.message,
       });
-      runDatabaseCheck(cleanSheet, undefined, true);
+      runDatabaseCheck(syncResult.spreadsheetId || cleanSheet, syncResult.folderId || cleanDrive, true);
     } catch (err: any) {
       setFeedback({
         type: 'error',
@@ -1338,9 +1339,9 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             <button
               type="button"
               onClick={() => setWorkspaceConfirmModal({ type: 'sync_all_tabs' })}
-              disabled={isSyncingData || (!sheetIdInput && !settings.googleSheetSpreadsheetId)}
+              disabled={isSyncingData}
               className="px-3.5 py-2.5 rounded-xl bg-slate-900/60 hover:bg-slate-900 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-40 cursor-pointer"
-              title="Kirim ulang 10 tab data saat ini ke Spreadsheet"
+              title="Sinkronkan seluruh 10 tab data aplikasi ke Google Drive & Google Sheets"
             >
               <CloudUpload className={`w-3.5 h-3.5 ${isSyncingData ? 'animate-bounce' : ''}`} />
               <span>{isSyncingData ? 'Menyinkronkan...' : 'Sinkron Data 10 Tab'}</span>
