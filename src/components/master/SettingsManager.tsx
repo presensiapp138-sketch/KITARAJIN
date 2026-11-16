@@ -73,6 +73,9 @@ import {
   linkGoogleAccount,
   unlinkGoogleAccount,
   getConnectedGoogleEmail,
+  syncAllUsersToDriveAndSheet,
+  hasPendingWorkspaceUserSync,
+  hasRealAccessToken,
 } from '../../services/workspaceService';
 
 interface SettingsManagerProps {
@@ -139,6 +142,11 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [isCreatingDb, setIsCreatingDb] = useState(false);
   const [creationStepMsg, setCreationStepMsg] = useState<string | null>(null);
   const [isSyncingData, setIsSyncingData] = useState(false);
+  const [isSyncingUsersOnly, setIsSyncingUsersOnly] = useState(false);
+  const [pendingWorkspaceSync, setPendingWorkspaceSync] = useState(() => hasPendingWorkspaceUserSync());
+  const [workspaceConfirmModal, setWorkspaceConfirmModal] = useState<{
+    type: 'create_db' | 'sync_all_tabs' | 'sync_users_only';
+  } | null>(null);
 
   // Database Connection Diagnostic State
   const [isCheckingDb, setIsCheckingDb] = useState(false);
@@ -215,12 +223,15 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     const handleSyncEvent = () => {
       setCloudStatus(getCloudSyncStatus());
       setSettings(getAppSettings());
+      setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
     };
     window.addEventListener('kitarajin_cloud_sync', handleSyncEvent);
+    window.addEventListener('kitarajin_workspace_sync', handleSyncEvent);
 
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe();
       window.removeEventListener('kitarajin_cloud_sync', handleSyncEvent);
+      window.removeEventListener('kitarajin_workspace_sync', handleSyncEvent);
     };
   }, []);
 
@@ -260,7 +271,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     }
   };
 
-  // Hubungkan Akun Google / Email Kepala Sekolah (Bebas pilih email mana saja)
+  // Hubungkan Akun Google / Email Kepala Sekolah (OAuth Riil)
   const handleGoogleConnect = async (preferredEmail?: string) => {
     setIsSigningInGoogle(true);
     setFeedback(null);
@@ -273,13 +284,11 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         const email = result.user.email || targetEmail || 'Akun Google';
         setGoogleUserEmail(email);
 
-        // Simpan status akun Google secara persisten
         updateAppSettings(currentUser, {
           isGoogleConnected: true,
           googleAccountEmail: email,
           storageMode: 'google_workspace_sync',
         });
-        setSettings(getAppSettings());
 
         if (email) {
           setKsEmail(email);
@@ -288,40 +297,27 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             onUpdateCurrentUser({ ...currentUser, email });
           }
         }
+
+        // Otomatis gabungkan & sinkronkan seluruh username & password ke Google Drive & Sheets
+        const syncRes = await syncAllUsersToDriveAndSheet(result.accessToken, {
+          spreadsheetId: cleanGoogleId(sheetIdInput) || settings.googleSheetSpreadsheetId,
+          folderId: cleanGoogleId(driveIdInput) || settings.googleDriveFolderId,
+        });
+        setSettings(getAppSettings());
+        setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
+
         setFeedback({
           type: 'success',
-          message: `Berhasil menghubungkan akun Google (${email})! Akun Google Kepala Sekolah kini aktif dan siap untuk membuat atau menyinkronkan database 10 tab.`,
+          message: `Akun Google (${email}) terhubung dengan token OAuth resmi! ${syncRes.message}`,
         });
       }
     } catch (err: any) {
-      console.warn('Login Google notice, connecting directly:', err);
-      // Fallback: Langsung tautkan akun email yang dipilih tanpa gagal
-      if (targetEmail && targetEmail.includes('@')) {
-        linkGoogleAccount(targetEmail, ksName || currentUser.name);
-        setIsGoogleConnected(true);
-        setGoogleUserEmail(targetEmail);
-        updateAppSettings(currentUser, {
-          isGoogleConnected: true,
-          googleAccountEmail: targetEmail,
-          storageMode: 'google_workspace_sync',
-        });
-        setSettings(getAppSettings());
-        setKsEmail(targetEmail);
-        await updateUser(currentUser, currentUser.id, { email: targetEmail });
-        if (onUpdateCurrentUser) {
-          onUpdateCurrentUser({ ...currentUser, email: targetEmail });
-        }
-        setFeedback({
-          type: 'success',
-          message: `Akun Google (${targetEmail}) BERHASIL TERHUBUNG ke profil Kepala Sekolah! Seluruh sinkronisasi database Google Sheets & Drive telah aktif.`,
-        });
-      } else {
-        const friendly = formatAuthErrorMessage(err);
-        setFeedback({
-          type: 'error',
-          message: friendly,
-        });
-      }
+      console.warn('Login Google error:', err);
+      const friendly = formatAuthErrorMessage(err);
+      setFeedback({
+        type: 'error',
+        message: `${friendly} (Data akun & presensi tetap aman tersimpan di Cloud Firestore.)`,
+      });
     } finally {
       setIsSigningInGoogle(false);
     }
@@ -358,10 +354,10 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   };
 
   // ==============================================================
-  // EKSEKUSI PEMBUATAN DATABASE OTOMATIS (GOOGLE DRIVE & SHEETS 10 TAB)
-  // Dipanggil langsung saat tombol "Buat / Tautkan Otomatis" diklik!
+  // EKSEKUSI PEMBUATAN & SINKRONISASI GOOGLE DRIVE & SHEETS (VIA KONFIRMASI MODAL)
   // ==============================================================
-  const handleAutoCreateAndLinkDatabase = async () => {
+  const executeConfirmAutoCreateAndLinkDatabase = async () => {
+    setWorkspaceConfirmModal(null);
     setIsCreatingDb(true);
     setCreationStepMsg('Memulai proses inisialisasi database...');
     setFeedback(null);
@@ -370,7 +366,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     const cleanDrive = cleanGoogleId(driveIdInput);
 
     try {
-      // Jalankan eksekusi pembuatan folder & sheets 10 tab
       const result = await executeAutoCreateDatabase(
         currentUser,
         cleanSheet,
@@ -378,24 +373,21 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         (step) => setCreationStepMsg(step)
       );
 
-      // Perbarui input dan settings di UI
       setSheetIdInput(result.spreadsheetId || '');
       setDriveIdInput(result.folderId || '');
       const newSettings = getAppSettings();
       setSettings(newSettings);
+      setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
 
       setFeedback({
         type: 'success',
-        message: `BERHASIL! Folder Google Drive dan Google Sheets dengan 10 Tab (${result.tabsCreated.join(', ')}) telah otomatis dibuat dan disinkronkan langsung di akun Google Anda!`,
+        message: result.message,
       });
 
-      // Lakukan pengecekan status real-time
       await runDatabaseCheck(result.spreadsheetId, result.folderId, true);
     } catch (error: any) {
       console.warn('Otomatisasi Google note:', error);
-      
-      // Jika terjadi kendala pada token Google API (misal popup tertutup atau izin)
-      // Simpan ID yang ditempel agar data lokal tetap terhubung dan tidak hilang
+
       if (cleanSheet || cleanDrive) {
         updateAppSettings(currentUser, {
           googleSheetSpreadsheetId: cleanSheet || settings.googleSheetSpreadsheetId,
@@ -411,7 +403,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         message: friendlyMsg,
       });
 
-      // Tetap jalankan diagnosis 10 tab lokal
       runDatabaseCheck(cleanSheet, cleanDrive, false);
     } finally {
       setIsCreatingDb(false);
@@ -419,13 +410,14 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     }
   };
 
-  // Sinkronisasi data saat ini ke Google Sheets
-  const handleSyncDataToSheets = async () => {
+  // Sinkronisasi 10 tab saat ini ke Google Sheets & Drive (non-destruktif untuk Users)
+  const executeConfirmSyncDataToSheets = async () => {
+    setWorkspaceConfirmModal(null);
     const cleanSheet = cleanGoogleId(sheetIdInput) || settings.googleSheetSpreadsheetId;
     if (!cleanSheet) {
       setFeedback({
         type: 'error',
-        message: 'Belum ada ID Spreadsheet yang ditautkan. Silakan klik tombol "Buat / Tautkan Otomatis" terlebih dahulu.',
+        message: 'Belum ada ID Spreadsheet yang ditautkan. Silakan klik tombol "Buat di Google Drive & Sheets" terlebih dahulu.',
       });
       return;
     }
@@ -435,17 +427,20 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     try {
       let token = await getAccessToken();
       if (!token) {
-        const signinRes = await signInWithGoogle();
+        const signinRes = await signInWithGoogle(ksEmail || currentUser.email);
         if (!signinRes) throw new Error('Silakan masuk dengan akun Google terlebih dahulu.');
         token = signinRes.accessToken;
         setIsGoogleConnected(true);
+        setGoogleUserEmail(signinRes.user.email || ksEmail || null);
       }
 
       await writeAllTabsData(token, cleanSheet);
+      setSettings(getAppSettings());
+      setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
 
       setFeedback({
         type: 'success',
-        message: 'Semua 10 tab data civitas sekolah berhasil disinkronkan ke Google Sheets!',
+        message: 'Semua 10 tab data (termasuk gabungan Username & Password lama & baru) berhasil disinkronkan ke Google Sheets & Drive!',
       });
       runDatabaseCheck(cleanSheet, undefined, true);
     } catch (err: any) {
@@ -455,6 +450,44 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       });
     } finally {
       setIsSyncingData(false);
+    }
+  };
+
+  // Sinkronisasi langsung khusus Username & Password ke Google Drive & Sheets
+  const executeConfirmSyncUsersOnly = async () => {
+    setWorkspaceConfirmModal(null);
+    setIsSyncingUsersOnly(true);
+    setFeedback(null);
+    try {
+      let token = await getAccessToken();
+      if (!token) {
+        const signinRes = await signInWithGoogle(ksEmail || currentUser.email);
+        if (!signinRes) throw new Error('Otorisasi Google diperlukan untuk menyinkronkan ke Drive & Sheets.');
+        token = signinRes.accessToken;
+        setIsGoogleConnected(true);
+        setGoogleUserEmail(signinRes.user.email || ksEmail || null);
+      }
+
+      const res = await syncAllUsersToDriveAndSheet(token, {
+        spreadsheetId: cleanGoogleId(sheetIdInput) || settings.googleSheetSpreadsheetId,
+        folderId: cleanGoogleId(driveIdInput) || settings.googleDriveFolderId,
+      });
+      setSettings(getAppSettings());
+      setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
+      setFeedback({
+        type: 'success',
+        message: res.message,
+      });
+      if (res.spreadsheetId) {
+        runDatabaseCheck(res.spreadsheetId, undefined, true);
+      }
+    } catch (err: any) {
+      setFeedback({
+        type: 'error',
+        message: formatAuthErrorMessage(err),
+      });
+    } finally {
+      setIsSyncingUsersOnly(false);
     }
   };
 
@@ -559,7 +592,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         onUpdateCurrentUser(updatedUser);
       }
 
-      // Hubungkan otomatis akun Google dengan email Kepala Sekolah yang baru dirubah
+      // Simpan email tertaut di profil aplikasi
       linkGoogleAccount(cleanEmail, cleanName);
       setIsGoogleConnected(true);
       setGoogleUserEmail(cleanEmail);
@@ -569,10 +602,13 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         storageMode: 'google_workspace_sync',
       });
       setSettings(getAppSettings());
+      setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
 
       setFeedback({
         type: 'success',
-        message: `Email Kepala Sekolah berhasil diperbarui ke "${cleanEmail}" dan AKUN GOOGLE RESMI BERHASIL TERHUBUNG! Seluruh sinkronisasi Google Sheets & Drive kini aktif.`,
+        message: hasRealAccessToken()
+          ? `Profil Kepala Sekolah (${cleanEmail}) diperbarui dan otomatis disinkronkan ke Cloud Firestore, Google Drive & Sheets!`
+          : `Profil Kepala Sekolah (${cleanEmail}) diperbarui dan tersimpan di Cloud Firestore! Klik "Sinkronkan ke Drive & Sheet" atau "Hubungkan Akun Google" jika ingin menulis langsung ke Google Drive/Sheets sekarang.`,
       });
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -633,9 +669,12 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       });
 
       if (res.success) {
+        setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
         setFeedback({
           type: 'success',
-          message: 'Password login Kepala Sekolah BERHASIL DIPERBARUI dan disinkronkan! Silakan gunakan password baru ini untuk login berikutnya.',
+          message: hasRealAccessToken()
+            ? 'Password login Kepala Sekolah BERHASIL DIPERBARUI dan langsung disinkronkan ke Cloud Firestore, Google Drive & Sheets!'
+            : 'Password login Kepala Sekolah BERHASIL DIPERBARUI di Cloud Firestore! Klik "Sinkronkan ke Drive & Sheet" pada menu Database untuk menyalinnya ke Google Drive/Sheets.',
         });
         setKsPassword('');
         setKsConfirmPassword('');
@@ -1257,13 +1296,31 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             {/* Tombol Utama 1: Buat Database Otomatis di Google */}
             <button
               type="button"
-              onClick={handleAutoCreateAndLinkDatabase}
+              onClick={() => setWorkspaceConfirmModal({ type: 'create_db' })}
               disabled={isCreatingDb}
               className="px-4 py-2.5 rounded-xl bg-white hover:bg-emerald-50 text-emerald-900 font-extrabold text-xs shadow-lg transition-all flex items-center gap-2 active:scale-95 disabled:opacity-50 cursor-pointer"
             >
               <Database className="w-4 h-4 text-emerald-700" />
               <span>{isCreatingDb ? 'Memproses di Google...' : 'Buat di Google Drive & Sheets'}</span>
               <ArrowRight className="w-3.5 h-3.5 text-emerald-700" />
+            </button>
+
+            {/* Tombol Sinkronkan Khusus Username & Password */}
+            <button
+              type="button"
+              onClick={() => setWorkspaceConfirmModal({ type: 'sync_users_only' })}
+              disabled={isSyncingUsersOnly}
+              className="px-3.5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+              title="Gabungkan & sinkronkan semua Username dan Password ke Google Drive dan Google Sheets tanpa menghapus akun lama"
+            >
+              <Key className={`w-3.5 h-3.5 ${isSyncingUsersOnly ? 'animate-spin' : ''}`} />
+              <span>
+                {isSyncingUsersOnly
+                  ? 'Sinkron Akun...'
+                  : pendingWorkspaceSync
+                  ? 'Sinkron Username & Password*'
+                  : 'Sinkron Username & Password'}
+              </span>
             </button>
 
             {/* Tombol Utama 2: Inisialisasi Database 10 Tab Lokal */}
@@ -1277,16 +1334,16 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               <span>Inisialisasi Database 10 Tab</span>
             </button>
 
-            {/* Tombol Sinkronkan Data Saat Ini */}
+            {/* Tombol Sinkronkan Data 10 Tab Saat Ini */}
             <button
               type="button"
-              onClick={handleSyncDataToSheets}
+              onClick={() => setWorkspaceConfirmModal({ type: 'sync_all_tabs' })}
               disabled={isSyncingData || (!sheetIdInput && !settings.googleSheetSpreadsheetId)}
-              className="px-3.5 py-2.5 rounded-xl bg-slate-900/60 hover:bg-slate-900 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-40"
+              className="px-3.5 py-2.5 rounded-xl bg-slate-900/60 hover:bg-slate-900 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-40 cursor-pointer"
               title="Kirim ulang 10 tab data saat ini ke Spreadsheet"
             >
               <CloudUpload className={`w-3.5 h-3.5 ${isSyncingData ? 'animate-bounce' : ''}`} />
-              <span>{isSyncingData ? 'Menyinkronkan...' : 'Sinkron Data'}</span>
+              <span>{isSyncingData ? 'Menyinkronkan...' : 'Sinkron Data 10 Tab'}</span>
             </button>
 
             {/* Tombol Cek Real-time */}
@@ -1294,7 +1351,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               type="button"
               onClick={() => runDatabaseCheck(undefined, undefined, true)}
               disabled={isCheckingDb}
-              className="px-3.5 py-2.5 rounded-xl bg-emerald-800/80 hover:bg-emerald-800 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-40"
+              className="px-3.5 py-2.5 rounded-xl bg-emerald-800/80 hover:bg-emerald-800 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-40 cursor-pointer"
               title="Periksa status live ke Google API"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isCheckingDb ? 'animate-spin' : ''}`} />
@@ -1519,6 +1576,88 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           </button>
         </div>
       </form>
+
+      {/* ============================================================== */}
+      {/* MODAL KONFIRMASI SINKRONISASI GOOGLE DRIVE & SHEETS            */}
+      {/* ============================================================== */}
+      {workspaceConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-teal-100 text-teal-700 flex items-center justify-center shrink-0">
+                  <CloudUpload className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">
+                    {workspaceConfirmModal.type === 'create_db'
+                      ? 'Buat & Tautkan Database Google Drive & Sheets'
+                      : workspaceConfirmModal.type === 'sync_users_only'
+                      ? 'Sinkronkan Semua Username & Password'
+                      : 'Sinkronkan 10 Tab Database ke Google Sheets & Drive'}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Otorisasi &amp; penggabungan data aman ke Google Workspace
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setWorkspaceConfirmModal(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-emerald-50/80 border border-emerald-200 text-xs text-emerald-950 space-y-2 leading-relaxed">
+              {workspaceConfirmModal.type === 'create_db' && (
+                <p>
+                  Aplikasi akan menyiapkan folder <strong>Google Drive</strong> dan file <strong>Google Sheets (10 Tab)</strong> lalu menyalin &amp; menggabungkan seluruh akun username &amp; password ke dalamnya.
+                </p>
+              )}
+              {workspaceConfirmModal.type === 'sync_users_only' && (
+                <p>
+                  Aplikasi akan membaca file <strong>KITARAJIN_Users_Database.json</strong> di Google Drive dan tab <strong>Users</strong> di Google Sheets, menggabungkan semua akun yang sudah ada, lalu menyimpan hasilnya secara real-time.
+                </p>
+              )}
+              {workspaceConfirmModal.type === 'sync_all_tabs' && (
+                <p>
+                  Aplikasi akan menyinkronkan seluruh 10 tab (termasuk penggabungan non-destruktif tab <strong>Users</strong> dan backup Google Drive).
+                </p>
+              )}
+              <p className="font-bold text-emerald-800">
+                Username dan password yang sudah ditambahkan sebelumnya TIDAK AKAN DIHAPUS.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setWorkspaceConfirmModal(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (workspaceConfirmModal.type === 'create_db') {
+                    executeConfirmAutoCreateAndLinkDatabase();
+                  } else if (workspaceConfirmModal.type === 'sync_users_only') {
+                    executeConfirmSyncUsersOnly();
+                  } else {
+                    executeConfirmSyncDataToSheets();
+                  }
+                }}
+                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer"
+              >
+                Ya, Lanjutkan &amp; Sinkronkan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

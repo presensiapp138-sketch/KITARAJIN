@@ -33,6 +33,10 @@ import {
   Eye,
   EyeOff,
   FileDown,
+  CloudUpload,
+  Database,
+  FolderOpen,
+  Key,
 } from 'lucide-react';
 
 import { User, UserRole, Department, Schedule } from '../../types';
@@ -40,6 +44,7 @@ import {
   getAllUsers,
   getAllDepartments,
   getAllSchedules,
+  getAppSettings,
   createUser,
   updateUser,
   toggleUserStatus,
@@ -52,6 +57,15 @@ import {
   getAuditLogs,
   getAttendanceForUser,
 } from '../../services/storage';
+import {
+  getAccessToken,
+  signInWithGoogle,
+  syncAllUsersToDriveAndSheet,
+  hasPendingWorkspaceUserSync,
+  getConnectedGoogleEmail,
+  hasRealAccessToken,
+  formatAuthErrorMessage,
+} from '../../services/workspaceService';
 import { generateAttendancePdfReport } from '../../services/pdfReportService';
 import { TimeInput24 } from '../common/TimeInput24';
 
@@ -128,12 +142,26 @@ export const UserManager: React.FC<UserManagerProps> = ({
   const [activeExpandedSessionRoster, setActiveExpandedSessionRoster] = useState<string | null>(null);
   const [sessionEmployeeSearch, setSessionEmployeeSearch] = useState('');
 
+  // Credential Visibility & Drive/Sheets Sync State
+  const [visiblePasswordIds, setVisiblePasswordIds] = useState<Record<string, boolean>>({});
+  const [isSyncingWorkspaceUsers, setIsSyncingWorkspaceUsers] = useState(false);
+  const [pendingWorkspaceSync, setPendingWorkspaceSync] = useState(() => hasPendingWorkspaceUserSync());
+  const [lastWorkspaceSyncAt, setLastWorkspaceSyncAt] = useState<string | undefined>(
+    () => getAppSettings().lastWorkspaceUserSyncAt
+  );
+  const [confirmModal, setConfirmModal] = useState<{
+    type: 'workspace_sync' | 'delete_session';
+    targetSchedule?: Schedule;
+  } | null>(null);
+
   // Load all data
   const loadData = () => {
     setUsers(getAllUsers());
     setDepartments(getAllDepartments());
     const schedList = getAllSchedules();
     setSchedules(schedList);
+    setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
+    setLastWorkspaceSyncAt(getAppSettings().lastWorkspaceUserSyncAt);
 
     setSessionTimeInputs((prev) => {
       const next = { ...prev };
@@ -158,8 +186,10 @@ export const UserManager: React.FC<UserManagerProps> = ({
       loadData();
     };
     window.addEventListener('kitarajin_cloud_sync', handleSync);
+    window.addEventListener('kitarajin_workspace_sync', handleSync);
     return () => {
       window.removeEventListener('kitarajin_cloud_sync', handleSync);
+      window.removeEventListener('kitarajin_workspace_sync', handleSync);
     };
   }, []);
 
@@ -205,11 +235,14 @@ export const UserManager: React.FC<UserManagerProps> = ({
 
   const openEditUserModal = (user: User) => {
     const deptVal = user.departmentName || user.departmentId || '';
+    const canViewTargetPassword =
+      currentUser.role === 'kepala_sekolah' ||
+      (currentUser.role === 'admin' && user.role !== 'kepala_sekolah');
     setEditingUser(user);
     setFormNip(user.nip);
     setFormName(user.name);
     setFormUsername(user.username);
-    setFormPassword('');
+    setFormPassword(canViewTargetPassword ? user.savedPassword || '' : '');
     setShowFormPassword(false);
     setFormRole(user.role === 'admin' ? 'admin' : 'karyawan');
     setFormDepartmentId(deptVal);
@@ -517,13 +550,48 @@ export const UserManager: React.FC<UserManagerProps> = ({
   };
 
   const handleDeleteSession = (sched: Schedule) => {
-    if (!window.confirm(`Yakin ingin menghapus sesi "${sched.name}"?`)) return;
+    setConfirmModal({ type: 'delete_session', targetSchedule: sched });
+  };
+
+  const executeConfirmDeleteSession = (sched: Schedule) => {
     const res = deleteSchedule(currentUser, sched.id);
     if (res.success) {
       setFeedback({ type: 'success', message: res.message });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });
+    }
+    setConfirmModal(null);
+  };
+
+  const executeWorkspaceUserSync = async () => {
+    setConfirmModal(null);
+    setIsSyncingWorkspaceUsers(true);
+    setFeedback(null);
+    try {
+      let token = await getAccessToken();
+      if (!token) {
+        const connectedEmail = getConnectedGoogleEmail() || currentUser.email || undefined;
+        const authRes = await signInWithGoogle(connectedEmail);
+        if (!authRes?.accessToken) {
+          throw new Error('Otorisasi akun Google diperlukan untuk menyinkronkan ke Google Drive & Sheets.');
+        }
+        token = authRes.accessToken;
+      }
+
+      const res = await syncAllUsersToDriveAndSheet(token);
+      loadData();
+      setFeedback({
+        type: 'success',
+        message: res.message,
+      });
+    } catch (err: any) {
+      setFeedback({
+        type: 'error',
+        message: formatAuthErrorMessage(err),
+      });
+    } finally {
+      setIsSyncingWorkspaceUsers(false);
     }
   };
 
@@ -605,6 +673,74 @@ export const UserManager: React.FC<UserManagerProps> = ({
       {/* ============================================================== */}
       {activeTab === 'users' && (
         <div className="space-y-4">
+          {/* Banner Sinkronisasi Username & Password ke Google Drive & Sheets */}
+          <div
+            className={`rounded-2xl border p-4 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${
+              pendingWorkspaceSync
+                ? 'bg-amber-50/90 border-amber-200'
+                : 'bg-emerald-50/70 border-emerald-200'
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div
+                className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                  pendingWorkspaceSync
+                    ? 'bg-amber-100 text-amber-700'
+                    : 'bg-emerald-100 text-emerald-700'
+                }`}
+              >
+                <Database className="w-4 h-4" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs sm:text-sm font-extrabold text-slate-900">
+                    Sinkronisasi Database Username &amp; Password (Drive &amp; Sheets)
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                      pendingWorkspaceSync
+                        ? 'bg-amber-100 text-amber-900 border-amber-300'
+                        : hasRealAccessToken()
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                        : 'bg-sky-100 text-sky-800 border-sky-200'
+                    }`}
+                  >
+                    {pendingWorkspaceSync
+                      ? 'Perlu Sinkron ke Drive/Sheets'
+                      : hasRealAccessToken()
+                      ? 'Auto-Sync Drive/Sheets Aktif'
+                      : 'Tersimpan di Cloud Firestore'}
+                  </span>
+                </div>
+                <p className="text-[11px] sm:text-xs text-slate-600 leading-relaxed">
+                  Seluruh <strong>{users.length} akun</strong> otomatis tersimpan di Cloud Firestore dan digabungkan non-destruktif (tidak menghapus username &amp; password lama) ke Google Drive &amp; Google Sheets.
+                  {getConnectedGoogleEmail() && (
+                    <span className="ml-1 text-slate-700 font-semibold">
+                      &bull; Akun Google: {getConnectedGoogleEmail()}
+                    </span>
+                  )}
+                  {lastWorkspaceSyncAt && (
+                    <span className="ml-1 text-slate-500">
+                      &bull; Sinkron terakhir: {new Date(lastWorkspaceSyncAt).toLocaleString('id-ID')}
+                    </span>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                disabled={isSyncingWorkspaceUsers}
+                onClick={() => setConfirmModal({ type: 'workspace_sync' })}
+                className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs disabled:opacity-50 cursor-pointer"
+              >
+                <CloudUpload className={`w-3.5 h-3.5 ${isSyncingWorkspaceUsers ? 'animate-bounce' : ''}`} />
+                <span>{isSyncingWorkspaceUsers ? 'Menyinkronkan...' : 'Sinkronkan ke Drive & Sheet'}</span>
+              </button>
+            </div>
+          </div>
+
           <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-2.5">
               <div className="relative min-w-[220px]">
@@ -660,6 +796,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200/80 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
                     <th className="py-3 px-4">Pegawai / NIP</th>
+                    <th className="py-3 px-4">Username &amp; Password</th>
                     <th className="py-3 px-4">Jabatan &amp; Unit</th>
                     <th className="py-3 px-4">Sesi Presensi Ditugaskan</th>
                     <th className="py-3 px-4">Peran</th>
@@ -670,7 +807,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
                 <tbody className="divide-y divide-slate-100">
                   {filteredUsers.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-slate-400">
+                      <td colSpan={7} className="py-8 text-center text-slate-400">
                         Tidak ada data pegawai yang sesuai dengan filter pencarian.
                       </td>
                     </tr>
@@ -680,13 +817,17 @@ export const UserManager: React.FC<UserManagerProps> = ({
                       const userSessions = u.assignedSessionIds && u.assignedSessionIds.length > 0
                         ? u.assignedSessionIds
                         : ['sesi-1', 'sesi-2', 'sesi-3'];
+                      const canViewPassword =
+                        currentUser.role === 'kepala_sekolah' ||
+                        (currentUser.role === 'admin' && u.role !== 'kepala_sekolah');
+                      const isPasswordVisible = Boolean(visiblePasswordIds[u.id]);
 
                       return (
                         <tr key={u.id} className="hover:bg-slate-50/60 transition-colors">
                           <td className="py-3 px-4">
                             <div className="font-bold text-slate-900">{u.name}</div>
                             <div className="text-[11px] text-slate-500 font-mono">
-                              NIP: {u.nip} &bull; @{u.username}
+                              NIP: {u.nip}
                             </div>
                             {u.email && (
                               <div className="text-[10px] text-emerald-700 flex items-center gap-1 mt-0.5">
@@ -696,10 +837,46 @@ export const UserManager: React.FC<UserManagerProps> = ({
                             )}
                           </td>
                           <td className="py-3 px-4">
+                            <div className="font-mono text-[11px] font-bold text-slate-800">
+                              @{u.username}
+                            </div>
+                            {canViewPassword ? (
+                              <div className="flex items-center gap-1.5 mt-1">
+                                <span className="font-mono text-[11px] px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700">
+                                  {isPasswordVisible
+                                    ? u.savedPassword || 'Terenkripsi (edit utk atur ulang)'
+                                    : '••••••••'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setVisiblePasswordIds((prev) => ({
+                                      ...prev,
+                                      [u.id]: !prev[u.id],
+                                    }))
+                                  }
+                                  className="p-1 rounded-md text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 transition-colors cursor-pointer"
+                                  title={isPasswordVisible ? 'Sembunyikan password' : 'Lihat password'}
+                                >
+                                  {isPasswordVisible ? (
+                                    <EyeOff className="w-3.5 h-3.5" />
+                                  ) : (
+                                    <Eye className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="text-[10px] text-slate-400 italic mt-1 flex items-center gap-1">
+                                <Lock className="w-3 h-3" />
+                                <span>Dilindungi</span>
+                              </div>
+                            )}
+                          </td>
+                          <td className="py-3 px-4">
                             <div className="font-semibold text-slate-800">{u.position || '-'}</div>
                             <div className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
                               <Building2 className="w-3 h-3 text-slate-400" />
-                              <span>{u.departmentName || u.departmentId || 'Umum'}</span>
+                              <span>{u.departmentName || u.departmentId || dept?.name || 'Umum'}</span>
                             </div>
                           </td>
                           <td className="py-3 px-4">
@@ -1611,6 +1788,96 @@ export const UserManager: React.FC<UserManagerProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* ============================================================== */}
+      {/* MODAL KONFIRMASI SINKRON DRIVE/SHEET ATAU HAPUS SESI           */}
+      {/* ============================================================== */}
+      {confirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
+                    confirmModal.type === 'workspace_sync'
+                      ? 'bg-teal-100 text-teal-700'
+                      : 'bg-rose-100 text-rose-700'
+                  }`}
+                >
+                  {confirmModal.type === 'workspace_sync' ? (
+                    <CloudUpload className="w-5 h-5" />
+                  ) : (
+                    <Trash2 className="w-5 h-5" />
+                  )}
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">
+                    {confirmModal.type === 'workspace_sync'
+                      ? 'Konfirmasi Sinkronisasi ke Google Drive & Sheets'
+                      : 'Konfirmasi Hapus Sesi Presensi'}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    {confirmModal.type === 'workspace_sync'
+                      ? 'Gabungkan & perbarui database username dan password'
+                      : 'Tindakan ini akan menghapus sesi jadwal presensi'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setConfirmModal(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {confirmModal.type === 'workspace_sync' ? (
+              <div className="p-3.5 rounded-2xl bg-teal-50/80 border border-teal-200 text-xs text-teal-950 space-y-2 leading-relaxed">
+                <p>
+                  Sistem akan membaca data yang sudah ada di <strong>Google Drive</strong> (<code>KITARAJIN_Users_Database.json</code>) dan <strong>Google Sheets</strong> (tab <code>Users</code>), menggabungkannya dengan <strong>{users.length} akun</strong> lokal/Cloud Firestore, lalu menyinkronkan hasilnya.
+                </p>
+                <p className="font-bold text-emerald-800">
+                  Username dan password yang sudah ditambahkan sebelumnya TIDAK AKAN DIHAPUS.
+                </p>
+              </div>
+            ) : (
+              <div className="p-3.5 rounded-2xl bg-rose-50/80 border border-rose-200 text-xs text-rose-950 leading-relaxed">
+                Yakin ingin menghapus sesi{' '}
+                <strong>"{confirmModal.targetSchedule?.name}"</strong>?
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setConfirmModal(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (confirmModal.type === 'workspace_sync') {
+                    executeWorkspaceUserSync();
+                  } else if (confirmModal.targetSchedule) {
+                    executeConfirmDeleteSession(confirmModal.targetSchedule);
+                  }
+                }}
+                className={`px-4 py-2 rounded-xl text-white text-xs font-bold shadow-xs cursor-pointer ${
+                  confirmModal.type === 'workspace_sync'
+                    ? 'bg-teal-600 hover:bg-teal-700'
+                    : 'bg-rose-600 hover:bg-rose-700'
+                }`}
+              >
+                {confirmModal.type === 'workspace_sync'
+                  ? 'Ya, Sinkronkan Sekarang'
+                  : 'Ya, Hapus Sesi'}
+              </button>
+            </div>
           </div>
         </div>
       )}

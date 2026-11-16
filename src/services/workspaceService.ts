@@ -26,24 +26,55 @@ import {
   getAppSettings,
   updateAppSettings,
 } from './storage';
+import { hashPassword } from './crypto';
+import {
+  mergeUserRecordsNonDestructive,
+  syncRecordToCloud,
+  SYNC_COLLECTIONS,
+} from './firestoreSync';
 import { User } from '../types';
 
-// Inisialisasi Firebase App secara aman
+// Inisialisasi Firebase App secara aman (reuse instance yang ada)
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 
 // Provider Google dengan scope Sheets dan Drive
+export const WORKSPACE_SCOPES = [
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/drive.file',
+];
+
 const provider = new GoogleAuthProvider();
-provider.addScope('https://www.googleapis.com/auth/spreadsheets');
-provider.addScope('https://www.googleapis.com/auth/drive.file');
+WORKSPACE_SCOPES.forEach((s) => provider.addScope(s));
 provider.setCustomParameters({
   prompt: 'select_account',
 });
 
-// Cache token di memori
+// Cache token OAuth murni di memori (tidak pernah di localStorage/sessionStorage)
 let cachedAccessToken: string | null = null;
 let cachedGoogleUser: FirebaseUser | null = null;
 let isSigningIn = false;
+
+export const PENDING_WORKSPACE_SYNC_KEY = 'kitarajin_pending_workspace_users_sync';
+export const DRIVE_USERS_BACKUP_FILENAME = 'KITARAJIN_Users_Database.json';
+
+export const hasPendingWorkspaceUserSync = (): boolean => {
+  return Boolean(localStorage.getItem(PENDING_WORKSPACE_SYNC_KEY));
+};
+
+export const markPendingWorkspaceUserSync = (): void => {
+  localStorage.setItem(PENDING_WORKSPACE_SYNC_KEY, new Date().toISOString());
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('kitarajin_workspace_sync', { detail: { pending: true } }));
+  }
+};
+
+export const clearPendingWorkspaceUserSync = (): void => {
+  localStorage.removeItem(PENDING_WORKSPACE_SYNC_KEY);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('kitarajin_workspace_sync', { detail: { pending: false } }));
+  }
+};
 
 export const getConnectedGoogleEmail = (): string | null => {
   if (cachedGoogleUser?.email) return cachedGoogleUser.email;
@@ -54,25 +85,28 @@ export const getConnectedGoogleEmail = (): string | null => {
   return localStorage.getItem('kitarajin_google_account_email') || null;
 };
 
+export const hasRealAccessToken = (): boolean => {
+  return Boolean(cachedAccessToken && !cachedAccessToken.startsWith('access-token-'));
+};
+
 export const linkGoogleAccount = (
   email: string,
   userDisplayName: string = 'Kepala Sekolah'
-): { user: FirebaseUser; accessToken: string } => {
+): { user: FirebaseUser; accessToken: string | null } => {
   const cleanEmail = email.trim();
-  const mockUser = {
+  const linkedUser = {
     email: cleanEmail,
     displayName: userDisplayName,
     uid: `google-${Date.now()}`,
     photoURL: null,
   } as unknown as FirebaseUser;
 
-  cachedGoogleUser = mockUser;
-  cachedAccessToken = `access-token-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  cachedGoogleUser = linkedUser;
   localStorage.setItem('kitarajin_google_account_email', cleanEmail);
 
   return {
-    user: mockUser,
-    accessToken: cachedAccessToken,
+    user: linkedUser,
+    accessToken: hasRealAccessToken() ? cachedAccessToken : null,
   };
 };
 
@@ -86,15 +120,9 @@ export const initAuth = (
   onAuthSuccess?: (user: FirebaseUser, token: string) => void,
   onAuthFailure?: () => void
 ) => {
-  // Cek apakah sudah ada akun Google terhubung sebelumnya
   const existingConnectedEmail = getConnectedGoogleEmail();
-  if (existingConnectedEmail) {
-    if (!cachedGoogleUser) {
-      linkGoogleAccount(existingConnectedEmail);
-    }
-    if (onAuthSuccess && cachedGoogleUser && cachedAccessToken) {
-      onAuthSuccess(cachedGoogleUser, cachedAccessToken);
-    }
+  if (existingConnectedEmail && !cachedGoogleUser) {
+    linkGoogleAccount(existingConnectedEmail);
   }
 
   try {
@@ -104,16 +132,18 @@ export const initAuth = (
         if (user.email) {
           localStorage.setItem('kitarajin_google_account_email', user.email);
         }
-        if (cachedAccessToken) {
+        if (hasRealAccessToken() && cachedAccessToken) {
           if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-        }
-      } else {
-        const stillLinked = getConnectedGoogleEmail();
-        if (!stillLinked) {
-          cachedGoogleUser = null;
+        } else if (!isSigningIn) {
           cachedAccessToken = null;
           if (onAuthFailure) onAuthFailure();
         }
+      } else {
+        cachedAccessToken = null;
+        if (!getConnectedGoogleEmail()) {
+          cachedGoogleUser = null;
+        }
+        if (onAuthFailure) onAuthFailure();
       }
     });
   } catch (err) {
@@ -123,26 +153,23 @@ export const initAuth = (
 };
 
 /**
- * Mencegah kebocoran pesan teknis Firebase dan menggantinya dengan petunjuk jelas dalam Bahasa Indonesia
+ * Pesan kesalahan autentikasi Google dalam Bahasa Indonesia yang jelas
  */
 export function formatAuthErrorMessage(error: any): string {
-  if (!error) return 'Otentikasi berhasil dialihkan ke mode penyimpanan aman lokal.';
-  const msg = typeof error === 'string' ? error : (error.message || error.code || '');
+  if (!error) return 'Silakan otorisasi akun Google Anda untuk menyinkronkan ke Drive & Sheets.';
+  const msg = typeof error === 'string' ? error : error.message || error.code || '';
 
   if (msg.includes('auth/popup-blocked')) {
-    return 'Jendela popup Google terhalang oleh peramban. Akun Google email Anda tetap dapat ditautkan secara langsung.';
+    return 'Jendela popup login Google terhalang browser. Mohon izinkan popup lalu klik kembali tombol Hubungkan & Sinkronkan Google.';
   }
   if (msg.includes('auth/popup-closed-by-user') || msg.includes('cancelled-popup-request')) {
-    return 'Jendela akun Google ditutup. Anda dapat menautkan akun langsung dengan tombol "Tautkan Akun Google Ini".';
-  }
-  if (msg.includes('auth/operation-not-allowed') || msg.includes('auth/configuration-not-found')) {
-    return 'Autentikasi cloud dialihkan ke penautan akun terverifikasi langsung untuk Kepala Sekolah.';
+    return 'Jendela login Google ditutup sebelum selesai. Klik kembali tombol Hubungkan Google untuk melanjutkan sinkronisasi Drive & Sheets.';
   }
   if (msg.includes('auth/unauthorized-domain')) {
-    return 'Domain aplikasi diverifikasi langsung. Akun Google email Kepala Sekolah berhasil dihubungkan.';
+    return 'Domain aplikasi belum diizinkan untuk popup Google. Silakan periksa konfigurasi domain OAuth.';
   }
-  if (msg.toLowerCase().includes('firebase') || msg.toLowerCase().includes('auth/')) {
-    return 'Akun Google Kepala Sekolah terhubung penuh dan terverifikasi untuk sinkronisasi database.';
+  if (msg.toLowerCase().includes('401') || msg.toLowerCase().includes('invalid credentials')) {
+    return 'Sesi akses Google telah berakhir. Silakan klik Hubungkan / Otorisasi Ulang Akun Google.';
   }
   return msg;
 }
@@ -156,10 +183,8 @@ export const signInWithGoogle = async (
   try {
     isSigningIn = true;
     const customProvider = new GoogleAuthProvider();
-    customProvider.addScope('https://www.googleapis.com/auth/spreadsheets');
-    customProvider.addScope('https://www.googleapis.com/auth/drive.file');
-    
-    // Selalu tampilkan pemilih akun agar Kepala Sekolah bebas memilih email mana saja
+    WORKSPACE_SCOPES.forEach((s) => customProvider.addScope(s));
+
     const customParams: Record<string, string> = {
       prompt: 'select_account',
     };
@@ -171,7 +196,7 @@ export const signInWithGoogle = async (
     const result = await signInWithPopup(auth, customProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
-      throw new Error('Gagal memperoleh token akses dari Google.');
+      throw new Error('Gagal memperoleh token akses Google Drive & Sheets.');
     }
     cachedAccessToken = credential.accessToken;
     cachedGoogleUser = result.user;
@@ -180,17 +205,7 @@ export const signInWithGoogle = async (
     }
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
-    console.warn('Google Sign In popup bypassed/handled:', error?.message || error);
-    // Jika popup gagal atau diblokir atau provider belum aktif di konsol,
-    // TAPI emailHint ada (misal presensiapp138@gmail.com):
-    // HUBUNGKAN LANGSUNG AKUN GOOGLE INI TANPA GAGAL!
-    if (emailHint && emailHint.includes('@')) {
-      const linked = linkGoogleAccount(emailHint, 'Kepala Sekolah');
-      return {
-        user: linked.user,
-        accessToken: linked.accessToken,
-      };
-    }
+    console.warn('Google Sign In error:', error?.message || error);
     const cleanMsg = formatAuthErrorMessage(error);
     throw new Error(cleanMsg);
   } finally {
@@ -199,7 +214,7 @@ export const signInWithGoogle = async (
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
-  return cachedAccessToken;
+  return hasRealAccessToken() ? cachedAccessToken : null;
 };
 
 export const getGoogleUser = (): FirebaseUser | null => {
@@ -233,24 +248,50 @@ export const cleanGoogleId = (val: string): string => {
 // ==========================================
 // Struktur 10 Tabel KITARAJIN
 // ==========================================
+export const USER_SHEET_HEADERS = [
+  'ID',
+  'NIP',
+  'Nama Lengkap',
+  'Email',
+  'Username',
+  'Password',
+  'Password Hash',
+  'Peran',
+  'Jabatan',
+  'Departemen',
+  'Sesi Presensi',
+  'Status Aktif',
+  'Dibuat',
+  'Diperbarui',
+];
+
+export function formatUserRowForSheet(u: User): any[] {
+  return [
+    u.id,
+    u.nip,
+    u.name,
+    u.email || '',
+    u.username,
+    u.savedPassword || '',
+    u.passwordHash || '',
+    u.role,
+    u.position,
+    u.departmentName || u.departmentId || '',
+    (u.assignedSessionIds && u.assignedSessionIds.length > 0
+      ? u.assignedSessionIds
+      : ['sesi-1', 'sesi-2', 'sesi-3']
+    ).join(', '),
+    u.isActive ? 'AKTIF' : 'NONAKTIF',
+    u.createdAt,
+    u.updatedAt,
+  ];
+}
+
 export const TAB_DEFINITIONS = [
   {
     name: 'Users',
-    headers: ['ID', 'NIP', 'Nama Lengkap', 'Email', 'Username', 'Peran', 'Jabatan', 'Departemen ID', 'Status Aktif', 'Dibuat', 'Diperbarui'],
-    getData: () =>
-      getAllUsers().map((u) => [
-        u.id,
-        u.nip,
-        u.name,
-        u.email || '',
-        u.username,
-        u.role,
-        u.position,
-        u.departmentId || '',
-        u.isActive ? 'AKTIF' : 'NONAKTIF',
-        u.createdAt,
-        u.updatedAt,
-      ]),
+    headers: USER_SHEET_HEADERS,
+    getData: () => getAllUsers().map(formatUserRowForSheet),
   },
   {
     name: 'Departments',
@@ -260,7 +301,19 @@ export const TAB_DEFINITIONS = [
   },
   {
     name: 'Schedules',
-    headers: ['ID', 'Nama Jadwal', 'Sesi', 'Target Role', 'Buka Masuk', 'Batas Masuk', 'Toleransi (Mnt)', 'Mulai Pulang', 'Batas Pulang', 'Hari Kerja', 'Status'],
+    headers: [
+      'ID',
+      'Nama Jadwal',
+      'Sesi',
+      'Target Role',
+      'Buka Masuk',
+      'Batas Masuk',
+      'Toleransi (Mnt)',
+      'Mulai Pulang',
+      'Batas Pulang',
+      'Hari Kerja',
+      'Status',
+    ],
     getData: () =>
       getAllSchedules().map((s) => [
         s.id,
@@ -308,7 +361,22 @@ export const TAB_DEFINITIONS = [
   },
   {
     name: 'Attendance',
-    headers: ['ID', 'User ID', 'NIP', 'Nama', 'Peran', 'Tanggal', 'Tipe', 'Waktu', 'Status', 'Jarak GPS (M)', 'Lokasi Valid', 'Wajah Valid', 'Skor Wajah (%)', 'Catatan'],
+    headers: [
+      'ID',
+      'User ID',
+      'NIP',
+      'Nama',
+      'Peran',
+      'Tanggal',
+      'Tipe',
+      'Waktu',
+      'Status',
+      'Jarak GPS (M)',
+      'Lokasi Valid',
+      'Wajah Valid',
+      'Skor Wajah (%)',
+      'Catatan',
+    ],
     getData: () =>
       getAllAttendanceRecords().map((a) => [
         a.id,
@@ -329,7 +397,21 @@ export const TAB_DEFINITIONS = [
   },
   {
     name: 'LeaveRequests',
-    headers: ['ID', 'User ID', 'NIP', 'Nama', 'Tipe Izin', 'Mulai', 'Selesai', 'Durasi (Hari)', 'Alasan', 'Status', 'Direview Oleh', 'Catatan Review', 'Waktu Pengajuan'],
+    headers: [
+      'ID',
+      'User ID',
+      'NIP',
+      'Nama',
+      'Tipe Izin',
+      'Mulai',
+      'Selesai',
+      'Durasi (Hari)',
+      'Alasan',
+      'Status',
+      'Direview Oleh',
+      'Catatan Review',
+      'Waktu Pengajuan',
+    ],
     getData: () =>
       getAllLeaveRequests().map((l) => [
         l.id,
@@ -349,7 +431,18 @@ export const TAB_DEFINITIONS = [
   },
   {
     name: 'Assignments',
-    headers: ['ID', 'Judul Penugasan', 'Deskripsi', 'Ditugaskan Kepada', 'Pemberi Tugas', 'Batas Waktu', 'Status', 'Foto Bukti Geotag', 'Catatan', 'Dibuat'],
+    headers: [
+      'ID',
+      'Judul Penugasan',
+      'Deskripsi',
+      'Ditugaskan Kepada',
+      'Pemberi Tugas',
+      'Batas Waktu',
+      'Status',
+      'Foto Bukti Geotag',
+      'Catatan',
+      'Dibuat',
+    ],
     getData: () =>
       getAllAssignments().map((asg) => [
         asg.id,
@@ -382,7 +475,18 @@ export const TAB_DEFINITIONS = [
   },
   {
     name: 'Settings',
-    headers: ['Nama Sekolah', 'Alamat Sekolah', 'Judul Aplikasi', 'Ambang Wajah (%)', 'Ketat GPS', 'Ketat Wajah', 'Mode Penyimpanan', 'ID Spreadsheet', 'ID Folder Drive', 'Sinkron Terakhir'],
+    headers: [
+      'Nama Sekolah',
+      'Alamat Sekolah',
+      'Judul Aplikasi',
+      'Ambang Wajah (%)',
+      'Ketat GPS',
+      'Ketat Wajah',
+      'Mode Penyimpanan',
+      'ID Spreadsheet',
+      'ID Folder Drive',
+      'Sinkron Terakhir',
+    ],
     getData: () => {
       const s = getAppSettings();
       return [
@@ -404,7 +508,521 @@ export const TAB_DEFINITIONS = [
 ];
 
 // ==========================================
-// Helper Pemanggilan Google API
+// Helper Sinkronisasi Non-Destructive Users (Username & Password)
+// ke Google Sheets & Google Drive
+// ==========================================
+
+async function parseSheetRowsToUsers(rows: any[][]): Promise<User[]> {
+  if (!rows || rows.length < 2) return [];
+  const headerRow = rows[0].map((h) => String(h || '').trim().toLowerCase());
+
+  const findCol = (...candidates: string[]): number => {
+    for (const c of candidates) {
+      const idx = headerRow.indexOf(c.toLowerCase());
+      if (idx !== -1) return idx;
+    }
+    return -1;
+  };
+
+  const idxId = findCol('id');
+  const idxNip = findCol('nip');
+  const idxName = findCol('nama lengkap', 'nama', 'name');
+  const idxEmail = findCol('email');
+  const idxUsername = findCol('username');
+  const idxPassword = findCol('password', 'sandi', 'savedpassword');
+  const idxPasswordHash = findCol('password hash', 'passwordhash', 'hash');
+  const idxRole = findCol('peran', 'role');
+  const idxPosition = findCol('jabatan', 'position');
+  const idxDept = findCol('departemen', 'departemen id', 'departmentname', 'departmentid');
+  const idxSessions = findCol('sesi presensi', 'assignedsessionids');
+  const idxStatus = findCol('status aktif', 'status', 'isactive');
+  const idxCreated = findCol('dibuat', 'createdat');
+  const idxUpdated = findCol('diperbarui', 'updatedat');
+
+  const parsedUsers: User[] = [];
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r || r.length === 0) continue;
+
+    const username = idxUsername !== -1 ? String(r[idxUsername] || '').trim() : '';
+    const id = idxId !== -1 ? String(r[idxId] || '').trim() : '';
+    if (!username && !id) continue;
+
+    const savedPassword = idxPassword !== -1 ? String(r[idxPassword] || '').trim() : '';
+    let passwordHash = idxPasswordHash !== -1 ? String(r[idxPasswordHash] || '').trim() : '';
+    if (!passwordHash && savedPassword) {
+      passwordHash = await hashPassword(savedPassword);
+    }
+
+    const rawRole = idxRole !== -1 ? String(r[idxRole] || '').trim().toLowerCase() : 'karyawan';
+    const role: User['role'] =
+      rawRole === 'kepala_sekolah' || rawRole === 'admin' || rawRole === 'karyawan'
+        ? (rawRole as User['role'])
+        : 'karyawan';
+
+    const rawStatus = idxStatus !== -1 ? String(r[idxStatus] || 'AKTIF').trim().toUpperCase() : 'AKTIF';
+    const isActive = rawStatus !== 'NONAKTIF' && rawStatus !== 'FALSE' && rawStatus !== '0';
+
+    const sessionsRaw = idxSessions !== -1 ? String(r[idxSessions] || '').trim() : '';
+    const assignedSessionIds = sessionsRaw
+      ? sessionsRaw
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : ['sesi-1', 'sesi-2', 'sesi-3'];
+
+    const deptVal = idxDept !== -1 ? String(r[idxDept] || '').trim() : '';
+    const nowIso = new Date().toISOString();
+
+    parsedUsers.push({
+      id: id || `usr-sheet-${username || i}`,
+      nip: idxNip !== -1 ? String(r[idxNip] || '').trim() : '',
+      name: idxName !== -1 ? String(r[idxName] || '').trim() : username,
+      email: idxEmail !== -1 ? String(r[idxEmail] || '').trim() || undefined : undefined,
+      username,
+      passwordHash,
+      savedPassword: savedPassword || undefined,
+      role,
+      departmentId: deptVal,
+      departmentName: deptVal,
+      position: idxPosition !== -1 ? String(r[idxPosition] || '').trim() : 'Pegawai',
+      assignedSessionIds,
+      isActive,
+      createdAt: idxCreated !== -1 && r[idxCreated] ? String(r[idxCreated]) : nowIso,
+      updatedAt: idxUpdated !== -1 && r[idxUpdated] ? String(r[idxUpdated]) : nowIso,
+    });
+  }
+
+  return parsedUsers;
+}
+
+/**
+ * Pastikan tab 'Users' ada di Spreadsheet, baca baris yang sudah ada,
+ * gabungkan tanpa menghapus username/password lama, lalu tulis kembali hasil gabungannya.
+ */
+export async function syncUsersWithGoogleSheet(
+  accessToken: string,
+  spreadsheetId: string
+): Promise<{
+  totalUsers: number;
+  importedFromSheet: number;
+  updatedLocal: boolean;
+}> {
+  const cleanId = cleanGoogleId(spreadsheetId);
+  if (!cleanId) {
+    throw new Error('ID Google Spreadsheet belum diatur.');
+  }
+
+  // 1. Cek daftar sheet/tab yang ada
+  const metaRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}?fields=sheets.properties.title`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }
+  );
+  if (!metaRes.ok) {
+    const err = await metaRes.json().catch(() => ({}));
+    throw new Error(err.error?.message || `Gagal mengakses Google Spreadsheet (${metaRes.status})`);
+  }
+
+  const meta = await metaRes.json();
+  const existingTitles: string[] = (meta.sheets || []).map((s: any) => s.properties?.title);
+
+  if (!existingTitles.includes('Users')) {
+    const addTabRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}:batchUpdate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          requests: [
+            {
+              addSheet: {
+                properties: {
+                  title: 'Users',
+                  gridProperties: { frozenRowCount: 1 },
+                },
+              },
+            },
+          ],
+        }),
+      }
+    );
+    if (!addTabRes.ok) {
+      const err = await addTabRes.json().catch(() => ({}));
+      throw new Error(err.error?.message || 'Gagal menambahkan tab Users di Spreadsheet.');
+    }
+  }
+
+  // 2. Baca semua data existing di tab 'Users' agar username & password sebelumnya TIDAK PERNAH terhapus
+  let sheetUsers: User[] = [];
+  const readRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/'Users'!A1:Z2000`,
+    {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    }
+  );
+  if (readRes.ok) {
+    const readData = await readRes.json();
+    if (Array.isArray(readData.values) && readData.values.length > 0) {
+      sheetUsers = await parseSheetRowsToUsers(readData.values);
+    }
+  }
+
+  // 3. Gabungkan non-destruktif dengan local/Firestore users
+  const localUsers = getAllUsers();
+  const { merged } = mergeUserRecordsNonDestructive(localUsers, sheetUsers);
+
+  // Pastikan setiap user punya passwordHash jika memiliki savedPassword
+  for (const u of merged) {
+    if (!u.passwordHash && u.savedPassword) {
+      u.passwordHash = await hashPassword(u.savedPassword);
+    }
+  }
+
+  const importedFromSheet = merged.length - localUsers.length;
+  const updatedLocal =
+    importedFromSheet > 0 ||
+    JSON.stringify(merged.map((u) => u.id + u.updatedAt)) !==
+      JSON.stringify(localUsers.map((u) => u.id + u.updatedAt));
+
+  // Simpan hasil gabungan ke localStorage & Cloud Firestore
+  localStorage.setItem('kitarajin_table_users', JSON.stringify(merged));
+  for (const u of merged) {
+    syncRecordToCloud(SYNC_COLLECTIONS.USERS, u.id, u).catch(() => {});
+  }
+
+  // 4. Tulis hasil gabungan ke tab 'Users' Google Sheets
+  const rowsToWrite = [USER_SHEET_HEADERS, ...merged.map(formatUserRowForSheet)];
+  await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/'Users'!A1:Z2000:clear`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    }
+  ).catch(() => {});
+
+  const writeRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/'Users'!A1?valueInputOption=USER_ENTERED`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        range: `'Users'!A1`,
+        majorDimension: 'ROWS',
+        values: rowsToWrite,
+      }),
+    }
+  );
+
+  if (!writeRes.ok) {
+    const err = await writeRes.json().catch(() => ({}));
+    throw new Error(err.error?.message || 'Gagal menulis data Username & Password ke Google Sheets.');
+  }
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: 'users' } }));
+  }
+
+  return {
+    totalUsers: merged.length,
+    importedFromSheet: Math.max(0, importedFromSheet),
+    updatedLocal,
+  };
+}
+
+/**
+ * Sinkronisasi non-destruktif daftar Username & Password ke file JSON di Google Drive
+ */
+export async function syncUsersWithGoogleDrive(
+  accessToken: string,
+  folderId?: string
+): Promise<{
+  fileId: string;
+  fileUrl: string;
+  totalUsers: number;
+  importedFromDrive: number;
+}> {
+  const settings = getAppSettings();
+  const cleanFolderId = cleanGoogleId(folderId || settings.googleDriveFolderId || '');
+  let targetFileId = cleanGoogleId(settings.googleDriveUsersFileId || '');
+
+  // 1. Cari file backup Users di Google Drive jika belum ada ID tersimpan
+  if (!targetFileId) {
+    const queryParts = [`name = '${DRIVE_USERS_BACKUP_FILENAME}'`, 'trashed = false'];
+    if (cleanFolderId) {
+      queryParts.push(`'${cleanFolderId}' in parents`);
+    }
+    const searchUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+      queryParts.join(' and ')
+    )}&fields=files(id,name,parents)`;
+
+    const searchRes = await fetch(searchUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (searchRes.ok) {
+      const searchData = await searchRes.json();
+      if (Array.isArray(searchData.files) && searchData.files.length > 0) {
+        targetFileId = searchData.files[0].id;
+      }
+    }
+  }
+
+  // 2. Jika file sudah ada di Drive, unduh dulu isinya agar akun lama TIDAK terhapus
+  let driveUsers: User[] = [];
+  if (targetFileId) {
+    try {
+      const dlRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${targetFileId}?alt=media`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+      if (dlRes.ok) {
+        const parsed = await dlRes.json();
+        const rawList = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.users) ? parsed.users : [];
+        driveUsers = rawList;
+      } else if (dlRes.status === 404) {
+        targetFileId = '';
+      }
+    } catch (e) {
+      console.warn('Gagal membaca file users Drive yang ada, lanjutkan merge lokal:', e);
+    }
+  }
+
+  // Pastikan user dari Drive memiliki passwordHash jika ada savedPassword
+  for (const du of driveUsers) {
+    if (!du.passwordHash && du.savedPassword) {
+      du.passwordHash = await hashPassword(du.savedPassword);
+    }
+  }
+
+  // 3. Gabungkan tanpa menghapus akun manapun
+  const localUsers = getAllUsers();
+  const { merged } = mergeUserRecordsNonDestructive(localUsers, driveUsers);
+  const importedFromDrive = Math.max(0, merged.length - localUsers.length);
+
+  localStorage.setItem('kitarajin_table_users', JSON.stringify(merged));
+  for (const u of merged) {
+    syncRecordToCloud(SYNC_COLLECTIONS.USERS, u.id, u).catch(() => {});
+  }
+
+  const payloadContent = JSON.stringify(
+    {
+      app: 'KITARAJIN',
+      updatedAt: new Date().toISOString(),
+      totalUsers: merged.length,
+      users: merged,
+    },
+    null,
+    2
+  );
+
+  // 4. Update file yang ada atau buat file baru di Google Drive
+  if (targetFileId) {
+    const patchRes = await fetch(
+      `https://www.googleapis.com/upload/drive/v3/files/${targetFileId}?uploadType=media`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: payloadContent,
+      }
+    );
+    if (!patchRes.ok) {
+      const err = await patchRes.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Gagal memperbarui file database di Google Drive (${patchRes.status})`);
+    }
+  } else {
+    const boundary = 'kitarajin_drive_boundary_' + Date.now();
+    const metadata: Record<string, any> = {
+      name: DRIVE_USERS_BACKUP_FILENAME,
+      mimeType: 'application/json',
+      description: 'Database tersinkron Username & Password seluruh pengguna aplikasi KITARAJIN',
+    };
+    if (cleanFolderId) {
+      metadata.parents = [cleanFolderId];
+    }
+
+    const multipartBody =
+      `--${boundary}\r\n` +
+      `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+      `${JSON.stringify(metadata)}\r\n` +
+      `--${boundary}\r\n` +
+      `Content-Type: application/json\r\n\r\n` +
+      `${payloadContent}\r\n` +
+      `--${boundary}--`;
+
+    const createRes = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,webViewLink',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+        },
+        body: multipartBody,
+      }
+    );
+    if (!createRes.ok) {
+      const err = await createRes.json().catch(() => ({}));
+      throw new Error(err.error?.message || `Gagal membuat file database di Google Drive (${createRes.status})`);
+    }
+    const created = await createRes.json();
+    targetFileId = created.id;
+  }
+
+  // Simpan fileId Drive agar sinkronisasi berikutnya langsung memperbarui file yang sama
+  if (targetFileId) {
+    const latestSettings = getAppSettings();
+    const updatedSettings = {
+      ...latestSettings,
+      googleDriveUsersFileId: targetFileId,
+      lastWorkspaceUserSyncAt: new Date().toISOString(),
+    };
+    localStorage.setItem('kitarajin_table_settings', JSON.stringify(updatedSettings));
+    syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', updatedSettings).catch(() => {});
+  }
+
+  return {
+    fileId: targetFileId,
+    fileUrl: `https://drive.google.com/file/d/${targetFileId}/view`,
+    totalUsers: merged.length,
+    importedFromDrive,
+  };
+}
+
+/**
+ * Sinkronisasi penuh seluruh Username & Password ke Google Sheets dan/atau Google Drive
+ * secara non-destruktif (tidak menghapus akun yang sudah ditambahkan).
+ */
+export async function syncAllUsersToDriveAndSheet(
+  accessToken: string,
+  options?: { spreadsheetId?: string; folderId?: string }
+): Promise<{
+  success: boolean;
+  totalUsers: number;
+  importedCount: number;
+  syncedToSheet: boolean;
+  syncedToDrive: boolean;
+  driveFileId?: string;
+  spreadsheetId?: string;
+  message: string;
+}> {
+  const settings = getAppSettings();
+  const sheetId = cleanGoogleId(options?.spreadsheetId || settings.googleSheetSpreadsheetId || '');
+  const folderId = cleanGoogleId(options?.folderId || settings.googleDriveFolderId || '');
+
+  let syncedToDrive = false;
+  let syncedToSheet = false;
+  let totalUsers = getAllUsers().length;
+  let importedCount = 0;
+  let driveFileId = settings.googleDriveUsersFileId;
+
+  // 1. Sinkronkan ke Google Drive (selalu dijalankan agar backup Drive selalu up-to-date)
+  const driveRes = await syncUsersWithGoogleDrive(accessToken, folderId || undefined);
+  syncedToDrive = true;
+  totalUsers = driveRes.totalUsers;
+  importedCount += driveRes.importedFromDrive;
+  driveFileId = driveRes.fileId;
+
+  // 2. Sinkronkan ke Google Sheets jika Spreadsheet ID sudah ditautkan
+  if (sheetId) {
+    const sheetRes = await syncUsersWithGoogleSheet(accessToken, sheetId);
+    syncedToSheet = true;
+    totalUsers = sheetRes.totalUsers;
+    importedCount += sheetRes.importedFromSheet;
+  }
+
+  const nowIso = new Date().toISOString();
+  const latestSettings = getAppSettings();
+  const savedSettings = {
+    ...latestSettings,
+    googleDriveUsersFileId: driveFileId || latestSettings.googleDriveUsersFileId,
+    lastWorkspaceUserSyncAt: nowIso,
+    lastSyncTimestamp: nowIso,
+    isGoogleConnected: true,
+    storageMode: 'google_workspace_sync' as const,
+  };
+  localStorage.setItem('kitarajin_table_settings', JSON.stringify(savedSettings));
+  syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', savedSettings).catch(() => {});
+
+  clearPendingWorkspaceUserSync();
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('kitarajin_workspace_sync', {
+        detail: { pending: false, lastSync: nowIso, totalUsers, syncedToSheet, syncedToDrive },
+      })
+    );
+  }
+
+  const targetLabels: string[] = [];
+  if (syncedToSheet) targetLabels.push('Google Sheets');
+  if (syncedToDrive) targetLabels.push('Google Drive');
+
+  return {
+    success: true,
+    totalUsers,
+    importedCount,
+    syncedToSheet,
+    syncedToDrive,
+    driveFileId,
+    spreadsheetId: sheetId || undefined,
+    message: `Berhasil menyinkronkan ${totalUsers} akun Username & Password ke ${targetLabels.join(' & ')} tanpa menghapus data lama.${
+      importedCount > 0 ? ` (${importedCount} akun lama dipulihkan/digabungkan.)` : ''
+    }`,
+  };
+}
+
+/**
+ * Dipanggil otomatis setiap kali ada penambahan/perubahan Username atau Password
+ */
+export async function autoSyncUsersToWorkspace(): Promise<{
+  synced: boolean;
+  reason?: string;
+  message?: string;
+}> {
+  const token = await getAccessToken();
+  if (!token) {
+    markPendingWorkspaceUserSync();
+    return {
+      synced: false,
+      reason: 'needs_google_auth',
+      message: 'Tersimpan di Cloud Firestore. Klik "Sinkronkan ke Drive & Sheet" untuk menyalin langsung ke Google Drive/Sheets.',
+    };
+  }
+
+  try {
+    const res = await syncAllUsersToDriveAndSheet(token);
+    return {
+      synced: true,
+      message: res.message,
+    };
+  } catch (err: any) {
+    console.warn('Auto sync users to Google Workspace note:', err?.message || err);
+    markPendingWorkspaceUserSync();
+    return {
+      synced: false,
+      reason: 'api_error',
+      message: formatAuthErrorMessage(err),
+    };
+  }
+}
+
+// ==========================================
+// Helper Pemanggilan Google API (10 Tab)
 // ==========================================
 
 export interface CreateDatabaseResult {
@@ -460,7 +1078,6 @@ export async function createGoogleSpreadsheetWithTabs(
   parentFolderId?: string
 ): Promise<{ spreadsheetId: string; spreadsheetUrl: string }> {
   const title = `KITARAJIN - Database Presensi (${schoolName})`;
-  // Biarkan Google Sheets menugaskan sheetId secara otomatis agar tidak terjadi tabrakan
   const sheetsPayload = TAB_DEFINITIONS.map((tab) => ({
     properties: {
       title: tab.name,
@@ -509,7 +1126,7 @@ export async function createGoogleSpreadsheetWithTabs(
     }
   }
 
-  // Isi setiap tab dengan header dan data awal
+  // Isi setiap tab dengan header dan data awal (non-destructive untuk Users)
   await writeAllTabsData(accessToken, spreadsheetId);
 
   return { spreadsheetId, spreadsheetUrl };
@@ -522,7 +1139,6 @@ export async function ensureSpreadsheetHas10Tabs(
   accessToken: string,
   spreadsheetId: string
 ): Promise<{ spreadsheetId: string; spreadsheetUrl: string; addedTabs: string[] }> {
-  // 1. Ambil daftar tab yang sudah ada
   const getRes = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties.title`,
     {
@@ -536,15 +1152,10 @@ export async function ensureSpreadsheetHas10Tabs(
   }
 
   const meta = await getRes.json();
-  const existingSheetTitles: string[] = (meta.sheets || []).map(
-    (s: any) => s.properties?.title
-  );
+  const existingSheetTitles: string[] = (meta.sheets || []).map((s: any) => s.properties?.title);
 
-  const missingTabs = TAB_DEFINITIONS.filter(
-    (tab) => !existingSheetTitles.includes(tab.name)
-  );
+  const missingTabs = TAB_DEFINITIONS.filter((tab) => !existingSheetTitles.includes(tab.name));
 
-  // 2. Jika ada tab yang kurang, buat tab tersebut
   if (missingTabs.length > 0) {
     const requests = missingTabs.map((tab) => ({
       addSheet: {
@@ -575,7 +1186,6 @@ export async function ensureSpreadsheetHas10Tabs(
     }
   }
 
-  // 3. Tulis data & header ke semua tab
   await writeAllTabsData(accessToken, spreadsheetId);
 
   return {
@@ -587,9 +1197,24 @@ export async function ensureSpreadsheetHas10Tabs(
 
 /**
  * Tulis Header & Data untuk seluruh 10 tab ke Google Sheets
+ * (Untuk Users: selalu merge non-destruktif dulu agar username & password yang sudah ada tidak pernah terhapus!)
  */
 export async function writeAllTabsData(accessToken: string, spreadsheetId: string): Promise<void> {
-  const valueRanges = TAB_DEFINITIONS.map((tab) => {
+  const cleanId = cleanGoogleId(spreadsheetId);
+
+  // 1. Merge & sinkronkan Users terlebih dahulu (agar baris Users lama di Sheet/Drive TIDAK terhapus)
+  await syncUsersWithGoogleSheet(accessToken, cleanId);
+
+  // 2. Sinkronkan juga ke Google Drive backup JSON
+  try {
+    await syncUsersWithGoogleDrive(accessToken);
+  } catch (e) {
+    console.warn('Backup Drive note saat writeAllTabsData:', e);
+  }
+
+  // 3. Tulis 9 tab lainnya
+  const otherTabs = TAB_DEFINITIONS.filter((t) => t.name !== 'Users');
+  const valueRanges = otherTabs.map((tab) => {
     const rows = [tab.headers, ...tab.getData()];
     return {
       range: `'${tab.name}'!A1`,
@@ -598,7 +1223,7 @@ export async function writeAllTabsData(accessToken: string, spreadsheetId: strin
   });
 
   const res = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values:batchUpdate`,
     {
       method: 'POST',
       headers: {
@@ -616,6 +1241,8 @@ export async function writeAllTabsData(accessToken: string, spreadsheetId: strin
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error?.message || 'Gagal menulis data ke tab Google Sheets.');
   }
+
+  clearPendingWorkspaceUserSync();
 }
 
 /**
@@ -630,42 +1257,16 @@ export async function executeAutoCreateDatabase(
   let token = await getAccessToken();
   const tabsCreated: string[] = TAB_DEFINITIONS.map((t) => t.name);
 
-  // Jika belum ada token, coba hubungkan secara aman
   if (!token) {
-    if (onStepProgress) onStepProgress('Menyiapkan otentikasi akun Kepala Sekolah...');
-    try {
-      const authResult = await signInWithGoogle(currentUser.email);
-      if (authResult?.accessToken) {
-        token = authResult.accessToken;
-      }
-    } catch (authErr) {
-      console.warn('Google sign in note (safe fallback):', authErr);
-      // JANGAN LEMPAR FIREBASE ERROR!
-      // Jika Google Auth gagal/dibatalkan/popup diblokir, langsung aktifkan Database Vault Lokal 10 Tab!
-      if (onStepProgress) onStepProgress('Mengaktifkan Database 10 Tab Lokal / Vault Sekolah...');
-      updateAppSettings(currentUser, {
-        storageMode: 'local_secure_vault',
-        lastSyncTimestamp: new Date().toISOString(),
-      });
-      return {
-        success: true,
-        message: `Database 10 Tab (${tabsCreated.join(', ')}) berhasil aktif dalam mode Vault Sekolah yang aman tanpa kendala autentikasi eksternal. Semua data civitas sekolah siap digunakan.`,
-        tabsCreated,
-      };
+    if (onStepProgress) onStepProgress('Membuka otorisasi akun Google Kepala Sekolah...');
+    const authResult = await signInWithGoogle(currentUser.email);
+    if (authResult?.accessToken) {
+      token = authResult.accessToken;
     }
   }
 
-  // Jika tetap tidak ada token (misal jendela ditutup)
   if (!token) {
-    updateAppSettings(currentUser, {
-      storageMode: 'local_secure_vault',
-      lastSyncTimestamp: new Date().toISOString(),
-    });
-    return {
-      success: true,
-      message: `Database 10 Tab (${tabsCreated.join(', ')}) aktif dalam mode Vault Sekolah lokal. Seluruh sistem presensi dan data civitas sekolah siap beroperasi.`,
-      tabsCreated,
-    };
+    throw new Error('Otorisasi Google diperlukan untuk membuat & menyinkronkan database ke Google Drive dan Google Sheets.');
   }
 
   const settings = getAppSettings();
@@ -676,63 +1277,58 @@ export async function executeAutoCreateDatabase(
   let folderId = cleanGoogleId(customDriveId?.trim() || settings.googleDriveFolderId || '');
   let folderUrl = '';
 
-  try {
-    // 1. Google Drive: Buat folder jika belum ada
-    if (!folderId) {
-      if (onStepProgress) onStepProgress('Membuat Folder di Google Drive...');
-      const driveRes = await createGoogleDriveFolder(token, schoolName);
-      folderId = driveRes.folderId;
-      folderUrl = driveRes.folderUrl;
-    } else {
-      folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
-    }
-
-    // 2. Google Sheets: Buat baru atau tambahkan 10 tab ke ID yang ditempel
-    if (spreadsheetId) {
-      if (onStepProgress) onStepProgress(`Memeriksa & melengkapi 10 Tab di Spreadsheet (${spreadsheetId})...`);
-      const res = await ensureSpreadsheetHas10Tabs(token, spreadsheetId);
-      spreadsheetId = res.spreadsheetId;
-      spreadsheetUrl = res.spreadsheetUrl;
-    } else {
-      if (onStepProgress) onStepProgress('Membuat Spreadsheet baru & mengonfigurasi 10 Tab...');
-      const res = await createGoogleSpreadsheetWithTabs(token, schoolName, folderId);
-      spreadsheetId = res.spreadsheetId;
-      spreadsheetUrl = res.spreadsheetUrl;
-    }
-
-    // 3. Tulis data awal
-    if (onStepProgress) onStepProgress('Menyinkronkan data civitas sekolah ke 10 Tab...');
-    await writeAllTabsData(token, spreadsheetId);
-
-    // 4. Simpan ke AppSettings
-    if (onStepProgress) onStepProgress('Menyimpan ID database ke sistem KITARAJIN...');
-    updateAppSettings(currentUser, {
-      googleSheetSpreadsheetId: spreadsheetId,
-      googleDriveFolderId: folderId,
-      storageMode: 'google_workspace_sync',
-    });
-
-    return {
-      success: true,
-      message: `Database berhasil dibuat di Google Drive & Google Sheets! 10 Tab (${tabsCreated.join(', ')}) dan folder foto telah aktif.`,
-      spreadsheetId,
-      spreadsheetUrl,
-      folderId,
-      folderUrl,
-      tabsCreated,
-    };
-  } catch (apiErr) {
-    console.warn('Google API note, falling back to local vault:', apiErr);
-    updateAppSettings(currentUser, {
-      storageMode: 'local_secure_vault',
-      lastSyncTimestamp: new Date().toISOString(),
-    });
-    return {
-      success: true,
-      message: `Database 10 Tab (${tabsCreated.join(', ')}) berhasil diamankan di penyimpanan lokal sekolah. Anda juga dapat mengekspor atau menyalin format data kapan saja.`,
-      tabsCreated,
-    };
+  // 1. Google Drive: Buat folder jika belum ada
+  if (!folderId) {
+    if (onStepProgress) onStepProgress('Membuat Folder di Google Drive...');
+    const driveRes = await createGoogleDriveFolder(token, schoolName);
+    folderId = driveRes.folderId;
+    folderUrl = driveRes.folderUrl;
+  } else {
+    folderUrl = `https://drive.google.com/drive/folders/${folderId}`;
   }
+
+  // Simpan folderId dulu agar sinkronisasi Drive memakai folder ini
+  updateAppSettings(currentUser, {
+    googleDriveFolderId: folderId,
+    storageMode: 'google_workspace_sync',
+  });
+
+  // 2. Google Sheets: Buat baru atau tambahkan 10 tab ke ID yang ditempel
+  if (spreadsheetId) {
+    if (onStepProgress) onStepProgress(`Memeriksa & melengkapi 10 Tab di Spreadsheet (${spreadsheetId})...`);
+    const res = await ensureSpreadsheetHas10Tabs(token, spreadsheetId);
+    spreadsheetId = res.spreadsheetId;
+    spreadsheetUrl = res.spreadsheetUrl;
+  } else {
+    if (onStepProgress) onStepProgress('Membuat Spreadsheet baru & mengonfigurasi 10 Tab...');
+    const res = await createGoogleSpreadsheetWithTabs(token, schoolName, folderId);
+    spreadsheetId = res.spreadsheetId;
+    spreadsheetUrl = res.spreadsheetUrl;
+  }
+
+  // 3. Sinkronkan seluruh Username & Password ke Google Drive & Sheets tanpa menghapus data lama
+  if (onStepProgress) onStepProgress('Menyinkronkan Username & Password ke Google Drive & Sheets...');
+  await syncAllUsersToDriveAndSheet(token, { spreadsheetId, folderId });
+
+  // 4. Simpan ke AppSettings
+  if (onStepProgress) onStepProgress('Menyimpan ID database ke sistem KITARAJIN...');
+  updateAppSettings(currentUser, {
+    googleSheetSpreadsheetId: spreadsheetId,
+    googleDriveFolderId: folderId,
+    storageMode: 'google_workspace_sync',
+    isGoogleConnected: true,
+    lastWorkspaceUserSyncAt: new Date().toISOString(),
+  });
+
+  return {
+    success: true,
+    message: `Database berhasil dibuat & disinkronkan di Google Drive & Google Sheets! Semua Username & Password beserta 10 Tab (${tabsCreated.join(', ')}) telah aktif.`,
+    spreadsheetId,
+    spreadsheetUrl,
+    folderId,
+    folderUrl,
+    tabsCreated,
+  };
 }
 
 /**

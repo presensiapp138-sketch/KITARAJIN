@@ -19,6 +19,7 @@ export interface User {
   email?: string;
   username: string;
   passwordHash: string; // Enkripsi SHA-256 + salt
+  savedPassword?: string; // Sandi tersimpan agar dapat ditampilkan/disembunyikan & disinkronkan ke Sheet/Drive
   role: UserRole;
   departmentId?: string;
   departmentName?: string; // Nama departemen yang diketik secara manual oleh Admin/Kepala Sekolah
@@ -185,11 +186,13 @@ export interface AppSettings {
   storageMode: 'local_secure_vault' | 'google_workspace_sync' | 'hybrid';
   googleSheetSpreadsheetId?: string;
   googleDriveFolderId?: string;
+  googleDriveUsersFileId?: string;
   requireStrictFaceVerification: boolean;
   requireStrictGps: boolean;
   minFaceMatchThreshold: number; // e.g. 0.75 (75%)
   themeColor: string;
   lastSyncTimestamp?: string;
+  lastWorkspaceUserSyncAt?: string;
   googleAccountEmail?: string;
   isGoogleConnected?: boolean;
   googleConnectedAt?: string;

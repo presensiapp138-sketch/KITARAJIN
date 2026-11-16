@@ -20,7 +20,12 @@ import {
   DailyAttendancePair,
 } from '../types';
 import { hashPassword, verifyPassword } from './crypto';
-import { syncRecordToCloud, deleteRecordFromCloud, SYNC_COLLECTIONS } from './firestoreSync';
+import {
+  syncRecordToCloud,
+  deleteRecordFromCloud,
+  pullUsersFromCloudAndMerge,
+  SYNC_COLLECTIONS,
+} from './firestoreSync';
 
 const STORAGE_KEYS = {
   USERS: 'kitarajin_table_users',
@@ -130,6 +135,7 @@ export async function initializeDatabase(): Promise<void> {
         email: 'kepsek@sekolah.sch.id',
         username: 'kepsek',
         passwordHash: kepsekHash,
+        savedPassword: 'kepsek123',
         role: 'kepala_sekolah',
         departmentId: 'dept-1',
         position: 'Kepala Sekolah',
@@ -145,6 +151,7 @@ export async function initializeDatabase(): Promise<void> {
         email: 'admin.fauzi@sekolah.sch.id',
         username: 'adminfauzi',
         passwordHash: adminHash,
+        savedPassword: 'admin123',
         role: 'admin',
         departmentId: 'dept-1',
         position: 'Admin Tata Usaha',
@@ -160,6 +167,7 @@ export async function initializeDatabase(): Promise<void> {
         email: 'siti.rahma@sekolah.sch.id',
         username: 'sitirahma',
         passwordHash: guruHash,
+        savedPassword: 'staff123',
         role: 'karyawan',
         departmentId: 'dept-2',
         position: 'Guru Matematika',
@@ -175,6 +183,7 @@ export async function initializeDatabase(): Promise<void> {
         email: 'budi.satpam@sekolah.sch.id',
         username: 'budisatpam',
         passwordHash: satpamHash,
+        savedPassword: 'staff123',
         role: 'karyawan',
         departmentId: 'dept-3',
         position: 'Staf Keamanan',
@@ -396,28 +405,46 @@ export function logAuditAction(
  * - Karyawan: Login via Username atau NIP
  */
 export async function authenticateUser(identifier: string, rawPassword: string): Promise<{ success: boolean; user?: User; message: string }> {
-  const users = getAllUsers();
   const cleanId = identifier.trim().toLowerCase();
 
-  // Cari kecocokan identifier
-  let user = users.find((u) => {
-    return (
-      u.username.toLowerCase() === cleanId ||
-      (u.email && u.email.toLowerCase() === cleanId) ||
-      u.nip === cleanId
-    );
-  });
+  const findUserInList = (list: User[]): User | undefined => {
+    let found = list.find((u) => {
+      return (
+        u.username.toLowerCase() === cleanId ||
+        (u.email && u.email.toLowerCase() === cleanId) ||
+        u.nip === cleanId
+      );
+    });
 
-  // Jika identifier adalah presensiapp138@gmail.com atau variasi email kepala sekolah, tautkan otomatis ke akun Kepala Sekolah
-  if (!user && (cleanId === 'presensiapp138@gmail.com' || cleanId.includes('presensi') || cleanId.includes('kepsek') || cleanId.includes('mulyadi'))) {
-    const ksUser = users.find((u) => u.role === 'kepala_sekolah');
-    if (ksUser) {
-      user = ksUser;
-      if (ksUser.email !== identifier.trim()) {
-        ksUser.email = identifier.trim();
-        ksUser.updatedAt = new Date().toISOString();
-        localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    if (!found && (cleanId === 'presensiapp138@gmail.com' || cleanId.includes('presensi') || cleanId.includes('kepsek') || cleanId.includes('mulyadi'))) {
+      const ksUser = list.find((u) => u.role === 'kepala_sekolah');
+      if (ksUser) {
+        found = ksUser;
+        if (ksUser.email !== identifier.trim()) {
+          ksUser.email = identifier.trim();
+          ksUser.updatedAt = new Date().toISOString();
+          localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(list));
+        }
       }
+    }
+    return found;
+  };
+
+  let users = getAllUsers();
+  let user = findUserInList(users);
+
+  // Jika belum ketemu di lokal atau password belum cocok, tarik data terbaru dari Cloud Firestore
+  let isMatch = false;
+  if (user) {
+    isMatch = (user.passwordHash ? await verifyPassword(rawPassword, user.passwordHash) : false) || (Boolean(user.savedPassword) && user.savedPassword === rawPassword);
+  }
+
+  if (!user || !isMatch) {
+    await pullUsersFromCloudAndMerge();
+    users = getAllUsers();
+    user = findUserInList(users);
+    if (user) {
+      isMatch = (user.passwordHash ? await verifyPassword(rawPassword, user.passwordHash) : false) || (Boolean(user.savedPassword) && user.savedPassword === rawPassword);
     }
   }
 
@@ -435,8 +462,6 @@ export async function authenticateUser(identifier: string, rawPassword: string):
     };
   }
 
-  // Verifikasi hash password
-  const isMatch = await verifyPassword(rawPassword, user.passwordHash);
   if (!isMatch) {
     return {
       success: false,
@@ -529,7 +554,8 @@ export async function createUser(
     return { success: false, message: `Username "${userData.username}" sudah digunakan.` };
   }
 
-  const passwordHash = await hashPassword(userData.rawPassword);
+  const cleanRawPassword = userData.rawPassword.trim();
+  const passwordHash = await hashPassword(cleanRawPassword);
   const manualDept = userData.departmentName?.trim() || userData.departmentId?.trim() || '';
   const newUser: User = {
     id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -538,6 +564,7 @@ export async function createUser(
     username: userData.username.trim(),
     email: userData.email?.trim() || undefined,
     passwordHash,
+    savedPassword: cleanRawPassword,
     role: userData.role,
     departmentId: manualDept,
     departmentName: manualDept,
@@ -556,6 +583,7 @@ export async function createUser(
   users.push(newUser);
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   syncRecordToCloud(SYNC_COLLECTIONS.USERS, newUser.id, newUser);
+  import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
 
   logAuditAction(
     actor,
@@ -568,7 +596,7 @@ export async function createUser(
   return {
     success: true,
     user: newUser,
-    message: `Akun ${newUser.name} berhasil dibuat.`,
+    message: `Akun ${newUser.name} berhasil dibuat dan disinkronkan.`,
   };
 }
 
@@ -631,13 +659,16 @@ export async function updateUser(
 
   // Jika ada reset password
   if (updates.rawPassword && updates.rawPassword.trim().length > 0) {
-    targetUser.passwordHash = await hashPassword(updates.rawPassword.trim());
+    const cleanNewPass = updates.rawPassword.trim();
+    targetUser.passwordHash = await hashPassword(cleanNewPass);
+    targetUser.savedPassword = cleanNewPass;
   }
 
   targetUser.updatedAt = new Date().toISOString();
   users[index] = targetUser;
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   syncRecordToCloud(SYNC_COLLECTIONS.USERS, targetUser.id, targetUser);
+  import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
 
   // Synchronize Face Registry for this user if name or NIP changed
   if (updates.name || updates.nip) {
@@ -732,6 +763,7 @@ export function toggleUserStatus(actor: User, userId: string): { success: boolea
   users[index] = targetUser;
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   syncRecordToCloud(SYNC_COLLECTIONS.USERS, targetUser.id, targetUser);
+  import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
 
   const statusText = targetUser.isActive ? 'diaktifkan' : 'dinonaktifkan';
   logAuditAction(
@@ -920,6 +952,7 @@ export function updateUserSessions(
   users[idx].updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   syncRecordToCloud(SYNC_COLLECTIONS.USERS, userId, users[idx]);
+  import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
 
   if (actor.id === userId) {
     saveSession(users[idx]);
@@ -967,6 +1000,7 @@ export function toggleUserSession(
   users[idx].updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   syncRecordToCloud(SYNC_COLLECTIONS.USERS, userId, users[idx]);
+  import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
 
   if (actor.id === userId) {
     saveSession(users[idx]);
@@ -1028,6 +1062,9 @@ export function assignUsersToSession(
   });
 
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+  if (updatedCount > 0) {
+    import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
+  }
   logAuditAction(
     actor,
     'UPDATE_SESSION_ROSTER',
