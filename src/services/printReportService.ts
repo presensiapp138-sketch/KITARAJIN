@@ -71,7 +71,7 @@ export function printAttendanceDocument(
 
   const schoolName = settings.schoolName || 'SMA NEGERI 1 PRESTASI';
   const schoolAddress = settings.schoolAddress || 'Jl. Pendidikan No. 45, Kompleks Akademika';
-  const schoolEmail = settings.schoolEmail || 'kepsek@sekolah.sch.id';
+  const schoolEmail = settings.schoolEmail || ksUser?.email || '-';
   const appTitle = settings.appTitle || 'KITARAJIN Presensi';
 
   let docTitle = 'LAPORAN REKAPITULASI PRESENSI CIVITAS SEKOLAH';

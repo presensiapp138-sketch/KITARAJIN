@@ -212,9 +212,25 @@ export async function initializeDatabase(): Promise<void> {
     localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify([initialLog]));
   }
 
+  const currentUsers = getAllUsers();
+  const findUserRef = (id: string, fallbackName: string, fallbackNip: string) => {
+    const u = currentUsers.find((usr) => usr.id === id);
+    return {
+      name: u?.name || fallbackName,
+      nip: u?.nip || fallbackNip,
+    };
+  };
+  const ksRef = findUserRef('usr-ks-01', 'Drs. H. Mulyadi, M.Pd.', '197508122000031001');
+  const admRef = findUserRef('usr-adm-01', 'Ahmad Fauzi, S.Kom.', '198503202008011004');
+  const stf1Ref = findUserRef('usr-stf-01', 'Siti Rahmawati, S.Pd.', '199004152014022003');
+  const stf2Ref = findUserRef('usr-stf-02', 'Budi Santoso', '199211052018011005');
+
   // Initial Departments
   if (!localStorage.getItem(STORAGE_KEYS.DEPARTMENTS)) {
-    localStorage.setItem(STORAGE_KEYS.DEPARTMENTS, JSON.stringify(INITIAL_DEPARTMENTS));
+    const initDepts = INITIAL_DEPARTMENTS.map((d) =>
+      d.id === 'dept-1' ? { ...d, headName: admRef.name } : d
+    );
+    localStorage.setItem(STORAGE_KEYS.DEPARTMENTS, JSON.stringify(initDepts));
   }
 
   // Initial Schedules
@@ -244,8 +260,8 @@ export async function initializeDatabase(): Promise<void> {
       {
         id: 'face-seed-01',
         userId: 'usr-ks-01',
-        nip: '197508122000031001',
-        userName: 'Drs. H. Mulyadi, M.Pd.',
+        nip: ksRef.nip,
+        userName: ksRef.name,
         role: 'kepala_sekolah',
         faceEmbedding: sampleVector,
         registeredPhotoRef: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
@@ -258,12 +274,12 @@ export async function initializeDatabase(): Promise<void> {
       {
         id: 'face-seed-02',
         userId: 'usr-stf-01',
-        nip: '199004152014022003',
-        userName: 'Siti Rahmawati, S.Pd.',
+        nip: stf1Ref.nip,
+        userName: stf1Ref.name,
         role: 'karyawan',
         faceEmbedding: sampleVector,
         registeredPhotoRef: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80',
-        registeredBy: 'Drs. H. Mulyadi, M.Pd.',
+        registeredBy: ksRef.name,
         cameraUsed: 'user',
         qualityScore: 88,
         updatedAt: new Date().toISOString(),
@@ -286,8 +302,8 @@ export async function initializeDatabase(): Promise<void> {
       {
         id: 'leave-seed-01',
         userId: 'usr-stf-01',
-        nip: '199004152014022003',
-        userName: 'Siti Rahmawati, S.Pd.',
+        nip: stf1Ref.nip,
+        userName: stf1Ref.name,
         type: 'dinas',
         startDate: new Date().toISOString().split('T')[0],
         endDate: new Date(Date.now() + 86400000).toISOString().split('T')[0],
@@ -308,9 +324,9 @@ export async function initializeDatabase(): Promise<void> {
         title: 'Pemeriksaan Sarana Laboratorium Komputer',
         description: 'Lakukan inspeksi kebersihan dan fungsi 35 unit komputer lab untuk persiapan asesmen nasional.',
         assignedToUserId: 'usr-stf-01',
-        assignedToName: 'Siti Rahmawati, S.Pd.',
+        assignedToName: stf1Ref.name,
         assignedByUserId: 'usr-adm-01',
-        assignedByName: 'Ahmad Fauzi, S.Kom.',
+        assignedByName: admRef.name,
         dueDate: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
         status: 'belum_mulai',
         createdAt: new Date().toISOString(),
@@ -320,9 +336,9 @@ export async function initializeDatabase(): Promise<void> {
         title: 'Patroli Keamanan Area Gerbang Timur',
         description: 'Pantau ketertiban gerbang dan parkir kendaraan siswa saat jam kepulangan.',
         assignedToUserId: 'usr-stf-02',
-        assignedToName: 'Budi Santoso',
+        assignedToName: stf2Ref.name,
         assignedByUserId: 'usr-adm-01',
-        assignedByName: 'Ahmad Fauzi, S.Kom.',
+        assignedByName: admRef.name,
         dueDate: new Date().toISOString().split('T')[0],
         status: 'belum_mulai',
         createdAt: new Date().toISOString(),
@@ -346,6 +362,9 @@ export async function initializeDatabase(): Promise<void> {
     };
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(defaultSettings));
   }
+
+  // Pastikan seluruh entitas terkait mengikuti perubahan nama/NIP akun demo
+  reconcileUserReferences(currentUsers, false);
 }
 
 /**
@@ -372,7 +391,271 @@ export function getAuditLogs(): AuditLog[] {
   return data ? JSON.parse(data) : [];
 }
 
+/**
+ * Perbarui cache sesi pengguna aktif agar selalu sinkron dengan tabel Users terbaru
+ */
+export function refreshCurrentSessionFromUsers(): User | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.CURRENT_USER_SESSION);
+    if (!raw) return null;
+    const sessionUser = JSON.parse(raw);
+    if (!sessionUser?.id) return null;
+    const latest = getAllUsers().find((u) => u.id === sessionUser.id);
+    if (latest) {
+      saveSession(latest);
+      return latest;
+    }
+    return sessionUser;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sinkronkan seluruh referensi nama/NIP user di semua tabel terkait
+ * (FaceRegistry, Attendance, LeaveRequests, Assignments, AuditLogs, Departments)
+ * agar akun demo atau akun lain yang diubah namanya selalu konsisten di UI, Sheet, & Drive.
+ */
+export function reconcileUserReferences(
+  usersList?: User[],
+  syncChangedToCloud = false,
+  oldNameHints?: Map<string, string>
+): boolean {
+  const users = usersList || getAllUsers();
+  if (!users || users.length === 0) return false;
+
+  const userById = new Map<string, User>(users.map((u) => [u.id, u]));
+  const ksUser = users.find((u) => u.id === 'usr-ks-01') || users.find((u) => u.role === 'kepala_sekolah');
+  const admUser = users.find((u) => u.id === 'usr-adm-01') || users.find((u) => u.role === 'admin');
+  let anyEntityChanged = false;
+
+  // 1. FaceRegistry
+  try {
+    const faces = getAllFaceRegistry();
+    let changed = false;
+    const oldKsName = oldNameHints?.get('usr-ks-01') || 'Drs. H. Mulyadi, M.Pd.';
+    const updatedFaces = faces.map((f) => {
+      const u = userById.get(f.userId);
+      let nextRegisteredBy = f.registeredBy;
+      if (ksUser && (f.registeredBy === 'Drs. H. Mulyadi, M.Pd.' || f.registeredBy === oldKsName)) {
+        nextRegisteredBy = ksUser.name;
+      } else if (oldNameHints) {
+        for (const [uid, prevName] of oldNameHints.entries()) {
+          if (f.registeredBy === prevName) {
+            const actor = userById.get(uid);
+            if (actor) nextRegisteredBy = actor.name;
+          }
+        }
+      }
+      if (u && (f.userName !== u.name || f.nip !== u.nip || f.registeredBy !== nextRegisteredBy)) {
+        changed = true;
+        const item = { ...f, userName: u.name, nip: u.nip, registeredBy: nextRegisteredBy };
+        if (syncChangedToCloud) {
+          syncRecordToCloud(SYNC_COLLECTIONS.FACE_REGISTRY, item.id, item).catch(() => {});
+        }
+        return item;
+      }
+      if (f.registeredBy !== nextRegisteredBy) {
+        changed = true;
+        const item = { ...f, registeredBy: nextRegisteredBy };
+        if (syncChangedToCloud) {
+          syncRecordToCloud(SYNC_COLLECTIONS.FACE_REGISTRY, item.id, item).catch(() => {});
+        }
+        return item;
+      }
+      return f;
+    });
+    if (changed) {
+      localStorage.setItem(STORAGE_KEYS.FACE_REGISTRY, JSON.stringify(updatedFaces));
+      anyEntityChanged = true;
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2. Attendance Records
+  try {
+    const rawAtt = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
+    if (rawAtt) {
+      const records: AttendanceRecord[] = JSON.parse(rawAtt);
+      let changed = false;
+      const updated = records.map((r) => {
+        const u = userById.get(r.userId);
+        if (u && (r.userName !== u.name || r.nip !== u.nip)) {
+          changed = true;
+          const item = { ...r, userName: u.name, nip: u.nip };
+          if (syncChangedToCloud && !item.id.startsWith('att-seed-')) {
+            syncRecordToCloud(SYNC_COLLECTIONS.ATTENDANCE, item.id, item).catch(() => {});
+          }
+          return item;
+        }
+        return r;
+      });
+      if (changed) {
+        localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(updated));
+        anyEntityChanged = true;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // 3. Leave Requests
+  try {
+    const leaves = getAllLeaveRequests();
+    let changed = false;
+    const updated = leaves.map((l) => {
+      const u = userById.get(l.userId);
+      let nextReviewedBy = l.reviewedBy;
+      if (l.reviewedBy && oldNameHints) {
+        for (const [uid, prevName] of oldNameHints.entries()) {
+          if (l.reviewedBy === prevName) {
+            const reviewer = userById.get(uid);
+            if (reviewer) nextReviewedBy = reviewer.name;
+          }
+        }
+      }
+      if (
+        (u && (l.userName !== u.name || l.nip !== u.nip)) ||
+        nextReviewedBy !== l.reviewedBy
+      ) {
+        changed = true;
+        const item = {
+          ...l,
+          userName: u ? u.name : l.userName,
+          nip: u ? u.nip : l.nip,
+          reviewedBy: nextReviewedBy,
+        };
+        if (syncChangedToCloud) {
+          syncRecordToCloud(SYNC_COLLECTIONS.LEAVE_REQUESTS, item.id, item).catch(() => {});
+        }
+        return item;
+      }
+      return l;
+    });
+    if (changed) {
+      localStorage.setItem(STORAGE_KEYS.LEAVE_REQUESTS, JSON.stringify(updated));
+      anyEntityChanged = true;
+    }
+  } catch {
+    // ignore
+  }
+
+  // 4. Assignments
+  try {
+    const tasks = getAllAssignments();
+    let changed = false;
+    const updated = tasks.map((t) => {
+      const toUser = userById.get(t.assignedToUserId);
+      const byUser = userById.get(t.assignedByUserId);
+      const nextToName = toUser ? toUser.name : t.assignedToName;
+      const nextByName = byUser ? byUser.name : t.assignedByName;
+      if (nextToName !== t.assignedToName || nextByName !== t.assignedByName) {
+        changed = true;
+        const item = { ...t, assignedToName: nextToName, assignedByName: nextByName };
+        if (syncChangedToCloud) {
+          syncRecordToCloud(SYNC_COLLECTIONS.ASSIGNMENTS, item.id, item).catch(() => {});
+        }
+        return item;
+      }
+      return t;
+    });
+    if (changed) {
+      localStorage.setItem(STORAGE_KEYS.ASSIGNMENTS, JSON.stringify(updated));
+      anyEntityChanged = true;
+    }
+  } catch {
+    // ignore
+  }
+
+  // 5. Audit Logs
+  try {
+    const logs = getAuditLogs();
+    let changed = false;
+    const updated = logs.map((log) => {
+      const u = userById.get(log.actorUserId);
+      if (u && log.actorName !== u.name) {
+        changed = true;
+        const item = {
+          ...log,
+          actorName: u.name,
+          details:
+            log.id === 'log-seed-01'
+              ? 'Sistem diinisialisasi pertama kali untuk manajemen presensi sekolah.'
+              : log.details,
+        };
+        if (syncChangedToCloud) {
+          syncRecordToCloud(SYNC_COLLECTIONS.AUDIT_LOGS, item.id, item).catch(() => {});
+        }
+        return item;
+      }
+      return log;
+    });
+    if (changed) {
+      localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(updated));
+      anyEntityChanged = true;
+    }
+  } catch {
+    // ignore
+  }
+
+  // 6. Departments (perbarui headName bila masih mengacu pada nama lama akun demo/user)
+  try {
+    const depts = getAllDepartments();
+    let changed = false;
+    const oldAdmName = oldNameHints?.get('usr-adm-01') || 'Ahmad Fauzi, S.Kom.';
+    const updated = depts.map((d) => {
+      let nextHeadName = d.headName;
+      if (
+        d.id === 'dept-1' &&
+        admUser &&
+        (d.headName === 'Ahmad Fauzi' || d.headName === 'Ahmad Fauzi, S.Kom.' || d.headName === oldAdmName)
+      ) {
+        nextHeadName = admUser.name;
+      } else if (d.headName && oldNameHints) {
+        for (const [uid, prevName] of oldNameHints.entries()) {
+          if (d.headName === prevName) {
+            const matchedUser = userById.get(uid);
+            if (matchedUser) nextHeadName = matchedUser.name;
+          }
+        }
+      }
+      if (nextHeadName !== d.headName) {
+        changed = true;
+        const item = { ...d, headName: nextHeadName };
+        if (syncChangedToCloud) {
+          syncRecordToCloud(SYNC_COLLECTIONS.DEPARTMENTS, item.id, item).catch(() => {});
+        }
+        return item;
+      }
+      return d;
+    });
+    if (changed) {
+      localStorage.setItem(STORAGE_KEYS.DEPARTMENTS, JSON.stringify(updated));
+      anyEntityChanged = true;
+    }
+  } catch {
+    // ignore
+  }
+
+  refreshCurrentSessionFromUsers();
+  return anyEntityChanged;
+}
+
 function notifyRealtimeChange(collectionName: string, triggerWorkspaceSync = false): void {
+  if (triggerWorkspaceSync && collectionName !== SYNC_COLLECTIONS.AUDIT_LOGS) {
+    try {
+      const curSettings = getAppSettings();
+      const nowIso = new Date().toISOString();
+      const updatedSettings: AppSettings = {
+        ...curSettings,
+        lastDataMutationAt: nowIso,
+      };
+      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(updatedSettings));
+    } catch {
+      // ignore
+    }
+  }
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: collectionName } }));
   }
@@ -429,7 +712,7 @@ export async function authenticateUser(identifier: string, rawPassword: string):
       );
     });
 
-    if (!found && (cleanId === 'presensiapp138@gmail.com' || cleanId.includes('presensi') || cleanId.includes('kepsek'))) {
+    if (!found && cleanId === 'presensiapp138@gmail.com') {
       return list.find((u) => u.role === 'kepala_sekolah');
     }
     return found;
@@ -611,6 +894,7 @@ export async function createUser(
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: 'users' } }));
   }
+  notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
 
   return {
     success: true,
@@ -635,6 +919,7 @@ export async function updateUser(
   }
 
   const targetUser = users[index];
+  const oldName = targetUser.name;
 
   // Aturan otorisasi
   if (actor.role === 'admin') {
@@ -677,6 +962,9 @@ export async function updateUser(
   if (updates.email !== undefined) targetUser.email = updates.email?.trim() || undefined;
   if (updates.phone !== undefined) targetUser.phone = updates.phone?.trim() || undefined;
   if (updates.isActive !== undefined) targetUser.isActive = updates.isActive;
+  if ('isSeedDefault' in targetUser) {
+    delete (targetUser as any).isSeedDefault;
+  }
 
   // Jika ada reset password
   if (updates.rawPassword && updates.rawPassword.trim().length > 0) {
@@ -692,71 +980,29 @@ export async function updateUser(
   await syncRecordToCloud(SYNC_COLLECTIONS.USERS, targetUser.id, targetUser);
   {
     const curSettings = getAppSettings();
+    const shouldSyncSchoolEmail =
+      targetUser.role === 'kepala_sekolah' &&
+      targetUser.email &&
+      (!curSettings.schoolEmail || curSettings.schoolEmail === 'kepsek@sekolah.sch.id');
     const mutatedSettings = {
       ...curSettings,
+      ...(shouldSyncSchoolEmail ? { schoolEmail: targetUser.email } : {}),
       lastUserMutationAt: mutationIso,
       lastSyncTimestamp: mutationIso,
     };
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(mutatedSettings));
     syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', mutatedSettings).catch(() => {});
   }
+
+  // Propagasi penuh perubahan nama & NIP akun ke seluruh tabel terkait & sesi aktif
+  const oldNameHints = new Map<string, string>();
+  if (oldName && oldName !== targetUser.name) {
+    oldNameHints.set(userId, oldName);
+  }
+  reconcileUserReferences(users, true, oldNameHints);
+  refreshCurrentSessionFromUsers();
+
   import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
-
-  // Synchronize Face Registry for this user if name or NIP changed
-  if (updates.name || updates.nip) {
-    try {
-      const faces = getAllFaceRegistry();
-      let facesChanged = false;
-      const updatedFaces = faces.map((f) => {
-        if (f.userId === userId) {
-          facesChanged = true;
-          const updatedFace = {
-            ...f,
-            userName: targetUser.name,
-            nip: targetUser.nip,
-            updatedAt: new Date().toISOString(),
-          };
-          syncRecordToCloud(SYNC_COLLECTIONS.FACE_REGISTRY, updatedFace.id, updatedFace);
-          return updatedFace;
-        }
-        return f;
-      });
-      if (facesChanged) {
-        localStorage.setItem(STORAGE_KEYS.FACE_REGISTRY, JSON.stringify(updatedFaces));
-      }
-    } catch (err) {
-      console.warn('Error syncing face registry on user update:', err);
-    }
-
-    // Synchronize Audit Logs actorName for this user and sanitize initial seed log
-    try {
-      const logs = getAuditLogs();
-      let logsChanged = false;
-      const updatedLogs = logs.map((log) => {
-        if (log.actorUserId === userId) {
-          logsChanged = true;
-          const updatedLog = {
-            ...log,
-            actorName: targetUser.name,
-            details: log.id === 'log-seed-01' ? 'Sistem diinisialisasi pertama kali untuk manajemen presensi sekolah.' : log.details,
-          };
-          syncRecordToCloud(SYNC_COLLECTIONS.AUDIT_LOGS, updatedLog.id, updatedLog);
-          return updatedLog;
-        }
-        return log;
-      });
-      if (logsChanged) {
-        localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(updatedLogs));
-      }
-    } catch (err) {
-      console.warn('Error syncing audit logs on user update:', err);
-    }
-  }
-
-  // Update current session if actor edited themselves
-  if (actor.id === userId) {
-    saveSession(targetUser);
-  }
 
   logAuditAction(
     actor,
@@ -769,6 +1015,7 @@ export async function updateUser(
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: 'users' } }));
   }
+  notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
 
   return { success: true, message: `Data akun ${targetUser.name} berhasil diperbarui dan disinkronkan ke database.` };
 }
@@ -798,6 +1045,7 @@ export function toggleUserStatus(actor: User, userId: string): { success: boolea
   targetUser.updatedAt = new Date().toISOString();
   users[index] = targetUser;
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+  refreshCurrentSessionFromUsers();
   syncRecordToCloud(SYNC_COLLECTIONS.USERS, targetUser.id, targetUser);
   import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
   notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
@@ -996,13 +1244,10 @@ export function updateUserSessions(
   users[idx].assignedSessionIds = sessionIds;
   users[idx].updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+  refreshCurrentSessionFromUsers();
   syncRecordToCloud(SYNC_COLLECTIONS.USERS, userId, users[idx]);
   import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
   notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
-
-  if (actor.id === userId) {
-    saveSession(users[idx]);
-  }
 
   logAuditAction(
     actor,
@@ -1045,13 +1290,10 @@ export function toggleUserSession(
   users[idx].assignedSessionIds = Array.from(curSessions);
   users[idx].updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+  refreshCurrentSessionFromUsers();
   syncRecordToCloud(SYNC_COLLECTIONS.USERS, userId, users[idx]);
   import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
   notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
-
-  if (actor.id === userId) {
-    saveSession(users[idx]);
-  }
 
   logAuditAction(
     actor,
@@ -1109,6 +1351,7 @@ export function assignUsersToSession(
   });
 
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+  refreshCurrentSessionFromUsers();
   if (updatedCount > 0) {
     import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
     notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
@@ -1367,7 +1610,11 @@ export function getAppSettings(): AppSettings {
       };
 }
 
-export function updateAppSettings(actor: User, updates: Partial<AppSettings>): { success: boolean; message: string } {
+export function updateAppSettings(
+  actor: User,
+  updates: Partial<AppSettings>,
+  options?: { skipWorkspaceAutoSync?: boolean }
+): { success: boolean; message: string } {
   if (actor.role !== 'kepala_sekolah') {
     return { success: false, message: 'Hanya Kepala Sekolah yang berwenang mengubah pengaturan global sekolah.' };
   }
@@ -1385,7 +1632,7 @@ export function updateAppSettings(actor: User, updates: Partial<AppSettings>): {
   } catch (err) {
     console.warn('Sync settings ke cloud warning:', err);
   }
-  notifyRealtimeChange(SYNC_COLLECTIONS.SETTINGS, true);
+  notifyRealtimeChange(SYNC_COLLECTIONS.SETTINGS, !options?.skipWorkspaceAutoSync);
 
   logAuditAction(actor, 'UPDATE_SETTINGS', 'Settings', 'global', 'Memperbarui pengaturan sistem dan sekolah.');
 
@@ -1574,16 +1821,18 @@ export function getAttendanceForUser(userId: string): AttendanceRecord[] {
  */
 export function groupAttendanceByDateAndUser(records: AttendanceRecord[]): DailyAttendancePair[] {
   const map = new Map<string, DailyAttendancePair>();
+  const userById = new Map<string, User>(getAllUsers().map((u) => [u.id, u]));
 
   for (const r of records) {
     const key = `${r.date}_${r.userId}_${r.sessionId || 'default'}`;
+    const latestUser = userById.get(r.userId);
     if (!map.has(key)) {
       map.set(key, {
         date: r.date,
         userId: r.userId,
-        userName: r.userName,
-        nip: r.nip,
-        role: r.role,
+        userName: latestUser?.name || r.userName,
+        nip: latestUser?.nip || r.nip,
+        role: latestUser?.role || r.role,
       });
     }
     const item = map.get(key)!;

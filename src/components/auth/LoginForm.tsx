@@ -104,7 +104,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
                   required
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
-                  placeholder="Contoh: kepsek@sekolah.sch.id / adminfauzi / 1990..."
+                  placeholder="Masukkan Email, Username, atau NIP akun Anda"
                   className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all placeholder:text-slate-400"
                 />
               </div>

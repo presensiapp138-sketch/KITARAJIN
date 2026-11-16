@@ -25,6 +25,8 @@ import {
   getAuditLogs,
   getAppSettings,
   updateAppSettings,
+  reconcileUserReferences,
+  refreshCurrentSessionFromUsers,
 } from './storage';
 import { hashPassword } from './crypto';
 import {
@@ -53,12 +55,20 @@ provider.setCustomParameters({
 
 // Cache token OAuth murni di memori (tidak pernah di localStorage/sessionStorage)
 let cachedAccessToken: string | null = null;
+let tokenExpiresAt: number = 0;
 let cachedGoogleUser: FirebaseUser | null = null;
 let isSigningIn = false;
 
 export const PENDING_WORKSPACE_SYNC_KEY = 'kitarajin_pending_workspace_users_sync';
+export const PENDING_WORKSPACE_FULL_SYNC_KEY = 'kitarajin_pending_workspace_full_sync';
 export const DRIVE_USERS_BACKUP_FILENAME = 'KITARAJIN_Users_Database.json';
 export const DRIVE_FULL_BACKUP_FILENAME = 'KITARAJIN_Full_Database.json';
+
+const emitWorkspaceSyncEvent = (detail: Record<string, any> = {}): void => {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('kitarajin_workspace_sync', { detail }));
+  }
+};
 
 export const hasPendingWorkspaceUserSync = (): boolean => {
   const settings = getAppSettings();
@@ -73,18 +83,38 @@ export const hasPendingWorkspaceUserSync = (): boolean => {
   return Boolean(localPendingStr) || mutatedMs > syncedMs;
 };
 
-export const markPendingWorkspaceUserSync = (): void => {
-  localStorage.setItem(PENDING_WORKSPACE_SYNC_KEY, new Date().toISOString());
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('kitarajin_workspace_sync', { detail: { pending: true } }));
+export const hasPendingWorkspaceFullSync = (): boolean => {
+  const settings = getAppSettings();
+  const syncedMs = Date.parse(settings.lastWorkspaceFullSyncAt || settings.lastWorkspaceUserSyncAt || '') || 0;
+  const mutatedMs = Math.max(
+    Date.parse(settings.lastDataMutationAt || '') || 0,
+    Date.parse(settings.lastUserMutationAt || '') || 0
+  );
+  const localPendingStr = localStorage.getItem(PENDING_WORKSPACE_FULL_SYNC_KEY);
+  const localPendingMs = Date.parse(localPendingStr || '') || 0;
+
+  if (syncedMs > 0 && syncedMs >= mutatedMs && syncedMs >= localPendingMs) {
+    return false;
   }
+  return Boolean(localPendingStr) || mutatedMs > syncedMs || hasPendingWorkspaceUserSync();
+};
+
+export const markPendingWorkspaceUserSync = (): void => {
+  const nowIso = new Date().toISOString();
+  localStorage.setItem(PENDING_WORKSPACE_SYNC_KEY, nowIso);
+  localStorage.setItem(PENDING_WORKSPACE_FULL_SYNC_KEY, nowIso);
+  emitWorkspaceSyncEvent({ pending: true, pendingFull: true });
+};
+
+export const markPendingWorkspaceFullSync = (): void => {
+  localStorage.setItem(PENDING_WORKSPACE_FULL_SYNC_KEY, new Date().toISOString());
+  emitWorkspaceSyncEvent({ pendingFull: true });
 };
 
 export const clearPendingWorkspaceUserSync = (): void => {
   localStorage.removeItem(PENDING_WORKSPACE_SYNC_KEY);
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('kitarajin_workspace_sync', { detail: { pending: false } }));
-  }
+  localStorage.removeItem(PENDING_WORKSPACE_FULL_SYNC_KEY);
+  emitWorkspaceSyncEvent({ pending: false, pendingFull: false });
 };
 
 export const getConnectedGoogleEmail = (): string | null => {
@@ -97,7 +127,15 @@ export const getConnectedGoogleEmail = (): string | null => {
 };
 
 export const hasRealAccessToken = (): boolean => {
-  return Boolean(cachedAccessToken && !cachedAccessToken.startsWith('access-token-'));
+  if (!cachedAccessToken || cachedAccessToken.startsWith('access-token-')) {
+    return false;
+  }
+  if (tokenExpiresAt > 0 && Date.now() >= tokenExpiresAt) {
+    cachedAccessToken = null;
+    tokenExpiresAt = 0;
+    return false;
+  }
+  return true;
 };
 
 export const linkGoogleAccount = (
@@ -123,8 +161,10 @@ export const linkGoogleAccount = (
 
 export const unlinkGoogleAccount = (): void => {
   cachedAccessToken = null;
+  tokenExpiresAt = 0;
   cachedGoogleUser = null;
   localStorage.removeItem('kitarajin_google_account_email');
+  emitWorkspaceSyncEvent({ tokenActive: false });
 };
 
 export const initAuth = (
@@ -187,14 +227,27 @@ export function formatAuthErrorMessage(error: any): string {
 }
 
 /**
- * Fallback Google Identity Services (GIS) Token Client jika Firebase Popup menolak domain kustom
+ * Tunggu sebentar jika script Google Identity Services masih dimuat secara async
+ */
+async function waitForGisLoaded(timeoutMs = 2500): Promise<any> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const gsi = typeof window !== 'undefined' ? (window as any).google?.accounts?.oauth2 : null;
+    if (gsi?.initTokenClient) return gsi;
+    await new Promise((r) => setTimeout(r, 120));
+  }
+  return typeof window !== 'undefined' ? (window as any).google?.accounts?.oauth2 || null : null;
+}
+
+/**
+ * Fallback Google Identity Services (GIS) Token Client jika Firebase Popup menolak domain kustom (mis. Vercel)
  */
 async function signInWithGisFallback(emailHint?: string): Promise<{
   user: FirebaseUser;
   accessToken: string;
 } | null> {
   const oauthClientId = (firebaseConfig as any)?.oAuthClientId;
-  const gsi = typeof window !== 'undefined' ? (window as any).google?.accounts?.oauth2 : null;
+  const gsi = await waitForGisLoaded();
   if (!oauthClientId || !gsi?.initTokenClient) {
     return null;
   }
@@ -218,6 +271,7 @@ async function signInWithGisFallback(emailHint?: string): Promise<{
           }
 
           const token = tokenResponse.access_token as string;
+          const expiresSec = Number(tokenResponse.expires_in) || 3500;
           let resolvedEmail = emailHint?.trim() || getConnectedGoogleEmail() || '';
           let resolvedName = 'Pengguna Google';
           try {
@@ -241,10 +295,12 @@ async function signInWithGisFallback(emailHint?: string): Promise<{
           } as unknown as FirebaseUser;
 
           cachedAccessToken = token;
+          tokenExpiresAt = Date.now() + Math.max(300, expiresSec - 90) * 1000;
           cachedGoogleUser = fallbackUser;
           if (resolvedEmail) {
             localStorage.setItem('kitarajin_google_account_email', resolvedEmail);
           }
+          emitWorkspaceSyncEvent({ tokenActive: true });
 
           resolve({ user: fallbackUser, accessToken: token });
         },
@@ -252,7 +308,7 @@ async function signInWithGisFallback(emailHint?: string): Promise<{
           reject(new Error(err?.message || err?.type || 'Popup Google gagal dibuka atau dibatalkan.'));
         },
       });
-      client.requestAccessToken({ prompt: 'select_account' });
+      client.requestAccessToken({ prompt: emailHint ? '' : 'select_account' });
     } catch (e: any) {
       reject(e);
     }
@@ -284,10 +340,12 @@ export const signInWithGoogle = async (
       throw new Error('Gagal memperoleh token akses Google Drive & Sheets.');
     }
     cachedAccessToken = credential.accessToken;
+    tokenExpiresAt = Date.now() + 50 * 60 * 1000;
     cachedGoogleUser = result.user;
     if (result.user.email) {
       localStorage.setItem('kitarajin_google_account_email', result.user.email);
     }
+    emitWorkspaceSyncEvent({ tokenActive: true });
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
     const errMsg = String(error?.code || error?.message || error || '');
@@ -360,6 +418,7 @@ export const USER_SHEET_HEADERS = [
   'Status Aktif',
   'Dibuat',
   'Diperbarui',
+  'No. Telepon',
 ];
 
 export function formatUserRowForSheet(u: User): any[] {
@@ -381,6 +440,7 @@ export function formatUserRowForSheet(u: User): any[] {
     u.isActive ? 'AKTIF' : 'NONAKTIF',
     u.createdAt,
     u.updatedAt,
+    u.phone || '',
   ];
 }
 
@@ -635,6 +695,22 @@ async function parseSheetRowsToUsers(rows: any[][]): Promise<User[]> {
   const idxStatus = findCol('status aktif', 'status', 'isactive');
   const idxCreated = findCol('dibuat', 'createdat');
   const idxUpdated = findCol('diperbarui', 'updatedat');
+  const idxPhone = findCol('no. telepon', 'telepon', 'no. hp', 'phone');
+
+  const normalizeSheetTimestamp = (rawVal: any): string => {
+    if (!rawVal) return SEED_BASELINE_ISO;
+    const str = String(rawVal).trim();
+    if (!str) return SEED_BASELINE_ISO;
+    const direct = Date.parse(str);
+    if (!isNaN(direct)) return new Date(direct).toISOString();
+    const idMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+    if (idMatch) {
+      const [, d, m, y, hh = '0', mm = '0', ss = '0'] = idMatch;
+      const ms = new Date(Number(y), Number(m) - 1, Number(d), Number(hh), Number(mm), Number(ss)).getTime();
+      if (!isNaN(ms)) return new Date(ms).toISOString();
+    }
+    return SEED_BASELINE_ISO;
+  };
 
   const parsedUsers: User[] = [];
 
@@ -670,6 +746,7 @@ async function parseSheetRowsToUsers(rows: any[][]): Promise<User[]> {
       : ['sesi-1', 'sesi-2', 'sesi-3'];
 
     const deptVal = idxDept !== -1 ? String(r[idxDept] || '').trim() : '';
+    const phoneVal = idxPhone !== -1 ? String(r[idxPhone] || '').trim() : '';
 
     parsedUsers.push({
       id: id || `usr-sheet-${username || i}`,
@@ -683,10 +760,11 @@ async function parseSheetRowsToUsers(rows: any[][]): Promise<User[]> {
       departmentId: deptVal,
       departmentName: deptVal,
       position: idxPosition !== -1 ? String(r[idxPosition] || '').trim() : 'Pegawai',
+      phone: phoneVal || undefined,
       assignedSessionIds,
       isActive,
-      createdAt: idxCreated !== -1 && r[idxCreated] ? String(r[idxCreated]) : SEED_BASELINE_ISO,
-      updatedAt: idxUpdated !== -1 && r[idxUpdated] ? String(r[idxUpdated]) : SEED_BASELINE_ISO,
+      createdAt: idxCreated !== -1 ? normalizeSheetTimestamp(r[idxCreated]) : SEED_BASELINE_ISO,
+      updatedAt: idxUpdated !== -1 ? normalizeSheetTimestamp(r[idxUpdated]) : SEED_BASELINE_ISO,
     });
   }
 
@@ -788,11 +866,13 @@ export async function syncUsersWithGoogleSheet(
 
   // Simpan hasil gabungan ke localStorage & Cloud Firestore
   localStorage.setItem('kitarajin_table_users', JSON.stringify(merged));
+  reconcileUserReferences(merged, updatedLocal);
+  refreshCurrentSessionFromUsers();
   for (const u of merged) {
     syncRecordToCloud(SYNC_COLLECTIONS.USERS, u.id, u).catch(() => {});
   }
 
-  // 4. Tulis hasil gabungan ke tab 'Users' Google Sheets
+  // 4. Tulis hasil gabungan ke tab 'Users' Google Sheets (mode RAW agar NIP, No. HP, Password angka, dan Timestamp ISO tidak berubah)
   const rowsToWrite = [USER_SHEET_HEADERS, ...merged.map(formatUserRowForSheet)];
   await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/'Users'!A1:Z2000:clear`,
@@ -806,7 +886,7 @@ export async function syncUsersWithGoogleSheet(
   ).catch(() => {});
 
   const writeRes = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/'Users'!A1?valueInputOption=USER_ENTERED`,
+    `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values/'Users'!A1?valueInputOption=RAW`,
     {
       method: 'PUT',
       headers: {
@@ -909,8 +989,13 @@ export async function syncUsersWithGoogleDrive(
   const importedFromDrive = Math.max(0, merged.length - localUsers.length);
 
   localStorage.setItem('kitarajin_table_users', JSON.stringify(merged));
+  reconcileUserReferences(merged, importedFromDrive > 0);
+  refreshCurrentSessionFromUsers();
   for (const u of merged) {
     syncRecordToCloud(SYNC_COLLECTIONS.USERS, u.id, u).catch(() => {});
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: 'users' } }));
   }
 
   const payloadContent = JSON.stringify(
@@ -1029,20 +1114,20 @@ export async function syncAllUsersToDriveAndSheet(
   let importedCount = 0;
   let driveFileId = settings.googleDriveUsersFileId;
 
-  // 1. Sinkronkan ke Google Drive (selalu dijalankan agar backup Drive selalu up-to-date)
-  const driveRes = await syncUsersWithGoogleDrive(accessToken, folderId || undefined);
-  syncedToDrive = true;
-  totalUsers = driveRes.totalUsers;
-  importedCount += driveRes.importedFromDrive;
-  driveFileId = driveRes.fileId;
-
-  // 2. Sinkronkan ke Google Sheets jika Spreadsheet ID sudah ditautkan
+  // 1. Sinkronkan Google Sheets terlebih dahulu (jika ditautkan) agar perubahan akun terbaru ikut terbaca
   if (sheetId) {
     const sheetRes = await syncUsersWithGoogleSheet(accessToken, sheetId);
     syncedToSheet = true;
     totalUsers = sheetRes.totalUsers;
     importedCount += sheetRes.importedFromSheet;
   }
+
+  // 2. Sinkronkan ke Google Drive agar file JSON Drive identik dengan Sheet & Firestore terbaru
+  const driveRes = await syncUsersWithGoogleDrive(accessToken, folderId || undefined);
+  syncedToDrive = true;
+  totalUsers = driveRes.totalUsers;
+  importedCount += driveRes.importedFromDrive;
+  driveFileId = driveRes.fileId;
 
   const nowIso = new Date().toISOString();
   const latestSettings = getAppSettings();
@@ -1094,42 +1179,65 @@ export async function autoSyncUsersToWorkspace(): Promise<{
   reason?: string;
   message?: string;
 }> {
-  const token = await getAccessToken();
-  if (!token) {
+  if (!hasRealAccessToken()) {
     markPendingWorkspaceUserSync();
     return {
       synced: false,
       reason: 'needs_google_auth',
-      message: 'Tersimpan di Cloud Firestore. Klik "Sinkronkan ke Drive & Sheet" untuk menyalin langsung ke Google Drive/Sheets.',
+      message: 'Tersimpan di Cloud Firestore. Perubahan akun akan otomatis disalin ke Google Drive & Sheets saat sesi Google aktif.',
     };
   }
 
-  try {
-    const res = await syncAllUsersToDriveAndSheet(token);
-    return {
-      synced: true,
-      message: res.message,
-    };
-  } catch (err: any) {
-    console.warn('Auto sync users to Google Workspace note:', err?.message || err);
-    markPendingWorkspaceUserSync();
-    return {
-      synced: false,
-      reason: 'api_error',
-      message: formatAuthErrorMessage(err),
-    };
-  }
+  // Jalankan lewat penjadwal terpadu agar Users + seluruh tab + Drive JSON sinkron sekaligus tanpa tabrakan
+  scheduleWorkspaceAutoSync('users');
+  return {
+    synced: true,
+    message: 'Sinkronisasi akun ke Google Drive & Sheets dijadwalkan otomatis.',
+  };
 }
 
 let workspaceAutoSyncTimer: ReturnType<typeof setTimeout> | null = null;
 let isWorkspaceAutoSyncRunning = false;
+let rerunWorkspaceAutoSyncAfterFinish = false;
+let queuedChangedCollection: string | undefined;
+
+export function getWorkspaceSyncRuntimeStatus(): {
+  hasToken: boolean;
+  isSyncing: boolean;
+  hasPending: boolean;
+  autoEnabled: boolean;
+  lastFullSyncAt?: string;
+  connectedEmail: string | null;
+  hasTargetConfigured: boolean;
+} {
+  const settings = getAppSettings();
+  const hasTargetConfigured = Boolean(
+    cleanGoogleId(settings.googleSheetSpreadsheetId || '') ||
+      cleanGoogleId(settings.googleDriveFolderId || '') ||
+      cleanGoogleId(settings.googleDriveUsersFileId || '')
+  );
+  return {
+    hasToken: hasRealAccessToken(),
+    isSyncing: isWorkspaceAutoSyncRunning,
+    hasPending: hasPendingWorkspaceFullSync(),
+    autoEnabled: Boolean(settings.autoWorkspaceSyncEnabled || settings.isGoogleConnected),
+    lastFullSyncAt: settings.lastWorkspaceFullSyncAt || settings.lastWorkspaceUserSyncAt,
+    connectedEmail: getConnectedGoogleEmail(),
+    hasTargetConfigured,
+  };
+}
 
 /**
  * Sinkronisasi otomatis seluruh data (presensi, akun, izin, tugas, jadwal, lokasi, dll)
  * ke Google Drive & Google Sheets di latar belakang tanpa perlu klik.
  */
 export async function autoSyncAllDataToWorkspace(changedCollection?: string): Promise<boolean> {
-  if (isWorkspaceAutoSyncRunning) return false;
+  if (isWorkspaceAutoSyncRunning) {
+    rerunWorkspaceAutoSyncAfterFinish = true;
+    queuedChangedCollection = changedCollection;
+    return false;
+  }
+
   const settings = getAppSettings();
   const sheetId = cleanGoogleId(settings.googleSheetSpreadsheetId || '');
   const driveFolderId = cleanGoogleId(settings.googleDriveFolderId || '');
@@ -1137,6 +1245,7 @@ export async function autoSyncAllDataToWorkspace(changedCollection?: string): Pr
 
   // Hanya sinkron otomatis ke Workspace jika sudah pernah ditautkan/diaktifkan & token memori aktif
   if (!hasRealAccessToken() || (!sheetId && !driveFolderId && !driveUsersFileId)) {
+    markPendingWorkspaceFullSync();
     if (changedCollection === 'users') {
       markPendingWorkspaceUserSync();
     }
@@ -1144,22 +1253,54 @@ export async function autoSyncAllDataToWorkspace(changedCollection?: string): Pr
   }
 
   const token = await getAccessToken();
-  if (!token) return false;
+  if (!token) {
+    markPendingWorkspaceFullSync();
+    return false;
+  }
 
   isWorkspaceAutoSyncRunning = true;
+  emitWorkspaceSyncEvent({ syncing: true, collection: changedCollection });
   try {
     if (sheetId) {
       await writeAllTabsData(token, sheetId);
     } else {
       await syncUsersWithGoogleDrive(token, driveFolderId || undefined);
       await syncFullAppDatabaseToDrive(token, driveFolderId || undefined);
+      const syncIso = new Date().toISOString();
+      const latestSettings = getAppSettings();
+      const updatedSettings = {
+        ...latestSettings,
+        lastWorkspaceUserSyncAt: syncIso,
+        lastWorkspaceFullSyncAt: syncIso,
+        lastSyncTimestamp: syncIso,
+        autoWorkspaceSyncEnabled: true,
+        isGoogleConnected: true,
+        storageMode: 'google_workspace_sync' as const,
+      };
+      localStorage.setItem('kitarajin_table_settings', JSON.stringify(updatedSettings));
+      await syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', updatedSettings);
+      clearPendingWorkspaceUserSync();
     }
     return true;
   } catch (err: any) {
+    const errMsg = String(err?.message || err || '').toLowerCase();
+    if (errMsg.includes('401') || errMsg.includes('invalid credentials') || errMsg.includes('unauthorized')) {
+      cachedAccessToken = null;
+      tokenExpiresAt = 0;
+      emitWorkspaceSyncEvent({ tokenActive: false, expired: true });
+    }
+    markPendingWorkspaceFullSync();
     console.warn('Background workspace auto-sync note:', err?.message || err);
     return false;
   } finally {
     isWorkspaceAutoSyncRunning = false;
+    emitWorkspaceSyncEvent({ syncing: false });
+    if (rerunWorkspaceAutoSyncAfterFinish) {
+      const nextCol = queuedChangedCollection;
+      rerunWorkspaceAutoSyncAfterFinish = false;
+      queuedChangedCollection = undefined;
+      scheduleWorkspaceAutoSync(nextCol);
+    }
   }
 }
 
@@ -1168,7 +1309,16 @@ export async function autoSyncAllDataToWorkspace(changedCollection?: string): Pr
  * langsung tersinkron otomatis tanpa membebani kuota API.
  */
 export function scheduleWorkspaceAutoSync(changedCollection?: string): void {
-  if (isWorkspaceAutoSyncRunning) return;
+  markPendingWorkspaceFullSync();
+  if (changedCollection === 'users') {
+    markPendingWorkspaceUserSync();
+  }
+
+  if (isWorkspaceAutoSyncRunning) {
+    rerunWorkspaceAutoSyncAfterFinish = true;
+    queuedChangedCollection = changedCollection;
+    return;
+  }
   if (!hasRealAccessToken()) return;
 
   if (workspaceAutoSyncTimer) {
@@ -1178,6 +1328,18 @@ export function scheduleWorkspaceAutoSync(changedCollection?: string): void {
     workspaceAutoSyncTimer = null;
     autoSyncAllDataToWorkspace(changedCollection).catch(() => {});
   }, 1200);
+}
+
+/**
+ * Jika sesi Google sudah aktif dan ada perubahan tertunda (misal baru login di Vercel atau baru online),
+ * langsung kirim semua perubahan tertunda ke Drive & Sheets tanpa klik tambahan.
+ */
+export async function flushWorkspaceSyncIfReady(): Promise<boolean> {
+  if (!hasRealAccessToken()) return false;
+  const status = getWorkspaceSyncRuntimeStatus();
+  if (!status.hasTargetConfigured) return false;
+  if (!hasPendingWorkspaceFullSync()) return false;
+  return autoSyncAllDataToWorkspace('flush');
 }
 
 // ==========================================
@@ -1490,8 +1652,22 @@ export async function writeAllTabsData(accessToken: string, spreadsheetId: strin
     console.warn('Backup Drive note saat writeAllTabsData:', e);
   }
 
-  // 3. Tulis 9 tab lainnya
+  // 3. Tulis 9 tab lainnya (bersihkan terlebih dahulu agar baris lama tidak tersisa)
   const otherTabs = TAB_DEFINITIONS.filter((t) => t.name !== 'Users');
+  await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${cleanId}/values:batchClear`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        ranges: otherTabs.map((t) => `'${t.name}'!A1:Z5000`),
+      }),
+    }
+  ).catch(() => {});
+
   const valueRanges = otherTabs.map((tab) => {
     const rows = [tab.headers, ...tab.getData()];
     return {
@@ -1509,7 +1685,7 @@ export async function writeAllTabsData(accessToken: string, spreadsheetId: strin
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        valueInputOption: 'USER_ENTERED',
+        valueInputOption: 'RAW',
         data: valueRanges,
       }),
     }
@@ -1526,7 +1702,9 @@ export async function writeAllTabsData(accessToken: string, spreadsheetId: strin
     ...latestSettings,
     googleSheetSpreadsheetId: cleanId || latestSettings.googleSheetSpreadsheetId,
     lastWorkspaceUserSyncAt: syncIso,
+    lastWorkspaceFullSyncAt: syncIso,
     lastSyncTimestamp: syncIso,
+    autoWorkspaceSyncEnabled: true,
     isGoogleConnected: true,
     storageMode: 'google_workspace_sync' as const,
   };
@@ -1580,10 +1758,14 @@ export async function executeAutoCreateDatabase(
   }
 
   // Simpan folderId dulu agar sinkronisasi Drive memakai folder ini
-  updateAppSettings(currentUser, {
-    googleDriveFolderId: folderId,
-    storageMode: 'google_workspace_sync',
-  });
+  updateAppSettings(
+    currentUser,
+    {
+      googleDriveFolderId: folderId,
+      storageMode: 'google_workspace_sync',
+    },
+    { skipWorkspaceAutoSync: true }
+  );
 
   // 2. Google Sheets: Buat baru atau tambahkan 10 tab ke ID yang ditempel
   if (spreadsheetId) {
@@ -1603,17 +1785,24 @@ export async function executeAutoCreateDatabase(
   await syncAllUsersToDriveAndSheet(token, { spreadsheetId, folderId });
   await syncFullAppDatabaseToDrive(token, folderId);
 
-  // 4. Simpan ke AppSettings (lokal & Cloud Firestore agar domain Vercel langsung mewarisi status tersinkron)
+  // 4. Simpan ke AppSettings (lokal & Cloud Firestore agar domain Vercel langsung mewarisi status tersinkron & mode auto-sync)
   if (onStepProgress) onStepProgress('Menyimpan ID database ke sistem KITARAJIN...');
   const nowIso = new Date().toISOString();
-  updateAppSettings(currentUser, {
-    googleSheetSpreadsheetId: spreadsheetId,
-    googleDriveFolderId: folderId,
-    storageMode: 'google_workspace_sync',
-    isGoogleConnected: true,
-    lastWorkspaceUserSyncAt: nowIso,
-    lastSyncTimestamp: nowIso,
-  });
+  updateAppSettings(
+    currentUser,
+    {
+      googleSheetSpreadsheetId: spreadsheetId,
+      googleDriveFolderId: folderId,
+      storageMode: 'google_workspace_sync',
+      isGoogleConnected: true,
+      autoWorkspaceSyncEnabled: true,
+      lastWorkspaceUserSyncAt: nowIso,
+      lastWorkspaceFullSyncAt: nowIso,
+      lastSyncTimestamp: nowIso,
+    },
+    { skipWorkspaceAutoSync: true }
+  );
+  clearPendingWorkspaceUserSync();
   await syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', getAppSettings());
 
   return {

@@ -185,9 +185,11 @@ export const UserManager: React.FC<UserManagerProps> = ({
     };
     window.addEventListener('kitarajin_cloud_sync', handleSync);
     window.addEventListener('kitarajin_workspace_sync', handleSync);
+    window.addEventListener('storage', handleSync);
     return () => {
       window.removeEventListener('kitarajin_cloud_sync', handleSync);
       window.removeEventListener('kitarajin_workspace_sync', handleSync);
+      window.removeEventListener('storage', handleSync);
     };
   }, []);
 
@@ -761,6 +763,9 @@ export const UserManager: React.FC<UserManagerProps> = ({
                 className="px-3 py-1.5 rounded-xl border border-slate-300 text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white font-medium"
               >
                 <option value="all">Semua Peran</option>
+                {currentUser.role === 'kepala_sekolah' && (
+                  <option value="kepala_sekolah">Kepala Sekolah</option>
+                )}
                 <option value="karyawan">Karyawan / Guru</option>
                 <option value="admin">Admin Operasional</option>
               </select>

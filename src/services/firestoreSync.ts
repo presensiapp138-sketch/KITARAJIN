@@ -185,6 +185,40 @@ function syncPendingWorkspaceFlagFromSettings(settingsObj: any): void {
   }
 }
 
+function parseUserTimestampMs(raw: any): number {
+  if (!raw) return 0;
+  if (typeof raw === 'number' && !isNaN(raw)) return raw;
+  const str = String(raw).trim();
+  if (!str) return 0;
+  const direct = Date.parse(str);
+  if (!isNaN(direct)) return direct;
+  // Dukungan format tanggal DD/MM/YYYY [HH:mm[:ss]] bila pernah terformat oleh Google Sheets
+  const idMatch = str.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+  if (idMatch) {
+    const [, d, m, y, hh = '0', mm = '0', ss = '0'] = idMatch;
+    const parsed = new Date(Number(y), Number(m) - 1, Number(d), Number(hh), Number(mm), Number(ss)).getTime();
+    if (!isNaN(parsed)) return parsed;
+  }
+  return 0;
+}
+
+function syncCurrentSessionUserFromList(usersList: any[]): void {
+  if (typeof window === 'undefined' || !Array.isArray(usersList) || usersList.length === 0) return;
+  try {
+    const rawSession = localStorage.getItem('kitarajin_session_user');
+    if (!rawSession) return;
+    const parsed = JSON.parse(rawSession);
+    if (!parsed || !parsed.id) return;
+    const freshUser = usersList.find((u: any) => u && String(u.id) === String(parsed.id));
+    if (freshUser) {
+      const { passwordHash, ...safeUser } = freshUser;
+      localStorage.setItem('kitarajin_session_user', JSON.stringify(safeUser));
+    }
+  } catch {
+    // ignore
+  }
+}
+
 /**
  * Gabungkan data array pengguna tanpa pernah menghapus username/password yang sudah ditambahkan
  * serta memastikan akun seed awal (2020) TIDAK PERNAH menimpa akun yang sudah diubah di cloud!
@@ -197,8 +231,7 @@ export function mergeUserRecordsNonDestructive(
   const toUpload: any[] = [];
 
   const getUpdatedMs = (u: any): number => {
-    const t = Date.parse(u?.updatedAt || u?.createdAt || '');
-    return isNaN(t) ? 0 : t;
+    return parseUserTimestampMs(u?.updatedAt) || parseUserTimestampMs(u?.createdAt);
   };
 
   for (const r of remoteUsers) {
@@ -230,8 +263,21 @@ export function mergeUserRecordsNonDestructive(
       if (matchedKey) {
         const remoteByName = byId.get(matchedKey);
         const remoteMs = getUpdatedMs(remoteByName);
-        const localNewer = !isLocalBaselineSeed && localMs > remoteMs;
-        const winner = localNewer ? { ...remoteByName, ...l } : { ...l, ...remoteByName };
+        const localNewer = !isLocalBaselineSeed && localMs >= remoteMs;
+        const winnerSource = localNewer ? l : remoteByName;
+        const loserSource = localNewer ? remoteByName : l;
+        const winner: any = {
+          ...loserSource,
+          ...winnerSource,
+          id: matchedKey,
+          email: winnerSource.email,
+          phone: winnerSource.phone,
+          departmentId: winnerSource.departmentId ?? loserSource.departmentId ?? '',
+          departmentName: winnerSource.departmentName ?? loserSource.departmentName ?? '',
+        };
+        if ('isSeedDefault' in winner && (winnerMsCheck(winner) > SEED_BASELINE_MS)) {
+          delete winner.isSeedDefault;
+        }
         if (!winner.savedPassword) {
           winner.savedPassword = l.savedPassword || remoteByName.savedPassword;
         }
@@ -249,10 +295,24 @@ export function mergeUserRecordsNonDestructive(
       }
     } else {
       const remoteMs = getUpdatedMs(existingRemote);
-      const localNewer = !isLocalBaselineSeed && localMs > remoteMs;
-      const mergedUser = localNewer
-        ? { ...existingRemote, ...l }
-        : { ...l, ...existingRemote };
+      const isRemoteBaselineSeed = remoteMs <= SEED_BASELINE_MS || Boolean(existingRemote.isSeedDefault);
+      const localNewer =
+        !isLocalBaselineSeed && (isRemoteBaselineSeed || localMs > remoteMs);
+      const winnerSource = localNewer ? l : existingRemote;
+      const loserSource = localNewer ? existingRemote : l;
+
+      const mergedUser: any = {
+        ...loserSource,
+        ...winnerSource,
+        email: winnerSource.email,
+        phone: winnerSource.phone,
+        departmentId: winnerSource.departmentId ?? '',
+        departmentName: winnerSource.departmentName ?? winnerSource.departmentId ?? '',
+      };
+
+      if (getUpdatedMs(winnerSource) > SEED_BASELINE_MS && 'isSeedDefault' in mergedUser) {
+        delete mergedUser.isSeedDefault;
+      }
 
       // Jangan pernah hilangkan savedPassword jika salah satu sisi memilikinya dan hash cocok
       const sameHash =
@@ -279,6 +339,10 @@ export function mergeUserRecordsNonDestructive(
     merged: Array.from(byId.values()),
     toUpload,
   };
+}
+
+function winnerMsCheck(u: any): number {
+  return parseUserTimestampMs(u?.updatedAt) || parseUserTimestampMs(u?.createdAt);
 }
 
 /**
@@ -321,6 +385,7 @@ export async function pullUsersFromCloudAndMerge(): Promise<any[]> {
 
     if (merged.length > 0) {
       localStorage.setItem(LOCAL_STORAGE_KEYS.users, JSON.stringify(merged));
+      syncCurrentSessionUserFromList(merged);
     }
 
     for (const u of toUpload) {
@@ -378,6 +443,7 @@ export async function pullAllCloudDataOnStartup(): Promise<void> {
             );
             if (merged.length > 0) {
               localStorage.setItem(storageKey, JSON.stringify(merged));
+              syncCurrentSessionUserFromList(merged);
             }
             for (const u of toUpload) {
               syncRecordToCloud(SYNC_COLLECTIONS.USERS, String(u.id), u).catch(() => {});
@@ -565,6 +631,7 @@ export async function autoSyncCloudInBackground(): Promise<void> {
       );
       if (merged.length > 0) {
         localStorage.setItem(LOCAL_STORAGE_KEYS.users, JSON.stringify(merged));
+        syncCurrentSessionUserFromList(merged);
       }
       for (const u of toUpload) {
         if (u && u.id) {
@@ -688,6 +755,7 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
 
           if (merged.length > 0) {
             localStorage.setItem(storageKey, JSON.stringify(merged));
+            syncCurrentSessionUserFromList(merged);
           }
 
           if (toUpload.length > 0) {
@@ -728,8 +796,13 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
           }
         }
 
-        // Jika perubahan berasal dari perangkat lain (remote server), otomatis sinkronkan juga ke Google Drive/Sheets bila terhubung
-        if (!wasInitial && !snapshot.metadata.hasPendingWrites && colName !== SYNC_COLLECTIONS.AUDIT_LOGS) {
+        // Jika perubahan data berasal dari perangkat lain (remote server), otomatis sinkronkan juga ke Google Drive/Sheets bila terhubung
+        if (
+          !wasInitial &&
+          !snapshot.metadata.hasPendingWrites &&
+          colName !== SYNC_COLLECTIONS.AUDIT_LOGS &&
+          colName !== SYNC_COLLECTIONS.SETTINGS
+        ) {
           import('./workspaceService')
             .then((m) => m.scheduleWorkspaceAutoSync(colName))
             .catch(() => {});
@@ -751,10 +824,16 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
 
   const handleOnline = () => {
     autoSyncCloudInBackground().catch(() => {});
+    import('./workspaceService')
+      .then((m) => m.flushWorkspaceSyncIfReady())
+      .catch(() => {});
   };
   const handleVisibility = () => {
     if (document.visibilityState === 'visible') {
       flushCloudOutbox().catch(() => {});
+      import('./workspaceService')
+        .then((m) => m.flushWorkspaceSyncIfReady())
+        .catch(() => {});
     }
   };
   if (typeof window !== 'undefined') {
@@ -765,6 +844,9 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
     if (loadOutbox().length > 0) {
       flushCloudOutbox().catch(() => {});
     }
+    import('./workspaceService')
+      .then((m) => m.flushWorkspaceSyncIfReady())
+      .catch(() => {});
   }, 15000);
 
   return () => {

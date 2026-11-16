@@ -192,7 +192,7 @@ export function exportAttendanceToExcel(
             <td colspan="14" class="kop-sub" style="text-align: center;">${schoolAddress}</td>
           </tr>
           <tr>
-            <td colspan="14" class="kop-sub" style="text-align: center;">Aplikasi: ${appTitle} &bull; Email: ${settings.schoolEmail || 'kepsek@sekolah.sch.id'}</td>
+            <td colspan="14" class="kop-sub" style="text-align: center;">Aplikasi: ${appTitle} &bull; Email: ${settings.schoolEmail || targetUser?.email || '-'}</td>
           </tr>
           <tr>
             <td colspan="14" style="height: 10px;"></td>

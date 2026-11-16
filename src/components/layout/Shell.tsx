@@ -38,7 +38,13 @@ import {
 
 import { User, UserRole, AppSettings } from '../../types';
 import { getNavItemsForRole, NavItem } from '../../config/navigation';
-import { updateUser, getAppSettings } from '../../services/storage';
+import { updateUser, getAppSettings, getCurrentSession } from '../../services/storage';
+import {
+  getWorkspaceSyncRuntimeStatus,
+  signInWithGoogle,
+  autoSyncAllDataToWorkspace,
+  formatAuthErrorMessage,
+} from '../../services/workspaceService';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
 
 interface ShellProps {
@@ -87,20 +93,44 @@ export const Shell: React.FC<ShellProps> = ({
   const [profileMsg, setProfileMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [settings, setSettings] = useState<AppSettings>(() => getAppSettings());
+  const [workspaceStatus, setWorkspaceStatus] = useState(() => getWorkspaceSyncRuntimeStatus());
+  const [isActivatingWorkspace, setIsActivatingWorkspace] = useState(false);
+  const [workspaceBannerError, setWorkspaceBannerError] = useState<string | null>(null);
 
   React.useEffect(() => {
     const handleSettingsUpdate = () => {
       setSettings(getAppSettings());
+      setWorkspaceStatus(getWorkspaceSyncRuntimeStatus());
     };
     window.addEventListener('kitarajin_settings_updated', handleSettingsUpdate);
     window.addEventListener('kitarajin_cloud_sync', handleSettingsUpdate);
+    window.addEventListener('kitarajin_workspace_sync', handleSettingsUpdate);
     window.addEventListener('storage', handleSettingsUpdate);
     return () => {
       window.removeEventListener('kitarajin_settings_updated', handleSettingsUpdate);
       window.removeEventListener('kitarajin_cloud_sync', handleSettingsUpdate);
+      window.removeEventListener('kitarajin_workspace_sync', handleSettingsUpdate);
       window.removeEventListener('storage', handleSettingsUpdate);
     };
   }, []);
+
+  const handleQuickActivateWorkspaceSync = async () => {
+    setIsActivatingWorkspace(true);
+    setWorkspaceBannerError(null);
+    try {
+      const res = await signInWithGoogle(workspaceStatus.connectedEmail || currentUser.email);
+      if (res) {
+        if (workspaceStatus.autoEnabled) {
+          await autoSyncAllDataToWorkspace('shell_activate');
+        }
+        setWorkspaceStatus(getWorkspaceSyncRuntimeStatus());
+      }
+    } catch (err: any) {
+      setWorkspaceBannerError(formatAuthErrorMessage(err));
+    } finally {
+      setIsActivatingWorkspace(false);
+    }
+  };
 
   React.useEffect(() => {
     setEditName(currentUser.name);
@@ -145,7 +175,7 @@ export const Shell: React.FC<ShellProps> = ({
     const res = await updateUser(currentUser, currentUser.id, updatePayload);
 
     if (res.success) {
-      const updated = {
+      const updated = getCurrentSession() || {
         ...currentUser,
         name: editName.trim(),
         nip: editNip.trim(),
@@ -236,6 +266,44 @@ export const Shell: React.FC<ShellProps> = ({
                 <span>Multi-Device Sync</span>
               </div>
 
+              {/* Google Drive & Sheets Auto-Sync Status Chip (Khusus Kepala Sekolah bila target sudah ditautkan) */}
+              {currentUser.role === 'kepala_sekolah' && workspaceStatus.hasTargetConfigured && (
+                workspaceStatus.hasToken ? (
+                  <div
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-teal-50 border border-teal-200 text-teal-800 text-[11px] font-bold"
+                    title="Sinkronisasi otomatis ke Google Drive & Sheets aktif untuk setiap presensi dan perubahan data"
+                  >
+                    <span className={`w-2 h-2 rounded-full bg-teal-500 ${workspaceStatus.isSyncing ? 'animate-ping' : 'animate-pulse'}`} />
+                    <span className="hidden sm:inline">{workspaceStatus.isSyncing ? 'Menyinkronkan Drive/Sheet...' : 'Drive & Sheet Auto'}</span>
+                    <span className="sm:hidden">{workspaceStatus.isSyncing ? 'Sync...' : 'Drive Auto'}</span>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleQuickActivateWorkspaceSync}
+                    disabled={isActivatingWorkspace}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold border transition-colors cursor-pointer disabled:opacity-60 ${
+                      workspaceStatus.hasPending
+                        ? 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-900'
+                        : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'
+                    }`}
+                    title="Klik 1x pada sesi browser ini (termasuk di Vercel) agar setiap perubahan & presensi otomatis masuk ke Google Drive & Sheets tanpa perlu klik lagi"
+                  >
+                    <span className={`w-2 h-2 rounded-full ${workspaceStatus.hasPending ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'}`} />
+                    <span className="hidden sm:inline">
+                      {isActivatingWorkspace
+                        ? 'Menghubungkan Google...'
+                        : workspaceStatus.hasPending
+                        ? 'Aktifkan Auto-Sync Drive/Sheet'
+                        : 'Hubungkan Auto Drive/Sheet'}
+                    </span>
+                    <span className="sm:hidden">
+                      {isActivatingWorkspace ? '...' : 'Auto Drive'}
+                    </span>
+                  </button>
+                )
+              )}
+
               <PWAInstallButton variant="header" />
 
               {/* User Profile Summary - Clickable to edit Name & Email */}
@@ -244,8 +312,10 @@ export const Shell: React.FC<ShellProps> = ({
                   type="button"
                   onClick={() => {
                     setEditName(currentUser.name);
+                    setEditNip(currentUser.nip || '');
                     setEditEmail(currentUser.email || '');
                     setEditPhone(currentUser.phone || '');
+                    setEditPassword('');
                     setProfileMsg(null);
                     setProfileModalOpen(true);
                   }}
@@ -292,6 +362,22 @@ export const Shell: React.FC<ShellProps> = ({
           </div>
         </div>
       </header>
+
+      {workspaceBannerError && (
+        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs flex items-center justify-between gap-2">
+            <span>{workspaceBannerError}</span>
+            <button
+              type="button"
+              onClick={() => setWorkspaceBannerError(null)}
+              className="text-rose-500 hover:text-rose-700 p-1 cursor-pointer"
+              aria-label="Tutup pesan"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Body */}
       <div className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex gap-6">

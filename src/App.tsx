@@ -9,6 +9,8 @@ import {
   initializeDatabase,
   getCurrentSession,
   clearSession,
+  refreshCurrentSessionFromUsers,
+  reconcileUserReferences,
 } from './services/storage';
 import { LoginForm } from './components/auth/LoginForm';
 import { Shell } from './components/layout/Shell';
@@ -47,7 +49,7 @@ export default function App() {
       // Pastikan seluruh data lokal & antrean tertunda otomatis tersinkron ke cloud tanpa perlu di-klik
       autoSyncCloudInBackground().catch(() => {});
       if (!isMounted) return;
-      const session = getCurrentSession();
+      const session = refreshCurrentSessionFromUsers() || getCurrentSession();
       if (session) {
         setCurrentUser(session);
       }
@@ -55,22 +57,47 @@ export default function App() {
     }
     init();
 
-    // Mulai sinkronisasi multi-device real-time dengan Cloud Firestore
-    const stopSync = startMultiDeviceRealtimeSync((collectionName) => {
-      // Jika profil akun aktif diperbarui dari device lain, sinkronkan sesi
-      if (collectionName === 'users') {
-        const session = getCurrentSession();
+    const syncSessionAndReferences = (collectionName?: string) => {
+      if (
+        !collectionName ||
+        collectionName === 'users' ||
+        collectionName === 'auto' ||
+        collectionName === 'outbox'
+      ) {
+        reconcileUserReferences(undefined, false);
+        const session = refreshCurrentSessionFromUsers() || getCurrentSession();
         if (session) {
           setCurrentUser(session);
         }
       }
-      // Trigger render ulang seluruh tampilan aktif agar data dari perangkat lain langsung muncul
       setSyncVersion((v) => v + 1);
+    };
+
+    // Mulai sinkronisasi multi-device real-time dengan Cloud Firestore
+    const stopSync = startMultiDeviceRealtimeSync((collectionName) => {
+      syncSessionAndReferences(collectionName);
     });
+
+    const handleCloudEvent = (ev: Event) => {
+      const col = (ev as CustomEvent)?.detail?.collection as string | undefined;
+      syncSessionAndReferences(col);
+    };
+    const handleStorageEvent = (ev: StorageEvent) => {
+      if (!ev.key || ev.key === 'kitarajin_table_users' || ev.key === 'kitarajin_session_user') {
+        syncSessionAndReferences('users');
+      } else {
+        setSyncVersion((v) => v + 1);
+      }
+    };
+
+    window.addEventListener('kitarajin_cloud_sync', handleCloudEvent);
+    window.addEventListener('storage', handleStorageEvent);
 
     return () => {
       isMounted = false;
       stopSync();
+      window.removeEventListener('kitarajin_cloud_sync', handleCloudEvent);
+      window.removeEventListener('storage', handleStorageEvent);
     };
   }, []);
 

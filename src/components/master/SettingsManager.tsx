@@ -75,6 +75,8 @@ import {
   syncAllAppDataToDriveAndSheet,
   hasPendingWorkspaceUserSync,
   hasRealAccessToken,
+  autoSyncAllDataToWorkspace,
+  getWorkspaceSyncRuntimeStatus,
 } from '../../services/workspaceService';
 
 interface SettingsManagerProps {
@@ -100,6 +102,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
   // Kepala Sekolah Profile Form State
   const [ksName, setKsName] = useState(currentUser.name);
+  const [ksUsername, setKsUsername] = useState(currentUser.username);
   const [ksNip, setKsNip] = useState(currentUser.nip || '');
   const [ksEmail, setKsEmail] = useState(currentUser.email || '');
   const [ksPhone, setKsPhone] = useState(currentUser.phone || '');
@@ -113,7 +116,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
   // Form State Identitas Sekolah
   const [schoolName, setSchoolName] = useState(settings.schoolName);
-  const [schoolEmail, setSchoolEmail] = useState(settings.schoolEmail || 'kepsek@sekolah.sch.id');
+  const [schoolEmail, setSchoolEmail] = useState(settings.schoolEmail || currentUser.email || '');
   const [schoolAddress, setSchoolAddress] = useState(settings.schoolAddress);
   const [appTitle, setAppTitle] = useState(settings.appTitle);
   const [minFaceMatchThreshold, setMinFaceMatchThreshold] = useState(
@@ -143,6 +146,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [isSyncingData, setIsSyncingData] = useState(false);
   const [isSyncingUsersOnly, setIsSyncingUsersOnly] = useState(false);
   const [pendingWorkspaceSync, setPendingWorkspaceSync] = useState(() => hasPendingWorkspaceUserSync());
+  const [workspaceRuntime, setWorkspaceRuntime] = useState(() => getWorkspaceSyncRuntimeStatus());
   const [workspaceConfirmModal, setWorkspaceConfirmModal] = useState<{
     type: 'create_db' | 'sync_all_tabs' | 'sync_users_only';
   } | null>(null);
@@ -170,7 +174,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     const data = getAppSettings();
     setSettings(data);
     setSchoolName(data.schoolName);
-    setSchoolEmail(data.schoolEmail || 'kepsek@sekolah.sch.id');
+    setSchoolEmail(data.schoolEmail || currentUser.email || '');
     setSchoolAddress(data.schoolAddress);
     setAppTitle(data.appTitle);
     setMinFaceMatchThreshold(Math.round((data.minFaceMatchThreshold || 0.75) * 100));
@@ -183,9 +187,13 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     const session = getCurrentSession();
     if (session) {
       setKsName(session.name);
+      setKsUsername(session.username);
       setKsNip(session.nip || '');
       setKsEmail(session.email || '');
       setKsPhone(session.phone || '');
+      if (session.assignedSessionIds && session.assignedSessionIds.length > 0) {
+        setKsAssignedSessions(session.assignedSessionIds);
+      }
     }
 
     // Periksa status akun Google yang sudah tersimpan
@@ -220,18 +228,39 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
     const handleSyncEvent = () => {
       setCloudStatus(getCloudSyncStatus());
-      setSettings(getAppSettings());
+      const latestData = getAppSettings();
+      setSettings(latestData);
+      setSchoolEmail(latestData.schoolEmail || getCurrentSession()?.email || '');
       setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
+      setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
+      setSchedules(getAllSchedules());
     };
     window.addEventListener('kitarajin_cloud_sync', handleSyncEvent);
     window.addEventListener('kitarajin_workspace_sync', handleSyncEvent);
+    window.addEventListener('kitarajin_settings_updated', handleSyncEvent);
+    window.addEventListener('storage', handleSyncEvent);
 
     return () => {
       if (typeof unsubscribe === 'function') unsubscribe();
       window.removeEventListener('kitarajin_cloud_sync', handleSyncEvent);
       window.removeEventListener('kitarajin_workspace_sync', handleSyncEvent);
+      window.removeEventListener('kitarajin_settings_updated', handleSyncEvent);
+      window.removeEventListener('storage', handleSyncEvent);
     };
   }, []);
+
+  useEffect(() => {
+    setKsName(currentUser.name);
+    setKsUsername(currentUser.username);
+    setKsNip(currentUser.nip || '');
+    setKsEmail(currentUser.email || '');
+    setKsPhone(currentUser.phone || '');
+    setKsAssignedSessions(
+      currentUser.assignedSessionIds && currentUser.assignedSessionIds.length > 0
+        ? currentUser.assignedSessionIds
+        : ['sesi-1', 'sesi-2', 'sesi-3']
+    );
+  }, [currentUser]);
 
   const handleTestCloudConnection = async () => {
     setIsTestingCloud(true);
@@ -279,17 +308,36 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         }
 
         const existingSheetId = cleanGoogleId(sheetIdInput) || settings.googleSheetSpreadsheetId;
-        setSettings(getAppSettings());
+        const existingDriveId = cleanGoogleId(driveIdInput) || settings.googleDriveFolderId;
+        const currentSettings = getAppSettings();
+        setSettings(currentSettings);
         setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
+        setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
 
-        setFeedback({
-          type: 'success',
-          message: `Akun Google (${email}) berhasil terhubung melalui popup Google! Silakan konfirmasi dialog untuk langsung menyinkronkan seluruh data aplikasi ke Google Drive & Sheets.`,
-        });
+        if ((existingSheetId || existingDriveId) && currentSettings.autoWorkspaceSyncEnabled) {
+          setIsSyncingData(true);
+          try {
+            await autoSyncAllDataToWorkspace('reconnect');
+            setSettings(getAppSettings());
+            setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
+            setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
+            setFeedback({
+              type: 'success',
+              message: `Akun Google (${email}) terhubung! Seluruh data terbaru otomatis tersinkron ke Google Drive & Sheets, dan setiap perubahan selanjutnya akan berjalan otomatis tanpa perlu klik.`,
+            });
+          } finally {
+            setIsSyncingData(false);
+          }
+        } else {
+          setFeedback({
+            type: 'success',
+            message: `Akun Google (${email}) berhasil terhubung melalui popup Google! Silakan konfirmasi dialog untuk langsung menyinkronkan seluruh data aplikasi ke Google Drive & Sheets.`,
+          });
 
-        setWorkspaceConfirmModal({
-          type: existingSheetId ? 'sync_all_tabs' : 'create_db',
-        });
+          setWorkspaceConfirmModal({
+            type: existingSheetId ? 'sync_all_tabs' : 'create_db',
+          });
+        }
       }
     } catch (err: any) {
       console.warn('Login Google error:', err);
@@ -551,6 +599,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
     const res = await updateUser(currentUser, currentUser.id, {
       name: ksName.trim(),
+      username: ksUsername.trim() || currentUser.username,
       nip: ksNip.trim(),
       email: ksEmail.trim(),
       phone: ksPhone.trim(),
@@ -561,9 +610,11 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       const cleanEmail = ksEmail.trim();
       const cleanName = ksName.trim();
       const cleanNip = ksNip.trim();
-      const updatedUser = {
+      const cleanUsername = ksUsername.trim() || currentUser.username;
+      const updatedUser = getCurrentSession() || {
         ...currentUser,
         name: cleanName,
+        username: cleanUsername,
         nip: cleanNip,
         email: cleanEmail,
         phone: ksPhone.trim(),
@@ -796,7 +847,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                   required
                   value={ksEmail}
                   onChange={(e) => setKsEmail(e.target.value)}
-                  placeholder="Contoh: kepsek@sekolah.sch.id atau presensiapp138@gmail.com"
+                  placeholder="Contoh: email.pimpinan@sekolah.sch.id"
                   className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
@@ -843,15 +894,17 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
             <div>
               <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                Username Login (Terkunci)
+                Username Login <span className="text-rose-500">*</span>
               </label>
               <div className="relative">
-                <Lock className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                <UserCheck className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
                 <input
                   type="text"
-                  disabled
-                  value={currentUser.username}
-                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-sm text-slate-500 cursor-not-allowed font-mono"
+                  required
+                  value={ksUsername}
+                  onChange={(e) => setKsUsername(e.target.value)}
+                  placeholder="Username login Kepala Sekolah"
+                  className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
               <span className="text-[10px] text-slate-400 mt-1 block">
@@ -1133,9 +1186,35 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               <FileSpreadsheet className="w-4 h-4" />
             </div>
             <div>
-              <span>Otomatisasi Database Google Drive &amp; Sheets (10 Tab)</span>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span>Otomatisasi Database Google Drive &amp; Sheets (10 Tab)</span>
+                {workspaceRuntime.hasTargetConfigured && (
+                  <span
+                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-extrabold border ${
+                      workspaceRuntime.hasToken
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                        : 'bg-amber-50 text-amber-800 border-amber-200'
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        workspaceRuntime.hasToken ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                      }`}
+                    />
+                    {workspaceRuntime.isSyncing
+                      ? 'MENYINKRONKAN DRIVE & SHEET...'
+                      : workspaceRuntime.hasToken
+                      ? 'AUTO-SYNC DRIVE & SHEET AKTIF'
+                      : workspaceRuntime.hasPending
+                      ? 'MENUNGGU OTORISASI 1x UNTUK AUTO-SYNC'
+                      : 'TERTAUT (SIAP AUTO-SYNC)'}
+                  </span>
+                )}
+              </div>
               <p className="text-xs font-normal text-slate-500">
-                Cukup tempel ID/Link, lalu klik tombol di bawah untuk membuat dan menyinkronkan 10 tab database otomatis.
+                {workspaceRuntime.hasToken && workspaceRuntime.hasTargetConfigured
+                  ? 'Sinkronisasi otomatis aktif: setiap presensi, akun, atau perubahan langsung dikirim ke Google Drive & Sheets tanpa perlu klik.'
+                  : 'Cukup tempel ID/Link lalu hubungkan akun Google 1x per sesi browser; setiap presensi & perubahan langsung tersinkron otomatis ke Drive & Sheets.'}
               </p>
             </div>
           </div>

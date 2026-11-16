@@ -107,7 +107,8 @@ export function generateAttendancePdfReport(
     align: 'center',
   });
 
-  const contactLine = `Email: ${settings.schoolEmail || 'kepsek@sekolah.sch.id'} | Sistem: ${settings.appTitle || 'KITARAJIN Presensi'}`;
+  const resolvedEmail = settings.schoolEmail || ksUser?.email || '-';
+  const contactLine = `Email: ${resolvedEmail} | Sistem: ${settings.appTitle || 'KITARAJIN Presensi'}`;
   doc.text(contactLine, pageWidth / 2, 26, { align: 'center' });
 
   // Garis ganda Kop Surat

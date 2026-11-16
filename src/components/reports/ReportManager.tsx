@@ -750,9 +750,9 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                         </td>
 
                         <td className="py-3.5 px-4 align-top">
-                          <div className="font-bold text-slate-900">{p.userName}</div>
+                          <div className="font-bold text-slate-900">{u?.name || p.userName}</div>
                           <div className="text-[10px] text-slate-400 font-mono">
-                            NIP: {p.nip} &bull; <span className="text-slate-600 font-semibold">{d?.name || p.role}</span>
+                            NIP: {u?.nip || p.nip} &bull; <span className="text-slate-600 font-semibold">{d?.name || u?.departmentName || p.role}</span>
                           </div>
                         </td>
 
@@ -957,9 +957,9 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                         </td>
 
                         <td className="py-3 px-4">
-                          <div className="font-bold text-slate-900">{r.userName}</div>
+                          <div className="font-bold text-slate-900">{u?.name || r.userName}</div>
                           <div className="text-[10px] text-slate-400 font-mono">
-                            NIP: {r.nip} &bull; <span className="text-slate-600 font-semibold">{d?.name || r.role}</span>
+                            NIP: {u?.nip || r.nip} &bull; <span className="text-slate-600 font-semibold">{d?.name || u?.departmentName || r.role}</span>
                           </div>
                         </td>
 
