@@ -44,6 +44,20 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
   currentUser,
   onNavigateTo,
 }) => {
+  const [, setSyncTick] = React.useState(0);
+
+  React.useEffect(() => {
+    const refresh = () => setSyncTick((t) => t + 1);
+    window.addEventListener('kitarajin_cloud_sync', refresh);
+    window.addEventListener('kitarajin_settings_updated', refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('kitarajin_cloud_sync', refresh);
+      window.removeEventListener('kitarajin_settings_updated', refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, []);
+
   const users = getAllUsers();
   const auditLogs = getAuditLogs().slice(0, 5);
 
@@ -60,11 +74,15 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
   const activeSessionsList = userAssignedSessions.length > 0 ? userAssignedSessions : allSchedules;
 
   const todayStr = new Date().toISOString().split('T')[0];
+  const allAttendance = getAllAttendanceRecords();
+  const todayPresentUserCount = new Set(
+    allAttendance.filter((r) => r.date === todayStr && r.type === 'masuk').map((r) => r.userId)
+  ).size;
   const userRecords = getAttendanceForUser(currentUser.id);
   const todayMasuk = userRecords.find((r) => r.date === todayStr && r.type === 'masuk');
   const todayPulang = userRecords.find((r) => r.date === todayStr && r.type === 'pulang');
 
-  const displayRecords = currentUser.role === 'karyawan' ? userRecords : getAllAttendanceRecords();
+  const displayRecords = currentUser.role === 'karyawan' ? userRecords : allAttendance;
   const recentPairs = groupAttendanceByDateAndUser(displayRecords).slice(0, 5);
   const [previewPhoto, setPreviewPhoto] = React.useState<{ url: string; title: string; subtitle: string } | null>(null);
 
@@ -366,12 +384,14 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
 
           <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
             <div className="flex items-center justify-between text-slate-400">
-              <span className="text-xs font-bold uppercase tracking-wider">Pengaturan Data</span>
+              <span className="text-xs font-bold uppercase tracking-wider">Hadir Hari Ini (Live)</span>
               <ShieldCheck className="w-5 h-5 text-teal-600" />
             </div>
-            <div className="text-2xl font-extrabold text-slate-800 mt-2">10 Tab Database</div>
+            <div className="text-2xl font-extrabold text-emerald-700 mt-2">
+              {todayPresentUserCount} Orang
+            </div>
             <div className="text-xs text-slate-500 mt-1">
-              Siap sinkronisasi Google Sheets / Vault Lokal
+              Presensi masuk tersinkron otomatis ke Cloud &amp; Spreadsheet
             </div>
           </div>
         </div>
@@ -394,20 +414,22 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
 
           <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
             <div className="flex items-center justify-between text-slate-400">
+              <span className="text-xs font-bold uppercase tracking-wider">Hadir Hari Ini (Live)</span>
+              <UserCheck className="w-5 h-5 text-emerald-600" />
+            </div>
+            <div className="text-2xl font-extrabold text-emerald-700 mt-2">
+              {todayPresentUserCount} Orang
+            </div>
+            <div className="text-xs text-slate-500 mt-1">Sinkron otomatis setiap presensi baru masuk</div>
+          </div>
+
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
+            <div className="flex items-center justify-between text-slate-400">
               <span className="text-xs font-bold uppercase tracking-wider">Perekaman Wajah</span>
               <Camera className="w-5 h-5 text-purple-600" />
             </div>
             <div className="text-2xl font-extrabold text-purple-900 mt-2">Database Wajah</div>
             <div className="text-xs text-slate-500 mt-1">Perekaman &amp; validasi biometrik staf</div>
-          </div>
-
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
-            <div className="flex items-center justify-between text-slate-400">
-              <span className="text-xs font-bold uppercase tracking-wider">Jadwal Operasional</span>
-              <Clock className="w-5 h-5 text-amber-600" />
-            </div>
-            <div className="text-2xl font-extrabold text-amber-800 mt-2">07:00 - 15:30</div>
-            <div className="text-xs text-slate-500 mt-1">Toleransi keterlambatan 15 menit</div>
           </div>
         </div>
       )}

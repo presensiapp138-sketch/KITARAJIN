@@ -88,6 +88,17 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
 
   useEffect(() => {
     loadData();
+    const handleRealtimeSync = () => {
+      loadData();
+    };
+    window.addEventListener('kitarajin_cloud_sync', handleRealtimeSync);
+    window.addEventListener('kitarajin_settings_updated', handleRealtimeSync);
+    window.addEventListener('storage', handleRealtimeSync);
+    return () => {
+      window.removeEventListener('kitarajin_cloud_sync', handleRealtimeSync);
+      window.removeEventListener('kitarajin_settings_updated', handleRealtimeSync);
+      window.removeEventListener('storage', handleRealtimeSync);
+    };
   }, [currentUser]);
 
   const loadData = () => {

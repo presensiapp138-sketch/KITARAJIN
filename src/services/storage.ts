@@ -372,6 +372,17 @@ export function getAuditLogs(): AuditLog[] {
   return data ? JSON.parse(data) : [];
 }
 
+function notifyRealtimeChange(collectionName: string, triggerWorkspaceSync = false): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: collectionName } }));
+  }
+  if (triggerWorkspaceSync) {
+    import('./workspaceService')
+      .then((m) => m.scheduleWorkspaceAutoSync(collectionName))
+      .catch(() => {});
+  }
+}
+
 /**
  * Mencatat aktivitas ke tabel AuditLogs
  */
@@ -397,6 +408,7 @@ export function logAuditAction(
   logs.unshift(newLog); // letakkan terbaru di atas
   localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(logs.slice(0, 500))); // simpan hingga 500 log
   syncRecordToCloud(SYNC_COLLECTIONS.AUDIT_LOGS, newLog.id, newLog);
+  notifyRealtimeChange(SYNC_COLLECTIONS.AUDIT_LOGS, false);
 }
 
 /**
@@ -788,6 +800,7 @@ export function toggleUserStatus(actor: User, userId: string): { success: boolea
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   syncRecordToCloud(SYNC_COLLECTIONS.USERS, targetUser.id, targetUser);
   import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
+  notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
 
   const statusText = targetUser.isActive ? 'diaktifkan' : 'dinonaktifkan';
   logAuditAction(
@@ -839,6 +852,7 @@ export function createDepartment(
   depts.push(newDept);
   localStorage.setItem(STORAGE_KEYS.DEPARTMENTS, JSON.stringify(depts));
   syncRecordToCloud(SYNC_COLLECTIONS.DEPARTMENTS, newDept.id, newDept);
+  notifyRealtimeChange(SYNC_COLLECTIONS.DEPARTMENTS, true);
 
   logAuditAction(
     actor,
@@ -878,6 +892,7 @@ export function updateDepartment(
 
   localStorage.setItem(STORAGE_KEYS.DEPARTMENTS, JSON.stringify(depts));
   syncRecordToCloud(SYNC_COLLECTIONS.DEPARTMENTS, id, depts[idx]);
+  notifyRealtimeChange(SYNC_COLLECTIONS.DEPARTMENTS, true);
 
   logAuditAction(
     actor,
@@ -907,6 +922,7 @@ export function deleteDepartment(actor: User, id: string): { success: boolean; m
   const filtered = depts.filter((d) => d.id !== id);
   localStorage.setItem(STORAGE_KEYS.DEPARTMENTS, JSON.stringify(filtered));
   deleteRecordFromCloud(SYNC_COLLECTIONS.DEPARTMENTS, id);
+  notifyRealtimeChange(SYNC_COLLECTIONS.DEPARTMENTS, true);
 
   logAuditAction(actor, 'DELETE_DEPARTMENT', 'Departments', id, 'Menghapus departemen.');
 
@@ -982,6 +998,7 @@ export function updateUserSessions(
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   syncRecordToCloud(SYNC_COLLECTIONS.USERS, userId, users[idx]);
   import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
+  notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
 
   if (actor.id === userId) {
     saveSession(users[idx]);
@@ -1030,6 +1047,7 @@ export function toggleUserSession(
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   syncRecordToCloud(SYNC_COLLECTIONS.USERS, userId, users[idx]);
   import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
+  notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
 
   if (actor.id === userId) {
     saveSession(users[idx]);
@@ -1093,6 +1111,7 @@ export function assignUsersToSession(
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   if (updatedCount > 0) {
     import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
+    notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
   }
   logAuditAction(
     actor,
@@ -1143,6 +1162,7 @@ export function createSchedule(
   schedules.push(newSchedule);
   localStorage.setItem(STORAGE_KEYS.SCHEDULES, JSON.stringify(schedules));
   syncRecordToCloud(SYNC_COLLECTIONS.SCHEDULES, newSchedule.id, newSchedule);
+  notifyRealtimeChange(SYNC_COLLECTIONS.SCHEDULES, true);
 
   logAuditAction(
     actor,
@@ -1184,6 +1204,7 @@ export function updateSchedule(
 
   localStorage.setItem(STORAGE_KEYS.SCHEDULES, JSON.stringify(schedules));
   syncRecordToCloud(SYNC_COLLECTIONS.SCHEDULES, id, schedules[idx]);
+  notifyRealtimeChange(SYNC_COLLECTIONS.SCHEDULES, true);
 
   logAuditAction(actor, 'UPDATE_SCHEDULE', 'Schedules', id, `Memperbarui jadwal/sesi ${schedules[idx].name}.`);
 
@@ -1203,6 +1224,7 @@ export function deleteSchedule(actor: User, id: string): { success: boolean; mes
   const filtered = schedules.filter((s) => s.id !== id);
   localStorage.setItem(STORAGE_KEYS.SCHEDULES, JSON.stringify(filtered));
   deleteRecordFromCloud(SYNC_COLLECTIONS.SCHEDULES, id);
+  notifyRealtimeChange(SYNC_COLLECTIONS.SCHEDULES, true);
 
   logAuditAction(actor, 'DELETE_SCHEDULE', 'Schedules', id, 'Menghapus jadwal kerja.');
 
@@ -1249,6 +1271,7 @@ export function createLocation(
   locations.push(newLocation);
   localStorage.setItem(STORAGE_KEYS.LOCATIONS, JSON.stringify(locations));
   syncRecordToCloud(SYNC_COLLECTIONS.LOCATIONS, newLocation.id, newLocation);
+  notifyRealtimeChange(SYNC_COLLECTIONS.LOCATIONS, true);
 
   logAuditAction(
     actor,
@@ -1286,6 +1309,7 @@ export function updateLocation(
 
   localStorage.setItem(STORAGE_KEYS.LOCATIONS, JSON.stringify(locations));
   syncRecordToCloud(SYNC_COLLECTIONS.LOCATIONS, id, locations[idx]);
+  notifyRealtimeChange(SYNC_COLLECTIONS.LOCATIONS, true);
 
   logAuditAction(
     actor,
@@ -1312,6 +1336,7 @@ export function deleteLocation(actor: User, id: string): { success: boolean; mes
   const filtered = locations.filter((l) => l.id !== id);
   localStorage.setItem(STORAGE_KEYS.LOCATIONS, JSON.stringify(filtered));
   deleteRecordFromCloud(SYNC_COLLECTIONS.LOCATIONS, id);
+  notifyRealtimeChange(SYNC_COLLECTIONS.LOCATIONS, true);
 
   logAuditAction(actor, 'DELETE_LOCATION', 'Locations', id, 'Menghapus titik presensi.');
 
@@ -1360,6 +1385,7 @@ export function updateAppSettings(actor: User, updates: Partial<AppSettings>): {
   } catch (err) {
     console.warn('Sync settings ke cloud warning:', err);
   }
+  notifyRealtimeChange(SYNC_COLLECTIONS.SETTINGS, true);
 
   logAuditAction(actor, 'UPDATE_SETTINGS', 'Settings', 'global', 'Memperbarui pengaturan sistem dan sekolah.');
 
@@ -1438,6 +1464,7 @@ export function registerOrUpdateFace(
 
   localStorage.setItem(STORAGE_KEYS.FACE_REGISTRY, JSON.stringify(registry));
   syncRecordToCloud(SYNC_COLLECTIONS.FACE_REGISTRY, registryItem.id, registryItem);
+  notifyRealtimeChange(SYNC_COLLECTIONS.FACE_REGISTRY, true);
 
   logAuditAction(
     actor,
@@ -1467,6 +1494,7 @@ export function toggleFaceStatus(actor: User, registryId: string): { success: bo
   item.updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEYS.FACE_REGISTRY, JSON.stringify(registry));
   syncRecordToCloud(SYNC_COLLECTIONS.FACE_REGISTRY, registryId, item);
+  notifyRealtimeChange(SYNC_COLLECTIONS.FACE_REGISTRY, true);
 
   const statusText = item.isActive ? 'diaktifkan' : 'dinonaktifkan';
   logAuditAction(actor, 'TOGGLE_FACE_STATUS', 'FaceRegistry', registryId, `Status wajah ${item.userName} ${statusText}.`);
@@ -1483,6 +1511,7 @@ export function deleteFaceRegistry(actor: User, registryId: string): { success: 
   const filtered = registry.filter((f) => f.id !== registryId);
   localStorage.setItem(STORAGE_KEYS.FACE_REGISTRY, JSON.stringify(filtered));
   deleteRecordFromCloud(SYNC_COLLECTIONS.FACE_REGISTRY, registryId);
+  notifyRealtimeChange(SYNC_COLLECTIONS.FACE_REGISTRY, true);
 
   logAuditAction(actor, 'DELETE_FACE', 'FaceRegistry', registryId, 'Menghapus data biometrik wajah.');
 
@@ -1648,6 +1677,7 @@ export function recordAttendance(
   records.unshift(newRecord);
   localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(records));
   syncRecordToCloud(SYNC_COLLECTIONS.ATTENDANCE, newRecord.id, newRecord);
+  notifyRealtimeChange(SYNC_COLLECTIONS.ATTENDANCE, true);
 
   // Catat audit
   const actor: User = {
@@ -1729,6 +1759,7 @@ export function createLeaveRequest(
   leaves.unshift(newRequest);
   localStorage.setItem(STORAGE_KEYS.LEAVE_REQUESTS, JSON.stringify(leaves));
   syncRecordToCloud(SYNC_COLLECTIONS.LEAVE_REQUESTS, newRequest.id, newRequest);
+  notifyRealtimeChange(SYNC_COLLECTIONS.LEAVE_REQUESTS, true);
 
   logAuditAction(
     actor,
@@ -1768,6 +1799,7 @@ export function reviewLeaveRequest(
 
   localStorage.setItem(STORAGE_KEYS.LEAVE_REQUESTS, JSON.stringify(leaves));
   syncRecordToCloud(SYNC_COLLECTIONS.LEAVE_REQUESTS, requestId, leaves[idx]);
+  notifyRealtimeChange(SYNC_COLLECTIONS.LEAVE_REQUESTS, true);
 
   logAuditAction(
     actor,
@@ -1835,6 +1867,7 @@ export function createAssignment(
   tasks.unshift(newAssignment);
   localStorage.setItem(STORAGE_KEYS.ASSIGNMENTS, JSON.stringify(tasks));
   syncRecordToCloud(SYNC_COLLECTIONS.ASSIGNMENTS, newAssignment.id, newAssignment);
+  notifyRealtimeChange(SYNC_COLLECTIONS.ASSIGNMENTS, true);
 
   logAuditAction(
     actor,
@@ -1879,6 +1912,7 @@ export function submitAssignmentDocumentation(
 
   localStorage.setItem(STORAGE_KEYS.ASSIGNMENTS, JSON.stringify(tasks));
   syncRecordToCloud(SYNC_COLLECTIONS.ASSIGNMENTS, assignmentId, task);
+  notifyRealtimeChange(SYNC_COLLECTIONS.ASSIGNMENTS, true);
 
   logAuditAction(
     actor,
@@ -1915,6 +1949,7 @@ export function reviewAssignment(
 
   localStorage.setItem(STORAGE_KEYS.ASSIGNMENTS, JSON.stringify(tasks));
   syncRecordToCloud(SYNC_COLLECTIONS.ASSIGNMENTS, assignmentId, tasks[idx]);
+  notifyRealtimeChange(SYNC_COLLECTIONS.ASSIGNMENTS, true);
 
   const statusLabel = status === 'selesai' ? 'SELESAI' : 'PERLU PERBAIKAN';
   logAuditAction(

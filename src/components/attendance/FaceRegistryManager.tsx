@@ -61,8 +61,15 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
 
   useEffect(() => {
     loadData();
+    const handleRealtimeSync = () => {
+      loadData();
+    };
+    window.addEventListener('kitarajin_cloud_sync', handleRealtimeSync);
+    window.addEventListener('storage', handleRealtimeSync);
     return () => {
       stopCamera();
+      window.removeEventListener('kitarajin_cloud_sync', handleRealtimeSync);
+      window.removeEventListener('storage', handleRealtimeSync);
     };
   }, []);
 

@@ -75,6 +75,15 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
 
   useEffect(() => {
     loadData();
+    const handleRealtimeSync = () => {
+      loadData();
+    };
+    window.addEventListener('kitarajin_cloud_sync', handleRealtimeSync);
+    window.addEventListener('storage', handleRealtimeSync);
+    return () => {
+      window.removeEventListener('kitarajin_cloud_sync', handleRealtimeSync);
+      window.removeEventListener('storage', handleRealtimeSync);
+    };
   }, [currentUser, scopeFilter]);
 
   // Filter logic

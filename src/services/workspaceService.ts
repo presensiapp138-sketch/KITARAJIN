@@ -1121,6 +1121,65 @@ export async function autoSyncUsersToWorkspace(): Promise<{
   }
 }
 
+let workspaceAutoSyncTimer: ReturnType<typeof setTimeout> | null = null;
+let isWorkspaceAutoSyncRunning = false;
+
+/**
+ * Sinkronisasi otomatis seluruh data (presensi, akun, izin, tugas, jadwal, lokasi, dll)
+ * ke Google Drive & Google Sheets di latar belakang tanpa perlu klik.
+ */
+export async function autoSyncAllDataToWorkspace(changedCollection?: string): Promise<boolean> {
+  if (isWorkspaceAutoSyncRunning) return false;
+  const settings = getAppSettings();
+  const sheetId = cleanGoogleId(settings.googleSheetSpreadsheetId || '');
+  const driveFolderId = cleanGoogleId(settings.googleDriveFolderId || '');
+  const driveUsersFileId = cleanGoogleId(settings.googleDriveUsersFileId || '');
+
+  // Hanya sinkron otomatis ke Workspace jika sudah pernah ditautkan/diaktifkan & token memori aktif
+  if (!hasRealAccessToken() || (!sheetId && !driveFolderId && !driveUsersFileId)) {
+    if (changedCollection === 'users') {
+      markPendingWorkspaceUserSync();
+    }
+    return false;
+  }
+
+  const token = await getAccessToken();
+  if (!token) return false;
+
+  isWorkspaceAutoSyncRunning = true;
+  try {
+    if (sheetId) {
+      await writeAllTabsData(token, sheetId);
+    } else {
+      await syncUsersWithGoogleDrive(token, driveFolderId || undefined);
+      await syncFullAppDatabaseToDrive(token, driveFolderId || undefined);
+    }
+    return true;
+  } catch (err: any) {
+    console.warn('Background workspace auto-sync note:', err?.message || err);
+    return false;
+  } finally {
+    isWorkspaceAutoSyncRunning = false;
+  }
+}
+
+/**
+ * Jadwalkan auto-sync Google Drive/Sheets terdebounce agar setiap presensi atau perubahan
+ * langsung tersinkron otomatis tanpa membebani kuota API.
+ */
+export function scheduleWorkspaceAutoSync(changedCollection?: string): void {
+  if (isWorkspaceAutoSyncRunning) return;
+  if (!hasRealAccessToken()) return;
+
+  if (workspaceAutoSyncTimer) {
+    clearTimeout(workspaceAutoSyncTimer);
+  }
+  workspaceAutoSyncTimer = setTimeout(() => {
+    workspaceAutoSyncTimer = null;
+    autoSyncAllDataToWorkspace(changedCollection).catch(() => {});
+  }, 1200);
+}
+
 // ==========================================
 // Helper Pemanggilan Google API (10 Tab)
 // ==========================================

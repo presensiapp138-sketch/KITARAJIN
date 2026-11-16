@@ -31,7 +31,7 @@ import {
   deleteLocation,
   getAppSettings,
 } from '../../services/storage';
-import { pushAllLocalDataToCloud } from '../../services/firestoreSync';
+import { autoSyncCloudInBackground } from '../../services/firestoreSync';
 
 interface LocationManagerProps {
   currentUser: User;
@@ -88,6 +88,15 @@ export const LocationManager: React.FC<LocationManagerProps> = ({ currentUser })
   useEffect(() => {
     loadData();
     detectDeviceLocation(false);
+    const handleRealtimeSync = () => {
+      loadData();
+    };
+    window.addEventListener('kitarajin_cloud_sync', handleRealtimeSync);
+    window.addEventListener('storage', handleRealtimeSync);
+    return () => {
+      window.removeEventListener('kitarajin_cloud_sync', handleRealtimeSync);
+      window.removeEventListener('storage', handleRealtimeSync);
+    };
   }, []);
 
   if (currentUser.role !== 'kepala_sekolah') {
@@ -161,7 +170,7 @@ export const LocationManager: React.FC<LocationManagerProps> = ({ currentUser })
           setLastCalibrationSuccess(true);
           loadData();
           try {
-            await pushAllLocalDataToCloud();
+            await autoSyncCloudInBackground();
           } catch (syncErr) {
             console.warn('Auto cloud sync note:', syncErr);
           }

@@ -61,6 +61,15 @@ export const LeaveManager: React.FC<LeaveManagerProps> = ({ currentUser }) => {
 
   useEffect(() => {
     loadData();
+    const handleRealtimeSync = () => {
+      loadData();
+    };
+    window.addEventListener('kitarajin_cloud_sync', handleRealtimeSync);
+    window.addEventListener('storage', handleRealtimeSync);
+    return () => {
+      window.removeEventListener('kitarajin_cloud_sync', handleRealtimeSync);
+      window.removeEventListener('storage', handleRealtimeSync);
+    };
   }, [currentUser]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {

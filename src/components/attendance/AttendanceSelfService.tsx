@@ -177,7 +177,11 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
         description: `Jam ${userSchedule.sessionName || userSchedule.name} berhasil diperbarui: Masuk (${quickCheckInStart} - ${quickCheckInDeadline} WIB), Pulang (${quickCheckOutStart} - ${quickCheckOutEnd} WIB). Langsung aktif di sistem.`,
       });
     } else {
-      alert(res.message);
+      setResultMessage({
+        type: 'error',
+        title: 'Gagal Menyimpan Jam Sesi',
+        description: res.message,
+      });
     }
   };
 
@@ -320,12 +324,16 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
       loadData();
     };
     window.addEventListener('kitarajin_cloud_sync', handleSync);
+    window.addEventListener('kitarajin_settings_updated', handleSync);
+    window.addEventListener('storage', handleSync);
 
     return () => {
       stopCamera();
       window.removeEventListener('kitarajin_cloud_sync', handleSync);
+      window.removeEventListener('kitarajin_settings_updated', handleSync);
+      window.removeEventListener('storage', handleSync);
     };
-  }, []);
+  }, [currentUser]);
 
   // Otomatis atur tombol Masuk vs Pulang saat karyawan memilih sesi
   const handleSelectSession = (sched: Schedule) => {

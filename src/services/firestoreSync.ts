@@ -644,9 +644,12 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
   const collectionsToWatch = Object.values(SYNC_COLLECTIONS);
 
   activeUnsubscribes = collectionsToWatch.map((colName) => {
+    let isInitialSnapshot = true;
     return onSnapshot(
       collection(db, colName),
       (snapshot) => {
+        const wasInitial = isInitialSnapshot;
+        isInitialSnapshot = false;
         cloudConnectionActive = true;
         lastSyncTime = new Date().toISOString();
 
@@ -723,6 +726,13 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
               }
             }
           }
+        }
+
+        // Jika perubahan berasal dari perangkat lain (remote server), otomatis sinkronkan juga ke Google Drive/Sheets bila terhubung
+        if (!wasInitial && !snapshot.metadata.hasPendingWrites && colName !== SYNC_COLLECTIONS.AUDIT_LOGS) {
+          import('./workspaceService')
+            .then((m) => m.scheduleWorkspaceAutoSync(colName))
+            .catch(() => {});
         }
 
         // Panggil notifikasi pembaruan untuk render ulang UI di semua tab / halaman
