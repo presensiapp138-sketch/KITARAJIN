@@ -203,24 +203,94 @@ export const initAuth = (
   }
 };
 
+export const PRODUCTION_VERCEL_DOMAIN = 'kitarajin.vercel.app';
+export const PRODUCTION_VERCEL_ORIGIN = `https://${PRODUCTION_VERCEL_DOMAIN}`;
+export const GCP_PROJECT_NUMBER = '331827253380';
+
+export interface GoogleConsoleSetupInfo {
+  projectId: string;
+  projectNumber: string;
+  authDomain: string;
+  oAuthClientId: string;
+  productionDomain: string;
+  productionOrigin: string;
+  firebaseAuthHandlerUri: string;
+  currentDomain: string;
+  currentOrigin: string;
+  isProductionVercel: boolean;
+  consoleLinks: {
+    oauthClient: string;
+    credentials: string;
+    oauthAudience: string;
+    oauthBranding: string;
+    firebaseAuthSettings: string;
+  };
+}
+
+export const getGoogleConsoleSetupInfo = (): GoogleConsoleSetupInfo => {
+  const projectId = firebaseConfig.projectId || 'gen-lang-client-0792870264';
+  const authDomain = firebaseConfig.authDomain || `${projectId}.firebaseapp.com`;
+  const oAuthClientId =
+    (firebaseConfig as any)?.oAuthClientId ||
+    `${GCP_PROJECT_NUMBER}-hpg2doc5mbnppv1v733ggr0th5pvqmre.apps.googleusercontent.com`;
+  const currentDomain = typeof window !== 'undefined' ? window.location.hostname : PRODUCTION_VERCEL_DOMAIN;
+  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : PRODUCTION_VERCEL_ORIGIN;
+
+  return {
+    projectId,
+    projectNumber: GCP_PROJECT_NUMBER,
+    authDomain,
+    oAuthClientId,
+    productionDomain: PRODUCTION_VERCEL_DOMAIN,
+    productionOrigin: PRODUCTION_VERCEL_ORIGIN,
+    firebaseAuthHandlerUri: `https://${authDomain}/__/auth/handler`,
+    currentDomain,
+    currentOrigin,
+    isProductionVercel: currentDomain === PRODUCTION_VERCEL_DOMAIN,
+    consoleLinks: {
+      oauthClient: `https://console.cloud.google.com/apis/credentials/oauthclient/${oAuthClientId}?project=${projectId}`,
+      credentials: `https://console.cloud.google.com/apis/credentials?project=${projectId}`,
+      oauthAudience: `https://console.cloud.google.com/auth/audience?project=${projectId}`,
+      oauthBranding: `https://console.cloud.google.com/auth/branding?project=${projectId}`,
+      firebaseAuthSettings: `https://console.firebase.google.com/project/${projectId}/authentication/settings`,
+    },
+  };
+};
+
 /**
  * Pesan kesalahan autentikasi Google dalam Bahasa Indonesia yang jelas
  */
 export function formatAuthErrorMessage(error: any): string {
   if (!error) return 'Silakan otorisasi akun Google Anda untuk menyinkronkan ke Drive & Sheets.';
   const msg = typeof error === 'string' ? error : error.message || error.code || '';
-  const currentHost = typeof window !== 'undefined' ? window.location.hostname : '';
+  const lower = msg.toLowerCase();
+  const currentHost = typeof window !== 'undefined' ? window.location.hostname : PRODUCTION_VERCEL_DOMAIN;
+  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : PRODUCTION_VERCEL_ORIGIN;
 
-  if (msg.includes('auth/popup-blocked')) {
-    return 'Jendela popup login Google terhalang browser. Mohon izinkan popup di browser Anda lalu klik kembali tombol Hubungkan Google.';
+  if (lower.includes('auth/popup-blocked') || lower.includes('popup_failed_to_open')) {
+    return 'Jendela popup login Google terhalang browser. Mohon izinkan popup untuk situs ini lalu klik kembali tombol Hubungkan Google.';
   }
-  if (msg.includes('auth/popup-closed-by-user') || msg.includes('cancelled-popup-request')) {
+  if (
+    lower.includes('auth/popup-closed-by-user') ||
+    lower.includes('cancelled-popup-request') ||
+    lower.includes('popup_closed')
+  ) {
     return 'Jendela login Google ditutup sebelum selesai. Klik kembali tombol Hubungkan Google untuk melanjutkan sinkronisasi Drive & Sheets.';
   }
-  if (msg.includes('auth/unauthorized-domain') || msg.includes('origin_mismatch')) {
-    return `Domain aplikasi (${currentHost || 'domain saat ini'}) belum masuk daftar Authorized Domains / OAuth Origins di Google Console. Hubungkan ulang via AI Studio atau tambahkan "${currentHost}" pada Authorized Domains.`;
+  if (lower.includes('redirect_uri_mismatch')) {
+    return `Redirect URI belum terdaftar di Google Cloud Console. Tambahkan "https://${firebaseConfig.authDomain}/__/auth/handler" dan "${currentOrigin}" di Authorized redirect URIs.`;
   }
-  if (msg.toLowerCase().includes('401') || msg.toLowerCase().includes('invalid credentials')) {
+  if (
+    lower.includes('auth/unauthorized-domain') ||
+    lower.includes('origin_mismatch') ||
+    lower.includes('idpiframe_initialization_failed')
+  ) {
+    return `Domain/Origin "${currentOrigin}" belum terdaftar di Google Console. Tambahkan "${currentOrigin}" pada Authorized JavaScript origins di Google Cloud Console (OAuth Client) dan "${currentHost}" pada Authorized domains di Firebase Authentication.`;
+  }
+  if (lower.includes('access_denied')) {
+    return 'Akses Google ditolak atau akun belum masuk Test Users. Pastikan akun Gmail Anda diizinkan pada Google Auth Platform > Audience atau pilih "Izinkan" saat popup muncul.';
+  }
+  if (lower.includes('401') || lower.includes('invalid credentials')) {
     return 'Sesi akses Google telah berakhir. Silakan klik Hubungkan / Otorisasi Ulang Akun Google.';
   }
   return msg;
@@ -351,13 +421,20 @@ export const signInWithGoogle = async (
     const errMsg = String(error?.code || error?.message || error || '');
     console.warn('Google Sign In primary popup note:', errMsg);
 
-    // Jika Firebase Auth melaporkan unauthorized-domain (misal saat dibuka dari domain custom), coba GIS fallback
-    if (errMsg.includes('unauthorized-domain')) {
+    // Jika Firebase Auth melaporkan unauthorized-domain / origin / internal-error (misal dari domain Vercel), coba GIS fallback
+    if (
+      errMsg.includes('unauthorized-domain') ||
+      errMsg.includes('origin_mismatch') ||
+      errMsg.includes('auth/internal-error') ||
+      errMsg.includes('operation-not-supported')
+    ) {
       try {
         const gisResult = await signInWithGisFallback(emailHint);
         if (gisResult) return gisResult;
       } catch (gisErr: any) {
         console.warn('GIS fallback error:', gisErr?.message || gisErr);
+        const gisMsg = formatAuthErrorMessage(gisErr);
+        throw new Error(gisMsg);
       }
     }
 

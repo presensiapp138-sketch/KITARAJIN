@@ -36,6 +36,8 @@ import {
   Eye,
   EyeOff,
   Key,
+  Copy,
+  Globe,
 } from 'lucide-react';
 
 import { AppSettings, User } from '../../types';
@@ -77,6 +79,7 @@ import {
   hasRealAccessToken,
   autoSyncAllDataToWorkspace,
   getWorkspaceSyncRuntimeStatus,
+  getGoogleConsoleSetupInfo,
 } from '../../services/workspaceService';
 
 interface SettingsManagerProps {
@@ -169,6 +172,26 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [cloudStatus, setCloudStatus] = useState(getCloudSyncStatus());
   const [isTestingCloud, setIsTestingCloud] = useState(false);
   const [cloudMessage, setCloudMessage] = useState<string | null>(null);
+
+  // Domain & Google Console Setup Copy State
+  const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [showConsoleGuide, setShowConsoleGuide] = useState(true);
+  const googleConsoleInfo = getGoogleConsoleSetupInfo();
+
+  const handleCopyConsoleValue = async (key: string, val: string) => {
+    try {
+      await navigator.clipboard.writeText(val);
+      setCopiedField(key);
+      setTimeout(() => {
+        setCopiedField((prev) => (prev === key ? null : prev));
+      }, 2200);
+    } catch {
+      setFeedback({
+        type: 'error',
+        message: `Salin manual nilai ini: ${val}`,
+      });
+    }
+  };
 
   useEffect(() => {
     const data = getAppSettings();
@@ -1454,6 +1477,181 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             )}
           </div>
         )}
+
+        {/* Panel Registrasi Domain Vercel (kitarajin.vercel.app) & Google Console */}
+        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/90 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+                <Globe className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="font-extrabold text-slate-900 text-xs sm:text-sm">
+                    Registrasi Domain Vercel ({googleConsoleInfo.productionDomain}) &amp; Google Console
+                  </h4>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                    {googleConsoleInfo.isProductionVercel
+                      ? 'Aktif di kitarajin.vercel.app'
+                      : `Origin Aktif: ${googleConsoleInfo.currentDomain}`}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Salin nilai berikut agar domain <strong>{googleConsoleInfo.productionDomain}</strong> diterima pada Google Cloud OAuth Origins &amp; Firebase Authorized Domains.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowConsoleGuide((prev) => !prev)}
+              className="text-xs font-bold text-indigo-700 hover:text-indigo-900 underline self-start sm:self-center cursor-pointer"
+            >
+              {showConsoleGuide ? 'Sembunyikan Detail' : 'Tampilkan Detail'}
+            </button>
+          </div>
+
+          {showConsoleGuide && (
+            <div className="space-y-3 pt-1">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                {[
+                  {
+                    key: 'origin',
+                    label: 'Authorized JavaScript Origin (Google Cloud Console)',
+                    value: googleConsoleInfo.productionOrigin,
+                    note: 'Wajib pakai https:// tanpa garis miring di akhir',
+                  },
+                  {
+                    key: 'domain',
+                    label: 'Authorized Domain (Firebase Auth & OAuth Branding)',
+                    value: googleConsoleInfo.productionDomain,
+                    note: 'Khusus nama domain saja tanpa https://',
+                  },
+                  {
+                    key: 'redirect',
+                    label: 'Authorized Redirect URI (Google Cloud Console)',
+                    value: googleConsoleInfo.firebaseAuthHandlerUri,
+                    note: 'Endpoint handler autentikasi Firebase bawaan',
+                  },
+                  {
+                    key: 'client',
+                    label: 'OAuth 2.0 Client ID (Project Google Console)',
+                    value: googleConsoleInfo.oAuthClientId,
+                    note: `Project ID: ${googleConsoleInfo.projectId}`,
+                  },
+                ].map((item) => (
+                  <div
+                    key={item.key}
+                    className="p-3 bg-white rounded-xl border border-slate-200 flex items-center justify-between gap-2"
+                  >
+                    <div className="min-w-0">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                        {item.label}
+                      </span>
+                      <code className="text-xs font-mono font-bold text-slate-900 block truncate mt-0.5" title={item.value}>
+                        {item.value}
+                      </code>
+                      <span className="text-[10px] text-slate-400 block mt-0.5">{item.note}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleCopyConsoleValue(item.key, item.value)}
+                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0 border transition-colors cursor-pointer ${
+                        copiedField === item.key
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                          : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                      }`}
+                    >
+                      {copiedField === item.key ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span>Tersalin</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 text-slate-500" />
+                          <span>Salin</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {!googleConsoleInfo.isProductionVercel && googleConsoleInfo.currentOrigin && (
+                <div className="p-2.5 bg-white rounded-xl border border-amber-200 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <span className="text-[10px] font-bold text-amber-800 uppercase block">
+                      Origin Preview Aktif Saat Ini (Opsional jika login dari browser ini)
+                    </span>
+                    <code className="text-xs font-mono text-slate-800 block truncate">
+                      {googleConsoleInfo.currentOrigin}
+                    </code>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleCopyConsoleValue('currentOrigin', googleConsoleInfo.currentOrigin)}
+                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0 border transition-colors cursor-pointer ${
+                      copiedField === 'currentOrigin'
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                        : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200'
+                    }`}
+                  >
+                    {copiedField === 'currentOrigin' ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Tersalin</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-amber-700" />
+                        <span>Salin Origin</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <a
+                  href={googleConsoleInfo.consoleLinks.oauthClient}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>1. Buka OAuth Client (Authorized Origins)</span>
+                </a>
+                <a
+                  href={googleConsoleInfo.consoleLinks.firebaseAuthSettings}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>2. Buka Firebase Authorized Domains</span>
+                </a>
+                <a
+                  href={googleConsoleInfo.consoleLinks.oauthAudience}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-[11px] font-bold flex items-center gap-1.5 transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
+                  <span>3. Cek Test Users / Publish OAuth</span>
+                </a>
+                <a
+                  href={googleConsoleInfo.consoleLinks.oauthBranding}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="px-3 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-[11px] font-bold flex items-center gap-1.5 transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
+                  <span>4. OAuth Branding / Domain</span>
+                </a>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Hasil Diagnostik Database 10 Tab */}
         {dbDiagnosticResult && (
