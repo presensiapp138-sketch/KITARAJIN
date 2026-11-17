@@ -225,11 +225,13 @@ export async function initializeDatabase(): Promise<void> {
   const stf1Ref = findUserRef('usr-stf-01', 'Siti Rahmawati, S.Pd.', '199004152014022003');
   const stf2Ref = findUserRef('usr-stf-02', 'Budi Santoso', '199211052018011005');
 
+  const seedAlreadyCompleted = localStorage.getItem('kitarajin_seed_completed_v1') === 'true';
+
   // Initial Departments
   if (!localStorage.getItem(STORAGE_KEYS.DEPARTMENTS)) {
-    const initDepts = INITIAL_DEPARTMENTS.map((d) =>
-      d.id === 'dept-1' ? { ...d, headName: admRef.name } : d
-    );
+    const initDepts = seedAlreadyCompleted
+      ? []
+      : INITIAL_DEPARTMENTS.map((d) => (d.id === 'dept-1' ? { ...d, headName: admRef.name } : d));
     localStorage.setItem(STORAGE_KEYS.DEPARTMENTS, JSON.stringify(initDepts));
   }
 
@@ -240,53 +242,57 @@ export async function initializeDatabase(): Promise<void> {
 
   // Initial Locations
   if (!localStorage.getItem(STORAGE_KEYS.LOCATIONS)) {
-    localStorage.setItem(STORAGE_KEYS.LOCATIONS, JSON.stringify(INITIAL_LOCATIONS));
+    localStorage.setItem(STORAGE_KEYS.LOCATIONS, JSON.stringify(seedAlreadyCompleted ? [] : INITIAL_LOCATIONS));
   }
 
   // Initial Face Registry Seeds
   if (!localStorage.getItem(STORAGE_KEYS.FACE_REGISTRY)) {
-    const sampleVector = [
-      0.45, 0.52, 0.48, 0.42,
-      0.55, 0.62, 0.58, 0.51,
-      0.49, 0.58, 0.54, 0.47,
-      0.40, 0.46, 0.43, 0.38,
-      0.51, 0.55, 0.50, 0.45,
-      0.58, 0.60, 0.56, 0.52,
-      0.48, 0.52, 0.49, 0.44,
-      0.42, 0.45, 0.41, 0.39,
-    ];
+    if (seedAlreadyCompleted) {
+      localStorage.setItem(STORAGE_KEYS.FACE_REGISTRY, JSON.stringify([]));
+    } else {
+      const sampleVector = [
+        0.45, 0.52, 0.48, 0.42,
+        0.55, 0.62, 0.58, 0.51,
+        0.49, 0.58, 0.54, 0.47,
+        0.40, 0.46, 0.43, 0.38,
+        0.51, 0.55, 0.50, 0.45,
+        0.58, 0.60, 0.56, 0.52,
+        0.48, 0.52, 0.49, 0.44,
+        0.42, 0.45, 0.41, 0.39,
+      ];
 
-    const seedFaces: FaceRegistryItem[] = [
-      {
-        id: 'face-seed-01',
-        userId: 'usr-ks-01',
-        nip: ksRef.nip,
-        userName: ksRef.name,
-        role: 'kepala_sekolah',
-        faceEmbedding: sampleVector,
-        registeredPhotoRef: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-        registeredBy: 'Sistem Terpusat',
-        cameraUsed: 'user',
-        qualityScore: 92,
-        updatedAt: new Date().toISOString(),
-        isActive: true,
-      },
-      {
-        id: 'face-seed-02',
-        userId: 'usr-stf-01',
-        nip: stf1Ref.nip,
-        userName: stf1Ref.name,
-        role: 'karyawan',
-        faceEmbedding: sampleVector,
-        registeredPhotoRef: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80',
-        registeredBy: ksRef.name,
-        cameraUsed: 'user',
-        qualityScore: 88,
-        updatedAt: new Date().toISOString(),
-        isActive: true,
-      },
-    ];
-    localStorage.setItem(STORAGE_KEYS.FACE_REGISTRY, JSON.stringify(seedFaces));
+      const seedFaces: FaceRegistryItem[] = [
+        {
+          id: 'face-seed-01',
+          userId: 'usr-ks-01',
+          nip: ksRef.nip,
+          userName: ksRef.name,
+          role: 'kepala_sekolah',
+          faceEmbedding: sampleVector,
+          registeredPhotoRef: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+          registeredBy: 'Sistem Terpusat',
+          cameraUsed: 'user',
+          qualityScore: 92,
+          updatedAt: new Date().toISOString(),
+          isActive: true,
+        },
+        {
+          id: 'face-seed-02',
+          userId: 'usr-stf-01',
+          nip: stf1Ref.nip,
+          userName: stf1Ref.name,
+          role: 'karyawan',
+          faceEmbedding: sampleVector,
+          registeredPhotoRef: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80',
+          registeredBy: ksRef.name,
+          cameraUsed: 'user',
+          qualityScore: 88,
+          updatedAt: new Date().toISOString(),
+          isActive: true,
+        },
+      ];
+      localStorage.setItem(STORAGE_KEYS.FACE_REGISTRY, JSON.stringify(seedFaces));
+    }
   }
 
   // Initial Attendance Records (Murni data presensi riil, riwayat demo dihapus)
@@ -298,53 +304,61 @@ export async function initializeDatabase(): Promise<void> {
 
   // Initial Leave Requests Seeds
   if (!localStorage.getItem(STORAGE_KEYS.LEAVE_REQUESTS)) {
-    const seedLeaves: LeaveRequest[] = [
-      {
-        id: 'leave-seed-01',
-        userId: 'usr-stf-01',
-        nip: stf1Ref.nip,
-        userName: stf1Ref.name,
-        type: 'dinas',
-        startDate: new Date().toISOString().split('T')[0],
-        endDate: new Date(Date.now() + 86400000).toISOString().split('T')[0],
-        durationDays: 2,
-        reason: 'Mengikuti Workshop Kurikulum Merdeka di Balai Guru Penggerak Provinsi.',
-        status: 'menunggu',
-        createdAt: new Date().toISOString(),
-      },
-    ];
-    localStorage.setItem(STORAGE_KEYS.LEAVE_REQUESTS, JSON.stringify(seedLeaves));
+    if (seedAlreadyCompleted) {
+      localStorage.setItem(STORAGE_KEYS.LEAVE_REQUESTS, JSON.stringify([]));
+    } else {
+      const seedLeaves: LeaveRequest[] = [
+        {
+          id: 'leave-seed-01',
+          userId: 'usr-stf-01',
+          nip: stf1Ref.nip,
+          userName: stf1Ref.name,
+          type: 'dinas',
+          startDate: new Date().toISOString().split('T')[0],
+          endDate: new Date(Date.now() + 86400000).toISOString().split('T')[0],
+          durationDays: 2,
+          reason: 'Mengikuti Workshop Kurikulum Merdeka di Balai Guru Penggerak Provinsi.',
+          status: 'menunggu',
+          createdAt: new Date().toISOString(),
+        },
+      ];
+      localStorage.setItem(STORAGE_KEYS.LEAVE_REQUESTS, JSON.stringify(seedLeaves));
+    }
   }
 
   // Initial Assignments Seeds
   if (!localStorage.getItem(STORAGE_KEYS.ASSIGNMENTS)) {
-    const seedAssignments: Assignment[] = [
-      {
-        id: 'task-seed-01',
-        title: 'Pemeriksaan Sarana Laboratorium Komputer',
-        description: 'Lakukan inspeksi kebersihan dan fungsi 35 unit komputer lab untuk persiapan asesmen nasional.',
-        assignedToUserId: 'usr-stf-01',
-        assignedToName: stf1Ref.name,
-        assignedByUserId: 'usr-adm-01',
-        assignedByName: admRef.name,
-        dueDate: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
-        status: 'belum_mulai',
-        createdAt: new Date().toISOString(),
-      },
-      {
-        id: 'task-seed-02',
-        title: 'Patroli Keamanan Area Gerbang Timur',
-        description: 'Pantau ketertiban gerbang dan parkir kendaraan siswa saat jam kepulangan.',
-        assignedToUserId: 'usr-stf-02',
-        assignedToName: stf2Ref.name,
-        assignedByUserId: 'usr-adm-01',
-        assignedByName: admRef.name,
-        dueDate: new Date().toISOString().split('T')[0],
-        status: 'belum_mulai',
-        createdAt: new Date().toISOString(),
-      },
-    ];
-    localStorage.setItem(STORAGE_KEYS.ASSIGNMENTS, JSON.stringify(seedAssignments));
+    if (seedAlreadyCompleted) {
+      localStorage.setItem(STORAGE_KEYS.ASSIGNMENTS, JSON.stringify([]));
+    } else {
+      const seedAssignments: Assignment[] = [
+        {
+          id: 'task-seed-01',
+          title: 'Pemeriksaan Sarana Laboratorium Komputer',
+          description: 'Lakukan inspeksi kebersihan dan fungsi 35 unit komputer lab untuk persiapan asesmen nasional.',
+          assignedToUserId: 'usr-stf-01',
+          assignedToName: stf1Ref.name,
+          assignedByUserId: 'usr-adm-01',
+          assignedByName: admRef.name,
+          dueDate: new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0],
+          status: 'belum_mulai',
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'task-seed-02',
+          title: 'Patroli Keamanan Area Gerbang Timur',
+          description: 'Pantau ketertiban gerbang dan parkir kendaraan siswa saat jam kepulangan.',
+          assignedToUserId: 'usr-stf-02',
+          assignedToName: stf2Ref.name,
+          assignedByUserId: 'usr-adm-01',
+          assignedByName: admRef.name,
+          dueDate: new Date().toISOString().split('T')[0],
+          status: 'belum_mulai',
+          createdAt: new Date().toISOString(),
+        },
+      ];
+      localStorage.setItem(STORAGE_KEYS.ASSIGNMENTS, JSON.stringify(seedAssignments));
+    }
   }
 
   // Initial Settings
@@ -362,6 +376,8 @@ export async function initializeDatabase(): Promise<void> {
     };
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(defaultSettings));
   }
+
+  localStorage.setItem('kitarajin_seed_completed_v1', 'true');
 
   // Pastikan seluruh entitas terkait mengikuti perubahan nama/NIP akun demo
   reconcileUserReferences(currentUsers, false);
@@ -1185,13 +1201,15 @@ export function getAllSchedules(): Schedule[] {
   });
   let hasChanges = list.length !== originalLength;
 
-  // Pastikan Sesi 1, Sesi 2, Sesi 3 selalu tersedia untuk fleksibilitas sesi per karyawan
+  // Hanya isi Sesi 1-3 default saat pertama kali tabel schedules benar-benar kosong/belum pernah diinisialisasi
   const addedSchedules: Schedule[] = [];
-  for (const initSched of INITIAL_SCHEDULES) {
-    if (!list.some((s) => s.id === initSched.id || s.sessionName === initSched.sessionName)) {
-      list.push(initSched);
-      addedSchedules.push(initSched);
-      hasChanges = true;
+  if (!data || list.length === 0) {
+    for (const initSched of INITIAL_SCHEDULES) {
+      if (!list.some((s) => s.id === initSched.id || s.sessionName === initSched.sessionName)) {
+        list.push(initSched);
+        addedSchedules.push(initSched);
+        hasChanges = true;
+      }
     }
   }
 

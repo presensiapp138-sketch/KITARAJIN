@@ -177,6 +177,31 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [showConsoleGuide, setShowConsoleGuide] = useState(true);
   const googleConsoleInfo = getGoogleConsoleSetupInfo();
+  const hasMountedTargetsRef = React.useRef(false);
+
+  const persistWorkspaceTargetIds = (rawSheet: string, rawDrive: string) => {
+    const cleanSheet = cleanGoogleId(rawSheet);
+    const cleanDrive = cleanGoogleId(rawDrive);
+    const currentSettings = getAppSettings();
+    const prevSheet = cleanGoogleId(currentSettings.googleSheetSpreadsheetId || '');
+    const prevDrive = cleanGoogleId(currentSettings.googleDriveFolderId || '');
+
+    if (cleanSheet === prevSheet && cleanDrive === prevDrive) return;
+
+    const hasTarget = Boolean(cleanSheet || cleanDrive);
+    updateAppSettings(
+      currentUser,
+      {
+        googleSheetSpreadsheetId: cleanSheet,
+        googleDriveFolderId: cleanDrive,
+        autoWorkspaceSyncEnabled: hasTarget ? true : currentSettings.autoWorkspaceSyncEnabled,
+        storageMode: hasTarget ? 'google_workspace_sync' : currentSettings.storageMode,
+      },
+      { skipWorkspaceAutoSync: !hasTarget }
+    );
+    setSettings(getAppSettings());
+    setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
+  };
 
   const handleCopyConsoleValue = async (key: string, val: string) => {
     try {
@@ -205,6 +230,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     setRequireStrictFace(data.requireStrictFaceVerification);
     setSheetIdInput(data.googleSheetSpreadsheetId || '');
     setDriveIdInput(data.googleDriveFolderId || '');
+    hasMountedTargetsRef.current = true;
 
     // Sinkronkan status profile terbaru
     const session = getCurrentSession();
@@ -231,6 +257,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       (user) => {
         setIsGoogleConnected(true);
         setGoogleUserEmail(user.email || savedGoogleEmail || 'Akun Google Terhubung');
+        setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
       },
       () => {
         const stillLinked = getConnectedGoogleEmail() || data.googleAccountEmail;
@@ -241,6 +268,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           setIsGoogleConnected(false);
           setGoogleUserEmail(null);
         }
+        setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
       }
     );
 
@@ -282,6 +310,16 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       window.removeEventListener('storage', handleSyncEvent);
     };
   }, []);
+
+  // Auto-simpan ID Spreadsheet & Folder Drive setelah pengguna selesai menempel/mengetik
+  // agar tidak perlu mengetik ulang meskipun aplikasi ditutup & dibuka kembali
+  useEffect(() => {
+    if (!hasMountedTargetsRef.current) return;
+    const timer = setTimeout(() => {
+      persistWorkspaceTargetIds(sheetIdInput, driveIdInput);
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [sheetIdInput, driveIdInput]);
 
   useEffect(() => {
     setKsName(currentUser.name);
@@ -327,11 +365,22 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         const email = result.user.email || targetEmail || 'Akun Google';
         setGoogleUserEmail(email);
 
-        updateAppSettings(currentUser, {
-          isGoogleConnected: true,
-          googleAccountEmail: email,
-          storageMode: 'google_workspace_sync',
-        });
+        const existingSheetId = cleanGoogleId(sheetIdInput) || settings.googleSheetSpreadsheetId || '';
+        const existingDriveId = cleanGoogleId(driveIdInput) || settings.googleDriveFolderId || '';
+        const hasTargetIds = Boolean(existingSheetId || existingDriveId);
+
+        updateAppSettings(
+          currentUser,
+          {
+            isGoogleConnected: true,
+            googleAccountEmail: email,
+            googleSheetSpreadsheetId: existingSheetId,
+            googleDriveFolderId: existingDriveId,
+            autoWorkspaceSyncEnabled: hasTargetIds ? true : settings.autoWorkspaceSyncEnabled,
+            storageMode: 'google_workspace_sync',
+          },
+          { skipWorkspaceAutoSync: true }
+        );
 
         if (email) {
           setKsEmail(email);
@@ -341,21 +390,19 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           }
         }
 
-        const existingSheetId = cleanGoogleId(sheetIdInput) || settings.googleSheetSpreadsheetId;
-        const existingDriveId = cleanGoogleId(driveIdInput) || settings.googleDriveFolderId;
         const currentSettings = getAppSettings();
         setSettings(currentSettings);
         setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
         setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
 
-        if ((existingSheetId || existingDriveId) && currentSettings.autoWorkspaceSyncEnabled) {
+        if (hasTargetIds) {
           autoSyncAllDataToWorkspace('reconnect').catch(() => {});
           setSettings(getAppSettings());
           setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
           setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
           setFeedback({
             type: 'success',
-            message: `Akun Google (${email}) terhubung! Sinkronisasi ke Google Drive & Sheets berjalan otomatis di latar belakang, dan setiap presensi serta perubahan selanjutnya akan tersinkron tanpa perlu klik tombol manual.`,
+            message: `Akun Google (${email}) aktif untuk sesi ini! ID Sheet & Drive tersimpan permanen — setiap tambah, edit, hapus, maupun presensi otomatis tersinkron ke Google Drive & Sheets di latar belakang.`,
           });
         } else {
           setFeedback({
@@ -364,7 +411,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           });
 
           setWorkspaceConfirmModal({
-            type: existingSheetId ? 'sync_all_tabs' : 'create_db',
+            type: 'create_db',
           });
         }
       }
@@ -677,11 +724,15 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     setIsUpdatingProfile(false);
   };
 
-  // Simpan Pengaturan Sekolah (Nama Sekolah, Email, Judul Aplikasi, Alamat Lengkap)
+  // Simpan Pengaturan Sekolah (Nama Sekolah, Email, Judul Aplikasi, Alamat Lengkap + ID Sheet/Drive)
   const handleSaveSettings = (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     setFeedback(null);
+
+    const cleanSheet = cleanGoogleId(sheetIdInput);
+    const cleanDrive = cleanGoogleId(driveIdInput);
+    const hasTarget = Boolean(cleanSheet || cleanDrive);
 
     const res = updateAppSettings(currentUser, {
       schoolName: schoolName.trim(),
@@ -691,14 +742,21 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       minFaceMatchThreshold: minFaceMatchThreshold / 100,
       requireStrictGps,
       requireStrictFaceVerification: requireStrictFace,
+      googleSheetSpreadsheetId: cleanSheet,
+      googleDriveFolderId: cleanDrive,
+      autoWorkspaceSyncEnabled: hasTarget ? true : settings.autoWorkspaceSyncEnabled,
+      storageMode: hasTarget ? 'google_workspace_sync' : settings.storageMode,
     });
 
     if (res.success) {
+      setSheetIdInput(cleanSheet);
+      setDriveIdInput(cleanDrive);
       setFeedback({
         type: 'success',
-        message: 'Pengaturan identitas sekolah (Nama Sekolah, Email, Judul Aplikasi, Alamat Lengkap) berhasil disimpan dan disinkronkan ke database!',
+        message: 'Pengaturan sekolah & tautan Drive/Sheets berhasil disimpan permanen dan disinkronkan ke database!',
       });
       setSettings(getAppSettings());
+      setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
     } else {
       setFeedback({ type: 'error', message: res.message });
     }
@@ -844,18 +902,32 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 </label>
                 {isGoogleConnected ? (
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                      Terhubung: {googleUserEmail}
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
+                        workspaceRuntime.hasToken
+                          ? 'text-emerald-700 bg-emerald-100'
+                          : 'text-amber-800 bg-amber-100'
+                      }`}
+                    >
+                      <span
+                        className={`w-1.5 h-1.5 rounded-full ${
+                          workspaceRuntime.hasToken ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                        }`}
+                      />
+                      {workspaceRuntime.hasToken ? 'Aktif:' : 'Tersimpan:'} {googleUserEmail}
                     </span>
                     <button
                       type="button"
                       onClick={() => handleGoogleConnect(ksEmail)}
                       disabled={isSigningInGoogle}
-                      className="text-[10px] font-bold text-slate-500 hover:text-emerald-700 underline cursor-pointer"
-                      title="Sinkronkan dengan email ini"
+                      className="text-[10px] font-bold text-slate-600 hover:text-emerald-700 underline cursor-pointer"
+                      title={
+                        workspaceRuntime.hasToken
+                          ? 'Sinkronkan ulang akun Google ini'
+                          : 'Klik 1x untuk mengaktifkan izin Drive/Sheets pada sesi browser ini'
+                      }
                     >
-                      Sinkronkan Ulang
+                      {workspaceRuntime.hasToken ? 'Sinkronkan Ulang' : 'Otorisasi Sesi'}
                     </button>
                   </div>
                 ) : (
@@ -1242,8 +1314,10 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               </div>
               <p className="text-xs font-normal text-slate-500">
                 {workspaceRuntime.hasToken && workspaceRuntime.hasTargetConfigured
-                  ? 'Sinkronisasi latar belakang aktif: setiap tambah, edit, hapus, maupun presensi otomatis tersimpan ke Cloud Firestore, Google Drive & Sheets tanpa perlu klik tombol manual.'
-                  : 'Cukup tempel ID/Link lalu hubungkan akun Google 1x per sesi browser; setiap tambah, edit, hapus, & presensi otomatis tersinkron di latar belakang ke Drive & Sheets.'}
+                  ? 'Auto-Sync aktif: setiap tambah, edit, hapus, maupun presensi otomatis tersinkron ke Cloud Firestore, Google Drive & Sheets tanpa perlu klik manual.'
+                  : workspaceRuntime.hasTargetConfigured
+                  ? 'ID Spreadsheet & Folder Drive sudah tersimpan permanen (tidak perlu diketik lagi). Klik 1x tombol "Aktifkan Auto-Sync" untuk menyambung izin Google di sesi browser ini.'
+                  : 'Tempel ID/Link 1x saja (otomatis tersimpan permanen) lalu hubungkan akun Google; setiap tambah, edit, hapus, & presensi akan tersinkron di latar belakang ke Drive & Sheets.'}
               </p>
             </div>
           </div>
@@ -1251,11 +1325,36 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           {/* Status Akun Google */}
           <div className="flex items-center gap-2">
             {isGoogleConnected ? (
-              <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 px-3 py-1.5 rounded-xl flex-wrap">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-xs font-bold text-emerald-800">
-                  {googleUserEmail || 'Akun Google Terhubung'}
+              <div
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl flex-wrap border ${
+                  workspaceRuntime.hasToken
+                    ? 'bg-emerald-50 border-emerald-200'
+                    : 'bg-amber-50 border-amber-200'
+                }`}
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    workspaceRuntime.hasToken ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                  }`}
+                />
+                <span
+                  className={`text-xs font-bold ${
+                    workspaceRuntime.hasToken ? 'text-emerald-800' : 'text-amber-900'
+                  }`}
+                >
+                  {googleUserEmail || 'Akun Google Tersimpan'}
                 </span>
+                {!workspaceRuntime.hasToken && (
+                  <button
+                    type="button"
+                    onClick={() => handleGoogleConnect(googleUserEmail || ksEmail)}
+                    disabled={isSigningInGoogle}
+                    className="px-2 py-0.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold transition-colors cursor-pointer disabled:opacity-50"
+                    title="Otorisasi 1x di sesi browser baru agar auto-sync Drive/Sheet berjalan di latar belakang tanpa ketik ulang"
+                  >
+                    {isSigningInGoogle ? 'Menghubungkan...' : 'Aktifkan Auto-Sync Sesi'}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => handleGoogleConnect()}
@@ -1315,7 +1414,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               </label>
               {settings.googleSheetSpreadsheetId && (
                 <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                  Tersambung
+                  Tersimpan Permanen
                 </span>
               )}
             </div>
@@ -1323,11 +1422,16 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               type="text"
               value={sheetIdInput}
               onChange={(e) => setSheetIdInput(e.target.value)}
+              onBlur={() => {
+                const cleaned = cleanGoogleId(sheetIdInput);
+                if (cleaned && cleaned !== sheetIdInput) setSheetIdInput(cleaned);
+                persistWorkspaceTargetIds(cleaned, driveIdInput);
+              }}
               placeholder="Tempel ID atau Link Spreadsheet (cth: 1BxiMVs...)"
               className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
             />
             <span className="text-[11px] text-slate-500 mt-1.5 block">
-              💡 Boleh kosong jika ingin aplikasi <strong>membuat Spreadsheet baru secara otomatis</strong> di akun Google Anda.
+              💡 Otomatis tersimpan ke Cloud — tidak perlu mengetik ulang meski aplikasi ditutup &amp; dibuka lagi.
             </span>
           </div>
 
@@ -1339,7 +1443,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               </label>
               {settings.googleDriveFolderId && (
                 <span className="text-[10px] font-bold text-teal-700 bg-teal-100 px-2 py-0.5 rounded-full">
-                  Tersambung
+                  Tersimpan Permanen
                 </span>
               )}
             </div>
@@ -1347,11 +1451,16 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               type="text"
               value={driveIdInput}
               onChange={(e) => setDriveIdInput(e.target.value)}
+              onBlur={() => {
+                const cleaned = cleanGoogleId(driveIdInput);
+                if (cleaned && cleaned !== driveIdInput) setDriveIdInput(cleaned);
+                persistWorkspaceTargetIds(sheetIdInput, cleaned);
+              }}
               placeholder="Tempel ID atau Link Folder Drive (cth: 1z3A_XYZ...)"
               className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono bg-white focus:ring-2 focus:ring-teal-500 focus:outline-none"
             />
             <span className="text-[11px] text-slate-500 mt-1.5 block">
-              💡 Boleh kosong jika ingin aplikasi <strong>membuat Folder Drive baru secara otomatis</strong> di akun Google Anda.
+              💡 Otomatis tersimpan ke Cloud — boleh kosong jika ingin dibuatkan Folder baru otomatis.
             </span>
           </div>
         </div>

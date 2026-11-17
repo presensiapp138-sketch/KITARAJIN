@@ -501,29 +501,41 @@ export async function pullAllCloudDataOnStartup(): Promise<void> {
     // Kirim dulu antrean offline yang tersimpan di perangkat sebelum menarik snapshot terbaru
     await flushCloudOutbox().catch(() => {});
 
-    const collections = Object.values(SYNC_COLLECTIONS);
+    // Tarik settings lebih dulu agar flag inisialisasi & ID Workspace selalu tersedia
+    let remoteDbAlreadyInitialized = false;
+    try {
+      const settingsSnap = await getDocs(collection(db, SYNC_COLLECTIONS.SETTINGS));
+      const settingsDoc = settingsSnap.docs.find((d) => d.id === 'global')?.data();
+      if (settingsDoc) {
+        remoteDbAlreadyInitialized = true;
+        cloudConnectionActive = true;
+        lastSyncTime = new Date().toISOString();
+        const storageKey = LOCAL_STORAGE_KEYS.settings;
+        const localStr = localStorage.getItem(storageKey);
+        const localSettings = localStr ? JSON.parse(localStr) : null;
+        const mergedSettings = mergeSettingsDocuments(localSettings, settingsDoc);
+        localStorage.setItem(storageKey, JSON.stringify(mergedSettings));
+        localStorage.setItem('kitarajin_seed_completed_v1', 'true');
+        syncPendingWorkspaceFlagFromSettings(mergedSettings);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('kitarajin_settings_updated'));
+        }
+      }
+    } catch (err) {
+      console.warn('Startup pull note (settings):', err);
+    }
+
+    const otherCollections = Object.values(SYNC_COLLECTIONS).filter((c) => c !== SYNC_COLLECTIONS.SETTINGS);
     await Promise.allSettled(
-      collections.map(async (colName) => {
+      otherCollections.map(async (colName) => {
         try {
           const snapshot = await getDocs(collection(db, colName));
-          if (snapshot.empty) return;
-          cloudConnectionActive = true;
-          lastSyncTime = new Date().toISOString();
-
           const storageKey = LOCAL_STORAGE_KEYS[colName];
-          if (colName === 'settings') {
-            const settingsDoc = snapshot.docs.find((d) => d.id === 'global')?.data();
-            if (settingsDoc) {
-              const localStr = localStorage.getItem(storageKey);
-              const localSettings = localStr ? JSON.parse(localStr) : null;
-              const mergedSettings = mergeSettingsDocuments(localSettings, settingsDoc);
-              localStorage.setItem(storageKey, JSON.stringify(mergedSettings));
-              syncPendingWorkspaceFlagFromSettings(mergedSettings);
-              if (typeof window !== 'undefined') {
-                window.dispatchEvent(new CustomEvent('kitarajin_settings_updated'));
-              }
-            }
-          } else if (colName === 'users') {
+
+          if (colName === 'users') {
+            if (snapshot.empty) return;
+            cloudConnectionActive = true;
+            lastSyncTime = new Date().toISOString();
             const remoteUsers = snapshot.docs.map((docSnap) => ({
               id: docSnap.id,
               ...docSnap.data(),
@@ -542,12 +554,16 @@ export async function pullAllCloudDataOnStartup(): Promise<void> {
               syncRecordToCloud(SYNC_COLLECTIONS.USERS, String(u.id), u).catch(() => {});
             }
           } else {
+            if (!snapshot.empty) {
+              cloudConnectionActive = true;
+              lastSyncTime = new Date().toISOString();
+            }
             const remoteItems = snapshot.docs.map((docSnap) => ({
               id: docSnap.id,
               ...docSnap.data(),
             }));
             const mergedItems = mergeRemoteWithPendingOutbox(colName, remoteItems);
-            if (mergedItems.length > 0) {
+            if (mergedItems.length > 0 || remoteDbAlreadyInitialized) {
               localStorage.setItem(storageKey, JSON.stringify(mergedItems));
             }
           }
@@ -861,7 +877,7 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
             });
           }
         } else {
-          // Koleksi array data lainnya (pertahankan item antrean offline bila ada)
+          // Koleksi array data lainnya (pertahankan item antrean offline bila ada, serta hormati penghapusan permanen)
           const remoteItems = snapshot.docs.map((docSnap) => ({
             id: docSnap.id,
             ...docSnap.data(),
@@ -869,8 +885,9 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
 
           const storageKey = LOCAL_STORAGE_KEYS[colName];
           const mergedItems = mergeRemoteWithPendingOutbox(colName, remoteItems);
+          const alreadySeeded = localStorage.getItem('kitarajin_seed_completed_v1') === 'true';
 
-          if (mergedItems.length > 0) {
+          if (mergedItems.length > 0 || alreadySeeded || !wasInitial) {
             localStorage.setItem(storageKey, JSON.stringify(mergedItems));
           } else {
             const localDataStr = localStorage.getItem(storageKey);
