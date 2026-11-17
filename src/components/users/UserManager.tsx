@@ -61,7 +61,7 @@ import {
   syncAllAppDataToDriveAndSheet,
   hasPendingWorkspaceUserSync,
   getConnectedGoogleEmail,
-  hasRealAccessToken,
+  getWorkspaceSyncRuntimeStatus,
   formatAuthErrorMessage,
 } from '../../services/workspaceService';
 import { generateAttendancePdfReport } from '../../services/pdfReportService';
@@ -144,6 +144,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
   const [visiblePasswordIds, setVisiblePasswordIds] = useState<Record<string, boolean>>({});
   const [isSyncingWorkspaceUsers, setIsSyncingWorkspaceUsers] = useState(false);
   const [pendingWorkspaceSync, setPendingWorkspaceSync] = useState(() => hasPendingWorkspaceUserSync());
+  const [workspaceRuntime, setWorkspaceRuntime] = useState(() => getWorkspaceSyncRuntimeStatus());
   const [lastWorkspaceSyncAt, setLastWorkspaceSyncAt] = useState<string | undefined>(
     () => getAppSettings().lastWorkspaceUserSyncAt
   );
@@ -159,6 +160,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
     const schedList = getAllSchedules();
     setSchedules(schedList);
     setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
+    setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
     setLastWorkspaceSyncAt(getAppSettings().lastWorkspaceUserSyncAt);
 
     setSessionTimeInputs((prev) => {
@@ -676,7 +678,9 @@ export const UserManager: React.FC<UserManagerProps> = ({
           {/* Banner Sinkronisasi Username & Password ke Google Drive & Sheets */}
           <div
             className={`rounded-2xl border p-4 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${
-              pendingWorkspaceSync
+              workspaceRuntime.isSyncing || workspaceRuntime.isScheduled
+                ? 'bg-teal-50/90 border-teal-200'
+                : pendingWorkspaceSync && !workspaceRuntime.hasToken
                 ? 'bg-amber-50/90 border-amber-200'
                 : 'bg-emerald-50/70 border-emerald-200'
             }`}
@@ -684,7 +688,9 @@ export const UserManager: React.FC<UserManagerProps> = ({
             <div className="flex items-start gap-3">
               <div
                 className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                  pendingWorkspaceSync
+                  workspaceRuntime.isSyncing || workspaceRuntime.isScheduled
+                    ? 'bg-teal-100 text-teal-700'
+                    : pendingWorkspaceSync && !workspaceRuntime.hasToken
                     ? 'bg-amber-100 text-amber-700'
                     : 'bg-emerald-100 text-emerald-700'
                 }`}
@@ -694,28 +700,34 @@ export const UserManager: React.FC<UserManagerProps> = ({
               <div className="space-y-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs sm:text-sm font-extrabold text-slate-900">
-                    Sinkronisasi Database Username &amp; Password (Drive &amp; Sheets)
+                    Auto-Sync Database Username &amp; Password (Drive &amp; Sheets)
                   </span>
                   <span
                     className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
-                      pendingWorkspaceSync
+                      workspaceRuntime.isSyncing || workspaceRuntime.isScheduled
+                        ? 'bg-teal-100 text-teal-900 border-teal-300'
+                        : workspaceRuntime.hasToken
+                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                        : pendingWorkspaceSync
                         ? 'bg-amber-100 text-amber-900 border-amber-300'
-                        : lastWorkspaceSyncAt || hasRealAccessToken()
+                        : lastWorkspaceSyncAt
                         ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                         : 'bg-sky-100 text-sky-800 border-sky-200'
                     }`}
                   >
-                    {pendingWorkspaceSync
-                      ? 'Perlu Sinkron ke Drive/Sheets'
+                    {workspaceRuntime.isSyncing || workspaceRuntime.isScheduled
+                      ? 'Menyinkronkan Otomatis di Latar Belakang...'
+                      : workspaceRuntime.hasToken
+                      ? 'Auto-Sync Drive & Sheets Aktif'
+                      : pendingWorkspaceSync
+                      ? 'Siap Auto-Sync (Hubungkan Google 1x)'
                       : lastWorkspaceSyncAt
                       ? 'Sudah Tersinkron (Cloud, Drive & Sheets)'
-                      : hasRealAccessToken()
-                      ? 'Auto-Sync Drive/Sheets Aktif'
                       : 'Tersimpan di Cloud Firestore'}
                   </span>
                 </div>
                 <p className="text-[11px] sm:text-xs text-slate-600 leading-relaxed">
-                  Seluruh <strong>{users.length} akun</strong> (termasuk akun yang diubah nama/password) otomatis tersinkron di Cloud Firestore &amp; domain Vercel tanpa perlu sinkron ulang.
+                  Seluruh <strong>{users.length} akun</strong> otomatis tersinkron ke Cloud Firestore &amp; domain Vercel setiap tambah/edit, serta berjalan otomatis ke Drive &amp; Sheets di latar belakang tanpa klik tombol manual saat sesi Google aktif.
                   {getConnectedGoogleEmail() && (
                     <span className="ml-1 text-slate-700 font-semibold">
                       &bull; Akun Google: {getConnectedGoogleEmail()}
@@ -736,9 +748,16 @@ export const UserManager: React.FC<UserManagerProps> = ({
                 disabled={isSyncingWorkspaceUsers}
                 onClick={() => setConfirmModal({ type: 'workspace_sync' })}
                 className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs disabled:opacity-50 cursor-pointer"
+                title="Sinkronisasi sudah berjalan otomatis di latar belakang saat Google terhubung; tombol ini opsional untuk sinkron paksa"
               >
-                <CloudUpload className={`w-3.5 h-3.5 ${isSyncingWorkspaceUsers ? 'animate-bounce' : ''}`} />
-                <span>{isSyncingWorkspaceUsers ? 'Menyinkronkan...' : 'Sinkronkan ke Drive & Sheet'}</span>
+                <CloudUpload className={`w-3.5 h-3.5 ${isSyncingWorkspaceUsers || workspaceRuntime.isSyncing ? 'animate-bounce' : ''}`} />
+                <span>
+                  {isSyncingWorkspaceUsers
+                    ? 'Menyinkronkan...'
+                    : workspaceRuntime.hasToken
+                    ? 'Sinkron Paksa (Opsional)'
+                    : 'Aktifkan & Sinkron Drive/Sheet'}
+                </span>
               </button>
             </div>
           </div>

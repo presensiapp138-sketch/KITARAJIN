@@ -120,10 +120,10 @@ export const Shell: React.FC<ShellProps> = ({
     try {
       const res = await signInWithGoogle(workspaceStatus.connectedEmail || currentUser.email);
       if (res) {
-        if (workspaceStatus.autoEnabled) {
-          await autoSyncAllDataToWorkspace('shell_activate');
-        }
         setWorkspaceStatus(getWorkspaceSyncRuntimeStatus());
+        if (workspaceStatus.hasTargetConfigured) {
+          autoSyncAllDataToWorkspace('shell_activate').catch(() => {});
+        }
       }
     } catch (err: any) {
       setWorkspaceBannerError(formatAuthErrorMessage(err));
@@ -185,7 +185,7 @@ export const Shell: React.FC<ShellProps> = ({
       if (onUpdateCurrentUser) onUpdateCurrentUser(updated);
       setProfileMsg({ type: 'success', text: editPassword.trim() ? 'Profil dan Password login berhasil diperbarui!' : 'Profil berhasil diperbarui!' });
       setEditPassword('');
-      setTimeout(() => setProfileModalOpen(false), 900);
+      setTimeout(() => setProfileModalOpen(false), 350);
     } else {
       setProfileMsg({ type: 'error', text: res.message });
     }
@@ -271,11 +271,17 @@ export const Shell: React.FC<ShellProps> = ({
                 workspaceStatus.hasToken ? (
                   <div
                     className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-teal-50 border border-teal-200 text-teal-800 text-[11px] font-bold"
-                    title="Sinkronisasi otomatis ke Google Drive & Sheets aktif untuk setiap presensi dan perubahan data"
+                    title="Sinkronisasi otomatis ke Google Drive & Sheets aktif berjalan di latar belakang untuk setiap presensi dan perubahan data"
                   >
-                    <span className={`w-2 h-2 rounded-full bg-teal-500 ${workspaceStatus.isSyncing ? 'animate-ping' : 'animate-pulse'}`} />
-                    <span className="hidden sm:inline">{workspaceStatus.isSyncing ? 'Menyinkronkan Drive/Sheet...' : 'Drive & Sheet Auto'}</span>
-                    <span className="sm:hidden">{workspaceStatus.isSyncing ? 'Sync...' : 'Drive Auto'}</span>
+                    <span className={`w-2 h-2 rounded-full bg-teal-500 ${(workspaceStatus.isSyncing || workspaceStatus.isScheduled) ? 'animate-ping' : 'animate-pulse'}`} />
+                    <span className="hidden sm:inline">
+                      {(workspaceStatus.isSyncing || workspaceStatus.isScheduled)
+                        ? 'Menyinkronkan Otomatis...'
+                        : 'Drive & Sheet Auto'}
+                    </span>
+                    <span className="sm:hidden">
+                      {(workspaceStatus.isSyncing || workspaceStatus.isScheduled) ? 'Sync...' : 'Drive Auto'}
+                    </span>
                   </div>
                 ) : (
                   <button

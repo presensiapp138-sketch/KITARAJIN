@@ -6,7 +6,10 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import {
+  initializeFirestore,
   getFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   collection,
   doc,
   onSnapshot,
@@ -14,13 +17,44 @@ import {
   deleteDoc,
   getDocFromServer,
   getDocs,
+  Firestore,
   Unsubscribe,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
-// Inisialisasi Firebase App & Firestore Database
+// Inisialisasi Firebase App & Firestore Database (Force Long-Polling agar stabil di iframe/proxy & jaringan seluler)
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+
+function createFirestoreInstance(): Firestore {
+  try {
+    return initializeFirestore(
+      app,
+      {
+        experimentalForceLongPolling: true,
+        ignoreUndefinedProperties: true,
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager(),
+        }),
+      },
+      firebaseConfig.firestoreDatabaseId
+    );
+  } catch {
+    try {
+      return initializeFirestore(
+        app,
+        {
+          experimentalForceLongPolling: true,
+          ignoreUndefinedProperties: true,
+        },
+        firebaseConfig.firestoreDatabaseId
+      );
+    } catch {
+      return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+    }
+  }
+}
+
+export const db: Firestore = createFirestoreInstance();
 const auth = getAuth(app);
 
 enum OperationType {
@@ -354,12 +388,14 @@ export async function testFirestoreConnection(): Promise<boolean> {
     cloudConnectionActive = true;
     return true;
   } catch (error: any) {
-    if (error?.message && error.message.includes('the client is offline')) {
-      console.warn('Firestore offline, fallback ke cache lokal.');
+    const code = String(error?.code || '').toLowerCase();
+    const msg = String(error?.message || '').toLowerCase();
+    if (code.includes('unavailable') || msg.includes('the client is offline') || msg.includes('unavailable')) {
+      console.warn('Firestore sementara offline / tidak terjangkau, fallback ke cache lokal.');
       cloudConnectionActive = false;
       return false;
     }
-    // Jika dokumen test belum ada, koneksi server tetap aktif jika tidak melempar 'client is offline'
+    // Jika dokumen test belum ada, koneksi server tetap aktif jika tidak melempar 'offline/unavailable'
     cloudConnectionActive = true;
     return true;
   }
@@ -400,12 +436,71 @@ export async function pullUsersFromCloudAndMerge(): Promise<any[]> {
   }
 }
 
+function mergeRemoteWithPendingOutbox(colName: string, remoteItems: any[]): any[] {
+  const pending = loadOutbox().filter((e) => e.col === colName);
+  if (pending.length === 0) return remoteItems;
+
+  const byId = new Map<string, any>();
+  for (const item of remoteItems) {
+    if (item && item.id) {
+      byId.set(String(item.id), item);
+    }
+  }
+  for (const entry of pending) {
+    if (entry.op === 'delete') {
+      byId.delete(entry.id);
+    } else if (entry.op === 'set' && entry.data) {
+      const prev = byId.get(entry.id) || {};
+      byId.set(entry.id, { ...prev, ...entry.data, id: entry.id });
+    }
+  }
+  return Array.from(byId.values());
+}
+
+function mergeSettingsDocuments(localSettings: any, remoteSettings: any): any {
+  if (!remoteSettings) return localSettings;
+  if (!localSettings) return remoteSettings;
+  const remoteTs = Date.parse(remoteSettings.lastSyncTimestamp || '') || 0;
+  const localTs = Date.parse(localSettings?.lastSyncTimestamp || '') || 0;
+  const useLocal = Boolean(localSettings && localTs > SEED_BASELINE_MS && localTs > remoteTs);
+  const merged = useLocal
+    ? { ...remoteSettings, ...localSettings }
+    : { ...localSettings, ...remoteSettings };
+
+  // Pastikan timestamp mutasi terbaru tidak pernah mundur oleh snapshot lama
+  const maxUserMut = Math.max(
+    Date.parse(localSettings?.lastUserMutationAt || '') || 0,
+    Date.parse(remoteSettings?.lastUserMutationAt || '') || 0
+  );
+  const maxDataMut = Math.max(
+    Date.parse(localSettings?.lastDataMutationAt || '') || 0,
+    Date.parse(remoteSettings?.lastDataMutationAt || '') || 0
+  );
+  if (maxUserMut > 0) merged.lastUserMutationAt = new Date(maxUserMut).toISOString();
+  if (maxDataMut > 0) merged.lastDataMutationAt = new Date(maxDataMut).toISOString();
+
+  // Pertahankan konfigurasi Google Workspace jika salah satu sudah menautkan
+  merged.googleSheetSpreadsheetId =
+    merged.googleSheetSpreadsheetId || remoteSettings.googleSheetSpreadsheetId || localSettings.googleSheetSpreadsheetId;
+  merged.googleDriveFolderId =
+    merged.googleDriveFolderId || remoteSettings.googleDriveFolderId || localSettings.googleDriveFolderId;
+  merged.googleDriveUsersFileId =
+    merged.googleDriveUsersFileId || remoteSettings.googleDriveUsersFileId || localSettings.googleDriveUsersFileId;
+  merged.googleAccountEmail =
+    merged.googleAccountEmail || remoteSettings.googleAccountEmail || localSettings.googleAccountEmail;
+
+  return merged;
+}
+
 /**
  * Tarik seluruh data Cloud Firestore saat aplikasi pertama kali dibuka (khususnya domain baru seperti Vercel)
  * SEBELUM initializeDatabase() berjalan agar akun/pengaturan yang sudah diubah tidak pernah tertimpa data demo awal.
  */
 export async function pullAllCloudDataOnStartup(): Promise<void> {
   const fetchAll = async () => {
+    // Kirim dulu antrean offline yang tersimpan di perangkat sebelum menarik snapshot terbaru
+    await flushCloudOutbox().catch(() => {});
+
     const collections = Object.values(SYNC_COLLECTIONS);
     await Promise.allSettled(
       collections.map(async (colName) => {
@@ -421,14 +516,12 @@ export async function pullAllCloudDataOnStartup(): Promise<void> {
             if (settingsDoc) {
               const localStr = localStorage.getItem(storageKey);
               const localSettings = localStr ? JSON.parse(localStr) : null;
-              const remoteTs = Date.parse(settingsDoc.lastSyncTimestamp || '') || 0;
-              const localTs = Date.parse(localSettings?.lastSyncTimestamp || '') || 0;
-              const useLocal = Boolean(localSettings && localTs > SEED_BASELINE_MS && localTs > remoteTs);
-              const mergedSettings = useLocal
-                ? { ...settingsDoc, ...localSettings }
-                : { ...(localSettings || {}), ...settingsDoc };
+              const mergedSettings = mergeSettingsDocuments(localSettings, settingsDoc);
               localStorage.setItem(storageKey, JSON.stringify(mergedSettings));
               syncPendingWorkspaceFlagFromSettings(mergedSettings);
+              if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('kitarajin_settings_updated'));
+              }
             }
           } else if (colName === 'users') {
             const remoteUsers = snapshot.docs.map((docSnap) => ({
@@ -453,8 +546,9 @@ export async function pullAllCloudDataOnStartup(): Promise<void> {
               id: docSnap.id,
               ...docSnap.data(),
             }));
-            if (remoteItems.length > 0) {
-              localStorage.setItem(storageKey, JSON.stringify(remoteItems));
+            const mergedItems = mergeRemoteWithPendingOutbox(colName, remoteItems);
+            if (mergedItems.length > 0) {
+              localStorage.setItem(storageKey, JSON.stringify(mergedItems));
             }
           }
         } catch (colErr) {
@@ -467,7 +561,7 @@ export async function pullAllCloudDataOnStartup(): Promise<void> {
   try {
     await Promise.race([
       fetchAll(),
-      new Promise<void>((resolve) => setTimeout(resolve, 5500)),
+      new Promise<void>((resolve) => setTimeout(resolve, 6000)),
     ]);
   } catch (err) {
     console.warn('pullAllCloudDataOnStartup warning:', err);
@@ -705,8 +799,10 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
   }
   isSyncInitialized = true;
 
-  testFirestoreConnection();
-  autoSyncCloudInBackground().catch(() => {});
+  testFirestoreConnection().catch(() => {});
+  const initialSyncTimer = setTimeout(() => {
+    autoSyncCloudInBackground().catch(() => {});
+  }, 1500);
 
   const collectionsToWatch = Object.values(SYNC_COLLECTIONS);
 
@@ -727,14 +823,12 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
           const localSettings = localSettingsStr ? JSON.parse(localSettingsStr) : null;
 
           if (settingsDoc) {
-            const remoteTs = Date.parse(settingsDoc.lastSyncTimestamp || '') || 0;
-            const localTs = Date.parse(localSettings?.lastSyncTimestamp || '') || 0;
-            const useLocal = Boolean(localSettings && localTs > SEED_BASELINE_MS && localTs > remoteTs);
-            const mergedSettings = useLocal
-              ? { ...settingsDoc, ...localSettings }
-              : { ...(localSettings || {}), ...settingsDoc };
+            const mergedSettings = mergeSettingsDocuments(localSettings, settingsDoc);
             localStorage.setItem(LOCAL_STORAGE_KEYS.settings, JSON.stringify(mergedSettings));
             syncPendingWorkspaceFlagFromSettings(mergedSettings);
+            if (typeof window !== 'undefined') {
+              window.dispatchEvent(new CustomEvent('kitarajin_settings_updated'));
+            }
           } else if (localSettings) {
             setDoc(doc(db, 'settings', 'global'), localSettings).catch(() => {});
           }
@@ -767,16 +861,17 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
             });
           }
         } else {
-          // Koleksi array data lainnya
-          const items = snapshot.docs.map((docSnap) => ({
+          // Koleksi array data lainnya (pertahankan item antrean offline bila ada)
+          const remoteItems = snapshot.docs.map((docSnap) => ({
             id: docSnap.id,
             ...docSnap.data(),
           }));
 
           const storageKey = LOCAL_STORAGE_KEYS[colName];
+          const mergedItems = mergeRemoteWithPendingOutbox(colName, remoteItems);
 
-          if (items.length > 0) {
-            localStorage.setItem(storageKey, JSON.stringify(items));
+          if (mergedItems.length > 0) {
+            localStorage.setItem(storageKey, JSON.stringify(mergedItems));
           } else {
             const localDataStr = localStorage.getItem(storageKey);
             if (localDataStr) {
@@ -805,6 +900,10 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
         ) {
           import('./workspaceService')
             .then((m) => m.scheduleWorkspaceAutoSync(colName))
+            .catch(() => {});
+        } else if (colName === SYNC_COLLECTIONS.SETTINGS) {
+          import('./workspaceService')
+            .then((m) => m.flushWorkspaceSyncIfReady())
             .catch(() => {});
         }
 
@@ -850,6 +949,7 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
   }, 15000);
 
   return () => {
+    clearTimeout(initialSyncTimer);
     activeUnsubscribes.forEach((unsub) => unsub());
     activeUnsubscribes = [];
     clearInterval(outboxTimer);

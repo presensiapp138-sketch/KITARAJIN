@@ -647,11 +647,17 @@ function notifyRealtimeChange(collectionName: string, triggerWorkspaceSync = fal
     try {
       const curSettings = getAppSettings();
       const nowIso = new Date().toISOString();
+      const timestampPatch: Partial<AppSettings> = {
+        lastDataMutationAt: nowIso,
+        lastSyncTimestamp: nowIso,
+        ...(collectionName === SYNC_COLLECTIONS.USERS ? { lastUserMutationAt: nowIso } : {}),
+      };
       const updatedSettings: AppSettings = {
         ...curSettings,
-        lastDataMutationAt: nowIso,
+        ...timestampPatch,
       };
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(updatedSettings));
+      syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', timestampPatch).catch(() => {});
     } catch {
       // ignore
     }
@@ -870,18 +876,7 @@ export async function createUser(
 
   users.push(newUser);
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
-  await syncRecordToCloud(SYNC_COLLECTIONS.USERS, newUser.id, newUser);
-  {
-    const curSettings = getAppSettings();
-    const mutatedSettings = {
-      ...curSettings,
-      lastUserMutationAt: new Date().toISOString(),
-      lastSyncTimestamp: new Date().toISOString(),
-    };
-    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(mutatedSettings));
-    syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', mutatedSettings).catch(() => {});
-  }
-  import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
+  syncRecordToCloud(SYNC_COLLECTIONS.USERS, newUser.id, newUser).catch(() => {});
 
   logAuditAction(
     actor,
@@ -891,15 +886,12 @@ export async function createUser(
     `Membuat akun baru ${newUser.name} (${newUser.role}) dengan NIP ${newUser.nip}.`
   );
 
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: 'users' } }));
-  }
   notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
 
   return {
     success: true,
     user: newUser,
-    message: `Akun ${newUser.name} berhasil dibuat dan disinkronkan ke database cloud.`,
+    message: `Akun ${newUser.name} berhasil disimpan dan disinkronkan di latar belakang.`,
   };
 }
 
@@ -977,21 +969,19 @@ export async function updateUser(
   targetUser.updatedAt = mutationIso;
   users[index] = targetUser;
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
-  await syncRecordToCloud(SYNC_COLLECTIONS.USERS, targetUser.id, targetUser);
+  syncRecordToCloud(SYNC_COLLECTIONS.USERS, targetUser.id, targetUser).catch(() => {});
+
   {
     const curSettings = getAppSettings();
-    const shouldSyncSchoolEmail =
+    if (
       targetUser.role === 'kepala_sekolah' &&
       targetUser.email &&
-      (!curSettings.schoolEmail || curSettings.schoolEmail === 'kepsek@sekolah.sch.id');
-    const mutatedSettings = {
-      ...curSettings,
-      ...(shouldSyncSchoolEmail ? { schoolEmail: targetUser.email } : {}),
-      lastUserMutationAt: mutationIso,
-      lastSyncTimestamp: mutationIso,
-    };
-    localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(mutatedSettings));
-    syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', mutatedSettings).catch(() => {});
+      (!curSettings.schoolEmail || curSettings.schoolEmail === 'kepsek@sekolah.sch.id')
+    ) {
+      const updatedSettings = { ...curSettings, schoolEmail: targetUser.email };
+      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(updatedSettings));
+      syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', { schoolEmail: targetUser.email }).catch(() => {});
+    }
   }
 
   // Propagasi penuh perubahan nama & NIP akun ke seluruh tabel terkait & sesi aktif
@@ -1002,8 +992,6 @@ export async function updateUser(
   reconcileUserReferences(users, true, oldNameHints);
   refreshCurrentSessionFromUsers();
 
-  import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
-
   logAuditAction(
     actor,
     'UPDATE_USER',
@@ -1012,12 +1000,9 @@ export async function updateUser(
     `Memperbarui profil akun ${targetUser.name} (${targetUser.role}).`
   );
 
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: 'users' } }));
-  }
   notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
 
-  return { success: true, message: `Data akun ${targetUser.name} berhasil diperbarui dan disinkronkan ke database.` };
+  return { success: true, message: `Data akun ${targetUser.name} berhasil disimpan dan disinkronkan di latar belakang.` };
 }
 
 /**
@@ -1046,8 +1031,7 @@ export function toggleUserStatus(actor: User, userId: string): { success: boolea
   users[index] = targetUser;
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   refreshCurrentSessionFromUsers();
-  syncRecordToCloud(SYNC_COLLECTIONS.USERS, targetUser.id, targetUser);
-  import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
+  syncRecordToCloud(SYNC_COLLECTIONS.USERS, targetUser.id, targetUser).catch(() => {});
   notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
 
   const statusText = targetUser.isActive ? 'diaktifkan' : 'dinonaktifkan';
@@ -1245,8 +1229,7 @@ export function updateUserSessions(
   users[idx].updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   refreshCurrentSessionFromUsers();
-  syncRecordToCloud(SYNC_COLLECTIONS.USERS, userId, users[idx]);
-  import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
+  syncRecordToCloud(SYNC_COLLECTIONS.USERS, userId, users[idx]).catch(() => {});
   notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
 
   logAuditAction(
@@ -1291,8 +1274,7 @@ export function toggleUserSession(
   users[idx].updatedAt = new Date().toISOString();
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   refreshCurrentSessionFromUsers();
-  syncRecordToCloud(SYNC_COLLECTIONS.USERS, userId, users[idx]);
-  import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
+  syncRecordToCloud(SYNC_COLLECTIONS.USERS, userId, users[idx]).catch(() => {});
   notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
 
   logAuditAction(
@@ -1353,7 +1335,6 @@ export function assignUsersToSession(
   localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
   refreshCurrentSessionFromUsers();
   if (updatedCount > 0) {
-    import('./workspaceService').then((m) => m.autoSyncUsersToWorkspace()).catch(() => {});
     notifyRealtimeChange(SYNC_COLLECTIONS.USERS, true);
   }
   logAuditAction(

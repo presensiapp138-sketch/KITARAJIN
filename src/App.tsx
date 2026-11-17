@@ -31,8 +31,11 @@ import { AlertCircle } from 'lucide-react';
 import {
   startMultiDeviceRealtimeSync,
   pullAllCloudDataOnStartup,
-  autoSyncCloudInBackground,
 } from './services/firestoreSync';
+import {
+  initWorkspaceAutoSyncOnStartup,
+  flushWorkspaceSyncIfReady,
+} from './services/workspaceService';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -42,12 +45,14 @@ export default function App() {
 
   useEffect(() => {
     let isMounted = true;
+    let stopWorkspaceAutoSync: (() => void) | null = null;
+
     async function init() {
       // Tarik seluruh data Cloud Firestore lebih dulu (agar Vercel / domain baru langsung mewarisi akun & database tersinkron)
       await pullAllCloudDataOnStartup();
       await initializeDatabase();
-      // Pastikan seluruh data lokal & antrean tertunda otomatis tersinkron ke cloud tanpa perlu di-klik
-      autoSyncCloudInBackground().catch(() => {});
+      // Inisialisasi auto-sync Google Drive & Sheets secara global di sesi token aktif
+      stopWorkspaceAutoSync = initWorkspaceAutoSyncOnStartup();
       if (!isMounted) return;
       const session = refreshCurrentSessionFromUsers() || getCurrentSession();
       if (session) {
@@ -96,6 +101,7 @@ export default function App() {
     return () => {
       isMounted = false;
       stopSync();
+      if (stopWorkspaceAutoSync) stopWorkspaceAutoSync();
       window.removeEventListener('kitarajin_cloud_sync', handleCloudEvent);
       window.removeEventListener('storage', handleStorageEvent);
     };
@@ -104,6 +110,9 @@ export default function App() {
   const handleLoginSuccess = (user: User) => {
     setCurrentUser(user);
     setActiveMenuId('dashboard');
+    if (user.role === 'kepala_sekolah' || user.role === 'admin') {
+      flushWorkspaceSyncIfReady(true).catch(() => {});
+    }
   };
 
   const handleLogout = () => {

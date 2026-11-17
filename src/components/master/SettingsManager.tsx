@@ -254,6 +254,17 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       const latestData = getAppSettings();
       setSettings(latestData);
       setSchoolEmail(latestData.schoolEmail || getCurrentSession()?.email || '');
+      if (latestData.googleSheetSpreadsheetId) {
+        setSheetIdInput((prev) => prev || latestData.googleSheetSpreadsheetId || '');
+      }
+      if (latestData.googleDriveFolderId) {
+        setDriveIdInput((prev) => prev || latestData.googleDriveFolderId || '');
+      }
+      const syncedGoogleEmail = getConnectedGoogleEmail() || latestData.googleAccountEmail;
+      if (syncedGoogleEmail) {
+        setIsGoogleConnected(true);
+        setGoogleUserEmail(syncedGoogleEmail);
+      }
       setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
       setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
       setSchedules(getAllSchedules());
@@ -338,23 +349,18 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
 
         if ((existingSheetId || existingDriveId) && currentSettings.autoWorkspaceSyncEnabled) {
-          setIsSyncingData(true);
-          try {
-            await autoSyncAllDataToWorkspace('reconnect');
-            setSettings(getAppSettings());
-            setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
-            setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
-            setFeedback({
-              type: 'success',
-              message: `Akun Google (${email}) terhubung! Seluruh data terbaru otomatis tersinkron ke Google Drive & Sheets, dan setiap perubahan selanjutnya akan berjalan otomatis tanpa perlu klik.`,
-            });
-          } finally {
-            setIsSyncingData(false);
-          }
+          autoSyncAllDataToWorkspace('reconnect').catch(() => {});
+          setSettings(getAppSettings());
+          setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
+          setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
+          setFeedback({
+            type: 'success',
+            message: `Akun Google (${email}) terhubung! Sinkronisasi ke Google Drive & Sheets berjalan otomatis di latar belakang, dan setiap presensi serta perubahan selanjutnya akan tersinkron tanpa perlu klik tombol manual.`,
+          });
         } else {
           setFeedback({
             type: 'success',
-            message: `Akun Google (${email}) berhasil terhubung melalui popup Google! Silakan konfirmasi dialog untuk langsung menyinkronkan seluruh data aplikasi ke Google Drive & Sheets.`,
+            message: `Akun Google (${email}) berhasil terhubung melalui popup Google! Silakan konfirmasi dialog untuk menautkan & mengaktifkan auto-sync 10 tab Google Drive & Sheets.`,
           });
 
           setWorkspaceConfirmModal({
@@ -662,8 +668,8 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       setFeedback({
         type: 'success',
         message: hasRealAccessToken()
-          ? `Profil Kepala Sekolah (${cleanEmail}) diperbarui dan otomatis disinkronkan ke Cloud Firestore, Google Drive & Sheets!`
-          : `Profil Kepala Sekolah (${cleanEmail}) diperbarui dan tersimpan di Cloud Firestore! Klik "Sinkronkan ke Drive & Sheet" atau "Hubungkan Akun Google" jika ingin menulis langsung ke Google Drive/Sheets sekarang.`,
+          ? `Profil Kepala Sekolah (${cleanEmail}) disimpan cepat dan otomatis tersinkron di latar belakang ke Cloud Firestore, Google Drive & Sheets!`
+          : `Profil Kepala Sekolah (${cleanEmail}) disimpan cepat ke Cloud Firestore! Hubungkan Google 1x di panel atas/bawah jika ingin langsung mengirim ke Google Drive & Sheets.`,
       });
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -728,8 +734,8 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         setFeedback({
           type: 'success',
           message: hasRealAccessToken()
-            ? 'Password login Kepala Sekolah BERHASIL DIPERBARUI dan langsung disinkronkan ke Cloud Firestore, Google Drive & Sheets!'
-            : 'Password login Kepala Sekolah BERHASIL DIPERBARUI di Cloud Firestore! Klik "Sinkronkan ke Drive & Sheet" pada menu Database untuk menyalinnya ke Google Drive/Sheets.',
+            ? 'Password login Kepala Sekolah BERHASIL DIPERBARUI dan otomatis disinkronkan di latar belakang ke Cloud Firestore, Google Drive & Sheets!'
+            : 'Password login Kepala Sekolah BERHASIL DIPERBARUI di Cloud Firestore! Hubungkan Akun Google 1x agar perubahan tersalin otomatis ke Google Drive/Sheets.',
         });
         setKsPassword('');
         setKsConfirmPassword('');
@@ -1224,8 +1230,8 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                         workspaceRuntime.hasToken ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
                       }`}
                     />
-                    {workspaceRuntime.isSyncing
-                      ? 'MENYINKRONKAN DRIVE & SHEET...'
+                    {(workspaceRuntime.isSyncing || workspaceRuntime.isScheduled)
+                      ? 'MENYINKRONKAN OTOMATIS DI LATAR BELAKANG...'
                       : workspaceRuntime.hasToken
                       ? 'AUTO-SYNC DRIVE & SHEET AKTIF'
                       : workspaceRuntime.hasPending
@@ -1236,8 +1242,8 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               </div>
               <p className="text-xs font-normal text-slate-500">
                 {workspaceRuntime.hasToken && workspaceRuntime.hasTargetConfigured
-                  ? 'Sinkronisasi otomatis aktif: setiap presensi, akun, atau perubahan langsung dikirim ke Google Drive & Sheets tanpa perlu klik.'
-                  : 'Cukup tempel ID/Link lalu hubungkan akun Google 1x per sesi browser; setiap presensi & perubahan langsung tersinkron otomatis ke Drive & Sheets.'}
+                  ? 'Sinkronisasi latar belakang aktif: setiap tambah, edit, hapus, maupun presensi otomatis tersimpan ke Cloud Firestore, Google Drive & Sheets tanpa perlu klik tombol manual.'
+                  : 'Cukup tempel ID/Link lalu hubungkan akun Google 1x per sesi browser; setiap tambah, edit, hapus, & presensi otomatis tersinkron di latar belakang ke Drive & Sheets.'}
               </p>
             </div>
           </div>
