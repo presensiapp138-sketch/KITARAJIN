@@ -145,6 +145,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
   const streamRef = useRef<MediaStream | null>(null);
   const cameraRequestIdRef = useRef<number>(0);
   const lastAutoSubmitAttemptRef = useRef<number>(0);
+  const isSubmittingRef = useRef<boolean>(false);
 
   // Live Clock Ticker untuk validasi aturan jam presensi real-time
   const [currentNow, setCurrentNow] = useState<Date>(new Date());
@@ -207,34 +208,23 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
 
   // Filter sesi yang berlaku khusus untuk pengguna ini sesuai pengaturan Admin/Kepala Sekolah
   const userAllowedSchedules = useMemo(() => {
-    const validSchedules = allSchedules.filter((s) => {
-      const combined = `${s.name || ''} ${s.sessionName || ''}`.toLowerCase();
-      return (
-        !combined.includes('kebersihan') &&
-        !combined.includes('sarpras') &&
-        !combined.includes('satpam') &&
-        !combined.includes('reguler guru') &&
-        !combined.includes('keamanan')
-      );
-    });
-
+    const activeSchedules = allSchedules.filter((s) => s.isActive !== false);
     const assignedIds = liveUser.assignedSessionIds || [];
     if (assignedIds.length > 0) {
-      return validSchedules.filter((s) => assignedIds.includes(s.id));
+      return activeSchedules.filter((s) => assignedIds.includes(s.id));
     }
-    return validSchedules;
+    return activeSchedules;
   }, [allSchedules, liveUser.assignedSessionIds]);
-
 
   // Evaluasi kepatuhan jam presensi terhadap jadwal kerja / sesi aktif
   const getScheduleStatus = () => {
     if (!userSchedule) {
       return {
-        allowed: true,
-        statusType: 'open',
-        badge: 'Jadwal Reguler',
-        color: 'emerald',
-        reason: 'Jadwal presensi terbuka.',
+        allowed: false,
+        statusType: 'no_session',
+        badge: 'Sesi Belum Dipilih / Tidak Tersedia',
+        color: 'rose',
+        reason: 'Akun Anda belum memiliki sesi aktif atau belum memilih sesi presensi yang ditugaskan.',
       };
     }
 
@@ -566,6 +556,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
 
   // Submit Presensi
   const handleSubmitAttendance = async () => {
+    if (isSubmittingRef.current) return;
     if (!videoRef.current || !isCameraActive) {
       setResultMessage({
         type: 'error',
@@ -632,116 +623,116 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
       return;
     }
 
+    isSubmittingRef.current = true;
     setIsProcessing(true);
     setResultMessage(null);
 
-    // 2. Capture Frame Kamera dengan orientasi mirror konsisten dengan perekaman wajah
-    const canvas = captureVideoFrameToCanvas(videoRef.current, cameraFacing === 'user');
-    if (!canvas) {
-      setIsProcessing(false);
-      setResultMessage({
-        type: 'error',
-        title: 'Frame Kamera Belum Siap',
-        description: 'Kamera sedang menyiapkan gambar. Tunggu sebentar atau klik Buka Kamera Ulang.',
-      });
-      return;
-    }
-
-    const liveFaceAnalysis = analyzeFaceFromCanvas(canvas);
-    setCapturedSnapshot(liveFaceAnalysis.photoDataUrl);
-
-    if (!liveFaceAnalysis.hasFace) {
-      setIsProcessing(false);
-      setResultMessage({
-        type: 'error',
-        title: 'Wajah Tidak Terdeteksi Jelas',
-        description:
-          liveFaceAnalysis.feedbackMessage ||
-          'Pastikan wajah terlihat jelas di dalam bingkai oval dan pencahayaan cukup.',
-      });
-      return;
-    }
-
-    // 3. Ambil Database Wajah Terdaftar Pegawai
-    const registeredFace = getFaceRegistryByUserId(currentUser.id);
-    if (!registeredFace || !registeredFace.isActive) {
-      setIsProcessing(false);
-      setResultMessage({
-        type: 'error',
-        title: 'Wajah Belum Terdaftar / Nonaktif',
-        description:
-          'Data wajah aktif Anda belum terdaftar di sistem. Hubungi Kepala Sekolah atau Admin untuk perekaman wajah.',
-      });
-      return;
-    }
-
-    // 4. Hitung Kemiripan Biometrik Wajah
-    const similarityScore = calculateFaceSimilarity(
-      liveFaceAnalysis.embedding,
-      registeredFace.faceEmbedding
-    );
-
-    const minMatch = settings.minFaceMatchThreshold || 0.75;
-    if (similarityScore < minMatch) {
-      setIsProcessing(false);
-      setResultMessage({
-        type: 'error',
-        title: 'Verifikasi Wajah Gagal',
-        description: `Tingkat kecocokan wajah hanya ${Math.round(
-          similarityScore * 100
-        )}% (Dibutuhkan minimal ${Math.round(minMatch * 100)}%). Wajah tidak sesuai dengan pemilik akun.`,
-      });
-      return;
-    }
-
-    // 5. Tentukan Status Tepat Waktu atau Terlambat
-    const currentHoursMinutes = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-
-    let status: 'tepat_waktu' | 'terlambat' = 'tepat_waktu';
-    if (attendanceType === 'masuk' && userSchedule) {
-      if (currentHoursMinutes > userSchedule.checkInDeadline) {
-        status = 'terlambat';
+    try {
+      // 2. Capture Frame Kamera dengan orientasi mirror konsisten dengan perekaman wajah
+      const canvas = captureVideoFrameToCanvas(videoRef.current, cameraFacing === 'user');
+      if (!canvas) {
+        setResultMessage({
+          type: 'error',
+          title: 'Frame Kamera Belum Siap',
+          description: 'Kamera sedang menyiapkan gambar. Tunggu sebentar atau klik Buka Kamera Ulang.',
+        });
+        return;
       }
-    }
 
-    // 6. Simpan Transaksi Presensi (Terhubung Sesi & Realtime Cloud Sync)
-    const res = recordAttendance({
-      userId: currentUser.id,
-      nip: currentUser.nip,
-      userName: currentUser.name,
-      role: currentUser.role,
-      date: todayStr,
-      type: attendanceType,
-      status,
-      latitude: deviceCoords ? deviceCoords.lat : 0,
-      longitude: deviceCoords ? deviceCoords.lng : 0,
-      distanceFromLocationMeters: gpsDistance || 0,
-      isLocationValid: isInsideRadius,
-      isFaceValid: true,
-      faceSimilarityScore: similarityScore,
-      photoRef: liveFaceAnalysis.photoDataUrl,
-      deviceInfo: `${navigator.userAgent.substring(0, 50)} • ${cameraFacing}`,
-      sessionId: userSchedule.id,
-      sessionName: userSchedule.sessionName || userSchedule.name,
-      notes: `Sesi: ${userSchedule.sessionName || userSchedule.name}`,
-    });
+      const liveFaceAnalysis = analyzeFaceFromCanvas(canvas);
+      setCapturedSnapshot(liveFaceAnalysis.photoDataUrl);
 
-    setIsProcessing(false);
+      if (!liveFaceAnalysis.hasFace) {
+        setResultMessage({
+          type: 'error',
+          title: 'Wajah Tidak Terdeteksi Jelas',
+          description:
+            liveFaceAnalysis.feedbackMessage ||
+            'Pastikan wajah terlihat jelas di dalam bingkai oval dan pencahayaan cukup.',
+        });
+        return;
+      }
 
-    if (res.success) {
-      setAutoSubmitOnMatch(false);
-      setResultMessage({
-        type: 'success',
-        title: `Presensi ${attendanceType.toUpperCase()} Berhasil!`,
-        description: `Status: ${status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}. Sesi: ${userSchedule.sessionName || userSchedule.name}. Jam: ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })} WIB. Verifikasi Wajah (${Math.round(similarityScore * 100)}%) dan Validasi GPS (${gpsDistance ?? 0}m) Sah.`,
+      // 3. Ambil Database Wajah Terdaftar Pegawai
+      const registeredFace = getFaceRegistryByUserId(currentUser.id);
+      if (!registeredFace || !registeredFace.isActive) {
+        setResultMessage({
+          type: 'error',
+          title: 'Wajah Belum Terdaftar / Nonaktif',
+          description:
+            'Data wajah aktif Anda belum terdaftar di sistem. Hubungi Kepala Sekolah atau Admin untuk perekaman wajah.',
+        });
+        return;
+      }
+
+      // 4. Hitung Kemiripan Biometrik Wajah
+      const similarityScore = calculateFaceSimilarity(
+        liveFaceAnalysis.embedding,
+        registeredFace.faceEmbedding
+      );
+
+      const minMatch = settings.minFaceMatchThreshold || 0.75;
+      if (similarityScore < minMatch) {
+        setResultMessage({
+          type: 'error',
+          title: 'Verifikasi Wajah Gagal',
+          description: `Tingkat kecocokan wajah hanya ${Math.round(
+            similarityScore * 100
+          )}% (Dibutuhkan minimal ${Math.round(minMatch * 100)}%). Wajah tidak sesuai dengan pemilik akun.`,
+        });
+        return;
+      }
+
+      // 5. Tentukan Status Tepat Waktu atau Terlambat
+      const currentHoursMinutes = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+      let status: 'tepat_waktu' | 'terlambat' = 'tepat_waktu';
+      if (attendanceType === 'masuk' && userSchedule) {
+        if (currentHoursMinutes > userSchedule.checkInDeadline) {
+          status = 'terlambat';
+        }
+      }
+
+      // 6. Simpan Transaksi Presensi (Terhubung Sesi & Realtime Cloud Sync)
+      const res = recordAttendance({
+        userId: currentUser.id,
+        nip: currentUser.nip,
+        userName: currentUser.name,
+        role: currentUser.role,
+        date: todayStr,
+        type: attendanceType,
+        status,
+        latitude: deviceCoords ? deviceCoords.lat : 0,
+        longitude: deviceCoords ? deviceCoords.lng : 0,
+        distanceFromLocationMeters: gpsDistance || 0,
+        isLocationValid: isInsideRadius,
+        isFaceValid: true,
+        faceSimilarityScore: similarityScore,
+        photoRef: liveFaceAnalysis.photoDataUrl,
+        deviceInfo: `${navigator.userAgent.substring(0, 50)} • ${cameraFacing}`,
+        sessionId: userSchedule.id,
+        sessionName: userSchedule.sessionName || userSchedule.name,
+        notes: `Sesi: ${userSchedule.sessionName || userSchedule.name}`,
       });
-      loadData();
-    } else {
-      setResultMessage({
-        type: 'error',
-        title: 'Presensi Gagal',
-        description: res.message,
-      });
+
+      if (res.success) {
+        setAutoSubmitOnMatch(false);
+        setResultMessage({
+          type: 'success',
+          title: `Presensi ${attendanceType.toUpperCase()} Berhasil!`,
+          description: `Status: ${status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}. Sesi: ${userSchedule.sessionName || userSchedule.name}. Jam: ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })} WIB. Verifikasi Wajah (${Math.round(similarityScore * 100)}%) dan Validasi GPS (${gpsDistance ?? 0}m) Sah.`,
+        });
+        loadData();
+      } else {
+        setResultMessage({
+          type: 'error',
+          title: 'Presensi Gagal',
+          description: res.message,
+        });
+      }
+    } finally {
+      isSubmittingRef.current = false;
+      setIsProcessing(false);
     }
   };
 
@@ -1642,23 +1633,29 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
 
                         {hasMasuk && pair.masukRecord ? (
                           <div className="flex items-start gap-2.5">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setPreviewPhoto({
-                                  url: pair.masukRecord!.photoRef,
-                                  title: `Foto Absen Masuk - ${pair.userName} (${pair.date})`,
-                                })
-                              }
-                              className="shrink-0 group relative cursor-pointer"
-                              title="Klik untuk perbesar"
-                            >
-                              <img
-                                src={pair.masukRecord.photoRef}
-                                alt="Foto Masuk"
-                                className="w-12 h-12 rounded-xl object-cover border border-emerald-300 group-hover:opacity-85"
-                              />
-                            </button>
+                            {pair.masukRecord.photoRef ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setPreviewPhoto({
+                                    url: pair.masukRecord!.photoRef,
+                                    title: `Foto Absen Masuk - ${pair.userName} (${pair.date})`,
+                                  })
+                                }
+                                className="shrink-0 group relative cursor-pointer"
+                                title="Klik untuk perbesar"
+                              >
+                                <img
+                                  src={pair.masukRecord.photoRef}
+                                  alt="Foto Masuk"
+                                  className="w-12 h-12 rounded-xl object-cover border border-emerald-300 group-hover:opacity-85"
+                                />
+                              </button>
+                            ) : (
+                              <div className="w-12 h-12 rounded-xl border border-emerald-200 bg-emerald-100/70 flex items-center justify-center shrink-0 text-emerald-700">
+                                <Camera className="w-5 h-5" />
+                              </div>
+                            )}
                             <div className="text-[11px] space-y-0.5">
                               <div className="font-bold font-mono">
                                 {new Date(pair.masukRecord.timestamp).toLocaleTimeString('id-ID', {
@@ -1669,8 +1666,8 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                                 WIB
                               </div>
                               <div className="text-slate-600 text-[10px]">
-                                Jarak: {pair.masukRecord.distanceFromLocationMeters}m &bull; Wajah:{' '}
-                                {Math.round(pair.masukRecord.faceSimilarityScore * 100)}%
+                                Jarak: {pair.masukRecord.distanceFromLocationMeters ?? 0}m &bull; Wajah:{' '}
+                                {Math.round((pair.masukRecord.faceSimilarityScore ?? 0) * 100)}%
                               </div>
                               {pair.masukRecord.sessionName && (
                                 <div className="text-[10px] text-emerald-700 font-semibold">
@@ -1708,23 +1705,29 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
 
                         {hasPulang && pair.pulangRecord ? (
                           <div className="flex items-start gap-2.5">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setPreviewPhoto({
-                                  url: pair.pulangRecord!.photoRef,
-                                  title: `Foto Absen Pulang - ${pair.userName} (${pair.date})`,
-                                })
-                              }
-                              className="shrink-0 group relative cursor-pointer"
-                              title="Klik untuk perbesar"
-                            >
-                              <img
-                                src={pair.pulangRecord.photoRef}
-                                alt="Foto Pulang"
-                                className="w-12 h-12 rounded-xl object-cover border border-indigo-300 group-hover:opacity-85"
-                              />
-                            </button>
+                            {pair.pulangRecord.photoRef ? (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setPreviewPhoto({
+                                    url: pair.pulangRecord!.photoRef,
+                                    title: `Foto Absen Pulang - ${pair.userName} (${pair.date})`,
+                                  })
+                                }
+                                className="shrink-0 group relative cursor-pointer"
+                                title="Klik untuk perbesar"
+                              >
+                                <img
+                                  src={pair.pulangRecord.photoRef}
+                                  alt="Foto Pulang"
+                                  className="w-12 h-12 rounded-xl object-cover border border-indigo-300 group-hover:opacity-85"
+                                />
+                              </button>
+                            ) : (
+                              <div className="w-12 h-12 rounded-xl border border-indigo-200 bg-indigo-100/70 flex items-center justify-center shrink-0 text-indigo-700">
+                                <Camera className="w-5 h-5" />
+                              </div>
+                            )}
                             <div className="text-[11px] space-y-0.5">
                               <div className="font-bold font-mono">
                                 {new Date(pair.pulangRecord.timestamp).toLocaleTimeString('id-ID', {
@@ -1735,8 +1738,8 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                                 WIB
                               </div>
                               <div className="text-slate-600 text-[10px]">
-                                Jarak: {pair.pulangRecord.distanceFromLocationMeters}m &bull; Wajah:{' '}
-                                {Math.round(pair.pulangRecord.faceSimilarityScore * 100)}%
+                                Jarak: {pair.pulangRecord.distanceFromLocationMeters ?? 0}m &bull; Wajah:{' '}
+                                {Math.round((pair.pulangRecord.faceSimilarityScore ?? 0) * 100)}%
                               </div>
                               {pair.pulangRecord.sessionName && (
                                 <div className="text-[10px] text-indigo-700 font-semibold">

@@ -518,29 +518,35 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                     {hasMasuk && pair.masukRecord ? (
                       <div className="mt-3 flex items-start gap-3">
                         {/* Foto Wajah Absen Masuk */}
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setPreviewPhoto({
-                              url: pair.masukRecord!.photoRef,
-                              title: `Foto Absen Masuk - ${pair.userName}`,
-                              subtitle: `${formatDateIndo(pair.date)} &bull; Pukul ${new Date(
-                                pair.masukRecord!.timestamp
-                              ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB`,
-                            })
-                          }
-                          className="relative group shrink-0"
-                          title="Klik untuk memperbesar foto wajah presensi masuk"
-                        >
-                          <img
-                            src={pair.masukRecord.photoRef}
-                            alt="Foto Presensi Masuk"
-                            className="w-16 h-16 rounded-2xl object-cover border-2 border-emerald-300 shadow-xs group-hover:opacity-90 transition-opacity"
-                          />
-                          <div className="absolute inset-0 bg-black/30 rounded-2xl opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white">
-                            <Eye className="w-4 h-4" />
+                        {pair.masukRecord.photoRef ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPreviewPhoto({
+                                url: pair.masukRecord!.photoRef,
+                                title: `Foto Absen Masuk - ${pair.userName}`,
+                                subtitle: `${formatDateIndo(pair.date)} • Pukul ${new Date(
+                                  pair.masukRecord!.timestamp
+                                ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB`,
+                              })
+                            }
+                            className="relative group shrink-0"
+                            title="Klik untuk memperbesar foto wajah presensi masuk"
+                          >
+                            <img
+                              src={pair.masukRecord.photoRef}
+                              alt="Foto Presensi Masuk"
+                              className="w-16 h-16 rounded-2xl object-cover border-2 border-emerald-300 shadow-xs group-hover:opacity-90 transition-opacity"
+                            />
+                            <div className="absolute inset-0 bg-black/30 rounded-2xl opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white">
+                              <Eye className="w-4 h-4" />
+                            </div>
+                          </button>
+                        ) : (
+                          <div className="w-16 h-16 rounded-2xl border-2 border-emerald-200 bg-emerald-100/70 flex items-center justify-center shrink-0 text-emerald-700">
+                            <Camera className="w-6 h-6" />
                           </div>
-                        </button>
+                        )}
 
                         <div className="space-y-1 text-xs flex-1">
                           <div className="flex items-center gap-1.5 font-bold text-slate-900">
@@ -557,7 +563,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
 
                           <div className="text-[11px] text-slate-500 flex items-center gap-1">
                             <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                            <span>Jarak: <strong>{pair.masukRecord.distanceFromLocationMeters} meter</strong> (Sah)</span>
+                            <span>Jarak: <strong>{pair.masukRecord.distanceFromLocationMeters ?? 0} meter</strong> (Sah)</span>
                           </div>
 
                           <div className="text-[11px] text-slate-500 flex items-center gap-1">
@@ -565,7 +571,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                             <span>
                               Kecocokan Wajah:{' '}
                               <strong className="text-emerald-700">
-                                {Math.round(pair.masukRecord.faceSimilarityScore * 100)}%
+                                {Math.round((pair.masukRecord.faceSimilarityScore ?? 0) * 100)}%
                               </strong>
                             </span>
                           </div>
@@ -608,29 +614,35 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                     {hasPulang && pair.pulangRecord ? (
                       <div className="mt-3 flex items-start gap-3">
                         {/* Foto Wajah Absen Pulang */}
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setPreviewPhoto({
-                              url: pair.pulangRecord!.photoRef,
-                              title: `Foto Absen Pulang - ${pair.userName}`,
-                              subtitle: `${formatDateIndo(pair.date)} &bull; Pukul ${new Date(
-                                pair.pulangRecord!.timestamp
-                              ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB`,
-                            })
-                          }
-                          className="relative group shrink-0"
-                          title="Klik untuk memperbesar foto wajah presensi pulang"
-                        >
-                          <img
-                            src={pair.pulangRecord.photoRef}
-                            alt="Foto Presensi Pulang"
-                            className="w-16 h-16 rounded-2xl object-cover border-2 border-indigo-300 shadow-xs group-hover:opacity-90 transition-opacity"
-                          />
-                          <div className="absolute inset-0 bg-black/30 rounded-2xl opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white">
-                            <Eye className="w-4 h-4" />
+                        {pair.pulangRecord.photoRef ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPreviewPhoto({
+                                url: pair.pulangRecord!.photoRef,
+                                title: `Foto Absen Pulang - ${pair.userName}`,
+                                subtitle: `${formatDateIndo(pair.date)} • Pukul ${new Date(
+                                  pair.pulangRecord!.timestamp
+                                ).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB`,
+                              })
+                            }
+                            className="relative group shrink-0"
+                            title="Klik untuk memperbesar foto wajah presensi pulang"
+                          >
+                            <img
+                              src={pair.pulangRecord.photoRef}
+                              alt="Foto Presensi Pulang"
+                              className="w-16 h-16 rounded-2xl object-cover border-2 border-indigo-300 shadow-xs group-hover:opacity-90 transition-opacity"
+                            />
+                            <div className="absolute inset-0 bg-black/30 rounded-2xl opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-white">
+                              <Eye className="w-4 h-4" />
+                            </div>
+                          </button>
+                        ) : (
+                          <div className="w-16 h-16 rounded-2xl border-2 border-indigo-200 bg-indigo-100/70 flex items-center justify-center shrink-0 text-indigo-700">
+                            <Camera className="w-6 h-6" />
                           </div>
-                        </button>
+                        )}
 
                         <div className="space-y-1 text-xs flex-1">
                           <div className="flex items-center gap-1.5 font-bold text-slate-900">
@@ -647,7 +659,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
 
                           <div className="text-[11px] text-slate-500 flex items-center gap-1">
                             <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                            <span>Jarak: <strong>{pair.pulangRecord.distanceFromLocationMeters} meter</strong> (Sah)</span>
+                            <span>Jarak: <strong>{pair.pulangRecord.distanceFromLocationMeters ?? 0} meter</strong> (Sah)</span>
                           </div>
 
                           <div className="text-[11px] text-slate-500 flex items-center gap-1">
@@ -655,7 +667,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                             <span>
                               Kecocokan Wajah:{' '}
                               <strong className="text-indigo-700">
-                                {Math.round(pair.pulangRecord.faceSimilarityScore * 100)}%
+                                {Math.round((pair.pulangRecord.faceSimilarityScore ?? 0) * 100)}%
                               </strong>
                             </span>
                           </div>

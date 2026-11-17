@@ -24,9 +24,21 @@ import {
   syncRecordToCloud,
   deleteRecordFromCloud,
   pullUsersFromCloudAndMerge,
+  safeSaveJsonArray,
   SEED_BASELINE_ISO,
   SYNC_COLLECTIONS,
 } from './firestoreSync';
+
+function safeReadArray<T>(key: string): T[] {
+  try {
+    const data = localStorage.getItem(key);
+    if (!data) return [];
+    const parsed = JSON.parse(data);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
 
 const STORAGE_KEYS = {
   USERS: 'kitarajin_table_users',
@@ -713,8 +725,8 @@ export function logAuditAction(
     timestamp: new Date().toISOString(),
   };
   logs.unshift(newLog); // letakkan terbaru di atas
-  localStorage.setItem(STORAGE_KEYS.AUDIT_LOGS, JSON.stringify(logs.slice(0, 500))); // simpan hingga 500 log
-  syncRecordToCloud(SYNC_COLLECTIONS.AUDIT_LOGS, newLog.id, newLog);
+  safeSaveJsonArray(STORAGE_KEYS.AUDIT_LOGS, logs.slice(0, 300)); // simpan log dengan proteksi kuota
+  syncRecordToCloud(SYNC_COLLECTIONS.AUDIT_LOGS, newLog.id, newLog).catch(() => {});
   notifyRealtimeChange(SYNC_COLLECTIONS.AUDIT_LOGS, false);
 }
 
@@ -1773,33 +1785,27 @@ export function deleteFaceRegistry(actor: User, registryId: string): { success: 
  */
 
 export function getAllAttendanceRecords(): AttendanceRecord[] {
-  const data = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
-  if (!data) return [];
-  const parsed: AttendanceRecord[] = JSON.parse(data);
-  return parsed.filter((r) => !r.id.startsWith('att-seed-'));
+  return safeReadArray<AttendanceRecord>(STORAGE_KEYS.ATTENDANCE).filter(
+    (r) => r && r.id && !String(r.id).startsWith('att-seed-')
+  );
 }
 
 /**
- * Hapus riwayat presensi akun demo dari localStorage dan Cloud Firestore
+ * Hapus hanya riwayat presensi demo bawaan (att-seed-*) tanpa menyentuh presensi asli pegawai
  */
 export function purgeDemoAttendanceRecords(): { count: number } {
   try {
-    const data = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
-    if (!data) return { count: 0 };
-    const records: AttendanceRecord[] = JSON.parse(data);
-    const demoRecords = records.filter(
-      (r) => r.id.startsWith('att-seed-') || (r.notes && r.notes.toLowerCase().includes('seed'))
-    );
+    const records = safeReadArray<AttendanceRecord>(STORAGE_KEYS.ATTENDANCE);
+    if (records.length === 0) return { count: 0 };
+    const demoRecords = records.filter((r) => r && r.id && String(r.id).startsWith('att-seed-'));
     if (demoRecords.length === 0) return { count: 0 };
 
-    const realRecords = records.filter(
-      (r) => !r.id.startsWith('att-seed-') && !(r.notes && r.notes.toLowerCase().includes('seed'))
-    );
-    localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(realRecords));
+    const realRecords = records.filter((r) => r && r.id && !String(r.id).startsWith('att-seed-'));
+    safeSaveJsonArray(STORAGE_KEYS.ATTENDANCE, realRecords);
 
     for (const dr of demoRecords) {
       try {
-        deleteRecordFromCloud(SYNC_COLLECTIONS.ATTENDANCE, dr.id);
+        deleteRecordFromCloud(SYNC_COLLECTIONS.ATTENDANCE, dr.id).catch(() => {});
       } catch {
         // ignore
       }
@@ -1963,8 +1969,14 @@ export function recordAttendance(
   };
 
   records.unshift(newRecord);
-  localStorage.setItem(STORAGE_KEYS.ATTENDANCE, JSON.stringify(records));
-  syncRecordToCloud(SYNC_COLLECTIONS.ATTENDANCE, newRecord.id, newRecord);
+  const savedLocally = safeSaveJsonArray(STORAGE_KEYS.ATTENDANCE, records);
+  if (!savedLocally) {
+    return {
+      success: false,
+      message: 'Penyimpanan lokal peramban penuh. Silakan segarkan halaman atau kosongkan log audit terlebih dahulu.',
+    };
+  }
+  syncRecordToCloud(SYNC_COLLECTIONS.ATTENDANCE, newRecord.id, newRecord).catch(() => {});
   notifyRealtimeChange(SYNC_COLLECTIONS.ATTENDANCE, true);
 
   // Catat audit

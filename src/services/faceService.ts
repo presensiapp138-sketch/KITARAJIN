@@ -313,6 +313,33 @@ export async function detectFaceLiveFromVideo(
 }
 
 /**
+ * Mengecilkan foto bukti wajah menjadi thumbnail JPEG ringkas (maks 280px) agar hemat kuota localStorage & cepat tersinkron ke Cloud
+ */
+function buildCompactThumbnailDataUrl(sourceCanvas: HTMLCanvasElement, maxDim = 280, quality = 0.72): string {
+  try {
+    const srcW = sourceCanvas.width || maxDim;
+    const srcH = sourceCanvas.height || maxDim;
+    if (srcW <= maxDim && srcH <= maxDim) {
+      return sourceCanvas.toDataURL('image/jpeg', quality);
+    }
+    const scale = maxDim / Math.max(srcW, srcH);
+    const dstW = Math.max(1, Math.round(srcW * scale));
+    const dstH = Math.max(1, Math.round(srcH * scale));
+    const thumbCanvas = document.createElement('canvas');
+    thumbCanvas.width = dstW;
+    thumbCanvas.height = dstH;
+    const thumbCtx = thumbCanvas.getContext('2d');
+    if (!thumbCtx) {
+      return sourceCanvas.toDataURL('image/jpeg', 0.65);
+    }
+    thumbCtx.drawImage(sourceCanvas, 0, 0, dstW, dstH);
+    return thumbCanvas.toDataURL('image/jpeg', quality);
+  } catch {
+    return sourceCanvas.toDataURL('image/jpeg', 0.65);
+  }
+}
+
+/**
  * Mengekstrak vektor fitur wajah dari sebuah Canvas HTML5
  */
 export function analyzeFaceFromCanvas(canvas: HTMLCanvasElement): FaceAnalysisResult {
@@ -336,7 +363,7 @@ export function analyzeFaceFromCanvas(canvas: HTMLCanvasElement): FaceAnalysisRe
     hasFace,
     qualityScore,
     embedding,
-    photoDataUrl: canvas.toDataURL('image/jpeg', 0.85),
+    photoDataUrl: buildCompactThumbnailDataUrl(canvas, 280, 0.72),
     feedbackMessage: !hasFace
       ? 'Wajah tidak terdeteksi jelas. Pastikan ruangan cukup terang dan wajah menghadap ke kamera.'
       : qualityScore < 50

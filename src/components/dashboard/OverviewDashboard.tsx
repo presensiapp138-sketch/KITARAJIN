@@ -725,7 +725,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                               WIB
                             </div>
                             <div className="text-slate-600 text-[10px]">
-                              Jarak: {pair.masukRecord.distanceFromLocationMeters}m &bull; Wajah: {Math.round(pair.masukRecord.faceSimilarityScore * 100)}%
+                              Jarak: {pair.masukRecord.distanceFromLocationMeters ?? 0}m &bull; Wajah: {Math.round((pair.masukRecord.faceSimilarityScore ?? 0) * 100)}%
                             </div>
                           </div>
                         </div>
@@ -790,7 +790,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                               WIB
                             </div>
                             <div className="text-slate-600 text-[10px]">
-                              Jarak: {pair.pulangRecord.distanceFromLocationMeters}m &bull; Wajah: {Math.round(pair.pulangRecord.faceSimilarityScore * 100)}%
+                              Jarak: {pair.pulangRecord.distanceFromLocationMeters ?? 0}m &bull; Wajah: {Math.round((pair.pulangRecord.faceSimilarityScore ?? 0) * 100)}%
                             </div>
                           </div>
                         </div>

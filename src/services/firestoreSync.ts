@@ -107,14 +107,14 @@ function buildFirestoreErrorInfo(
   };
 }
 
-function handleFirestoreError(
+function reportFirestoreError(
   error: unknown,
   operationType: OperationType,
   path: string | null
-): never {
+): FirestoreErrorInfo {
   const errInfo = buildFirestoreErrorInfo(error, operationType, path);
   console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  return errInfo;
 }
 
 // Koleksi sinkronisasi 10 tabel KITARAJIN
@@ -145,6 +145,7 @@ export const LOCAL_STORAGE_KEYS: Record<string, string> = {
 };
 
 const CLOUD_OUTBOX_KEY = 'kitarajin_cloud_outbox';
+const DELETED_TOMBSTONES_KEY = 'kitarajin_deleted_tombstones';
 
 interface OutboxEntry {
   op: 'set' | 'delete';
@@ -152,6 +153,12 @@ interface OutboxEntry {
   id: string;
   data?: Record<string, any>;
   queuedAt: string;
+}
+
+interface DeletedTombstone {
+  col: string;
+  id: string;
+  deletedAt: number;
 }
 
 let isSyncInitialized = false;
@@ -163,6 +170,98 @@ let isInitialRealtimeSyncing = false;
 
 export const SEED_BASELINE_ISO = '2020-01-01T00:00:00.000Z';
 export const SEED_BASELINE_MS = Date.parse(SEED_BASELINE_ISO);
+
+function loadDeletedTombstones(): DeletedTombstone[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(DELETED_TOMBSTONES_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    return parsed.filter((t) => t && t.col && t.id && Number(t.deletedAt || 0) >= cutoff);
+  } catch {
+    return [];
+  }
+}
+
+function markRecordDeletedLocally(col: string, id: string): void {
+  if (typeof window === 'undefined' || !col || !id) return;
+  try {
+    const list = loadDeletedTombstones().filter((t) => !(t.col === col && t.id === id));
+    list.push({ col, id, deletedAt: Date.now() });
+    localStorage.setItem(DELETED_TOMBSTONES_KEY, JSON.stringify(list.slice(-500)));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function unmarkRecordDeletedLocally(col: string, id: string): void {
+  if (typeof window === 'undefined' || !col || !id) return;
+  try {
+    const list = loadDeletedTombstones();
+    const next = list.filter((t) => !(t.col === col && t.id === id));
+    if (next.length !== list.length) {
+      localStorage.setItem(DELETED_TOMBSTONES_KEY, JSON.stringify(next));
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Simpan array data ke localStorage dengan proteksi kuota agar data presensi TIDAK PERNAH hilang atau melempar QuotaExceededError
+ */
+export function safeSaveJsonArray(storageKey: string, items: any[]): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(items));
+    return true;
+  } catch (err: any) {
+    // Jika kuota localStorage penuh, pangkas log audit lama terlebih dahulu
+    try {
+      const rawLogs = localStorage.getItem(LOCAL_STORAGE_KEYS.auditLogs);
+      if (rawLogs) {
+        const parsedLogs = JSON.parse(rawLogs);
+        if (Array.isArray(parsedLogs) && parsedLogs.length > 80) {
+          localStorage.setItem(LOCAL_STORAGE_KEYS.auditLogs, JSON.stringify(parsedLogs.slice(0, 80)));
+          localStorage.setItem(storageKey, JSON.stringify(items));
+          return true;
+        }
+      }
+    } catch {
+      // lanjut ke langkah kompresi foto lama
+    }
+
+    // Jika masih penuh saat menyimpan presensi, ringkas hanya photoRef inline terlama (>10 data terbaru) TANPA menghapus satupun baris presensi
+    if (storageKey === LOCAL_STORAGE_KEYS.attendance && Array.isArray(items) && items.length > 10) {
+      try {
+        const compacted = items.map((rec, idx) => {
+          if (idx >= 25 && rec && typeof rec.photoRef === 'string' && rec.photoRef.length > 1500) {
+            return { ...rec, photoRef: '' };
+          }
+          return rec;
+        });
+        localStorage.setItem(storageKey, JSON.stringify(compacted));
+        return true;
+      } catch {
+        // fallback ke trim lebih banyak photoRef lama namun baris data presensi tetap utuh
+        try {
+          const minimalPhotos = items.map((rec, idx) =>
+            idx >= 5 && rec && typeof rec.photoRef === 'string' && rec.photoRef.startsWith('data:')
+              ? { ...rec, photoRef: '' }
+              : rec
+          );
+          localStorage.setItem(storageKey, JSON.stringify(minimalPhotos));
+          return true;
+        } catch (innerErr) {
+          console.error('Gagal menyimpan cache lokal presensi:', innerErr);
+        }
+      }
+    }
+    console.warn(`safeSaveJsonArray note untuk ${storageKey}:`, err);
+    return false;
+  }
+}
 
 function loadOutbox(): OutboxEntry[] {
   if (typeof window === 'undefined') return [];
@@ -184,7 +283,18 @@ function saveOutbox(entries: OutboxEntry[]): void {
       localStorage.setItem(CLOUD_OUTBOX_KEY, JSON.stringify(entries.slice(-300)));
     }
   } catch {
-    // ignore quota errors
+    // Jika outbox gagal karena photoRef besar, simpan outbox tanpa data URL besar
+    try {
+      const compactEntries = entries.slice(-150).map((e) => {
+        if (e.data && typeof e.data.photoRef === 'string' && e.data.photoRef.length > 8000) {
+          return { ...e, data: { ...e.data, photoRef: '' } };
+        }
+        return e;
+      });
+      localStorage.setItem(CLOUD_OUTBOX_KEY, JSON.stringify(compactEntries));
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -437,16 +547,96 @@ export async function pullUsersFromCloudAndMerge(): Promise<any[]> {
   }
 }
 
-function mergeRemoteWithPendingOutbox(colName: string, remoteItems: any[]): any[] {
+const APPEND_PROTECTED_COLLECTIONS = new Set<string>([
+  SYNC_COLLECTIONS.ATTENDANCE,
+  SYNC_COLLECTIONS.FACE_REGISTRY,
+  SYNC_COLLECTIONS.LEAVE_REQUESTS,
+  SYNC_COLLECTIONS.ASSIGNMENTS,
+  SYNC_COLLECTIONS.AUDIT_LOGS,
+]);
+
+function getItemFreshnessMs(item: any): number {
+  return (
+    parseUserTimestampMs(item?.updatedAt) ||
+    parseUserTimestampMs(item?.reviewedAt) ||
+    parseUserTimestampMs(item?.completedAt) ||
+    parseUserTimestampMs(item?.timestamp) ||
+    parseUserTimestampMs(item?.createdAt)
+  );
+}
+
+function readLocalCollectionArray(colName: string): any[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const storageKey = LOCAL_STORAGE_KEYS[colName];
+    if (!storageKey) return [];
+    const raw = localStorage.getItem(storageKey);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Gabungkan koleksi data non-destruktif agar data presensi & transaksi yang sudah tersimpan di perangkat
+ * TIDAK PERNAH terhapus oleh snapshot cloud kosong/parsial, sekaligus menjaga penghapusan eksplisit tetap berlaku.
+ */
+function mergeCollectionNonDestructive(
+  colName: string,
+  localItems: any[],
+  remoteItems: any[],
+  options?: { preserveLocalOnly?: boolean }
+): { merged: any[]; toUpload: any[] } {
+  const preserveLocalOnly =
+    options?.preserveLocalOnly ?? APPEND_PROTECTED_COLLECTIONS.has(colName);
+  const tombstones = new Set(
+    loadDeletedTombstones()
+      .filter((t) => t.col === colName)
+      .map((t) => String(t.id))
+  );
   const pending = loadOutbox().filter((e) => e.col === colName);
-  if (pending.length === 0) return remoteItems;
+  const pendingDeletes = new Set(pending.filter((e) => e.op === 'delete').map((e) => e.id));
 
   const byId = new Map<string, any>();
-  for (const item of remoteItems) {
-    if (item && item.id) {
-      byId.set(String(item.id), item);
+  const toUpload: any[] = [];
+
+  for (const r of remoteItems) {
+    if (!r || !r.id) continue;
+    const id = String(r.id);
+    if (colName === SYNC_COLLECTIONS.ATTENDANCE && id.startsWith('att-seed-')) continue;
+    if (pendingDeletes.has(id) || tombstones.has(id)) continue;
+    byId.set(id, r);
+  }
+
+  for (const l of localItems) {
+    if (!l || !l.id) continue;
+    const id = String(l.id);
+    if (colName === SYNC_COLLECTIONS.ATTENDANCE && id.startsWith('att-seed-')) continue;
+    if (pendingDeletes.has(id) || tombstones.has(id)) continue;
+
+    const existingRemote = byId.get(id);
+    if (!existingRemote) {
+      if (preserveLocalOnly) {
+        byId.set(id, l);
+        toUpload.push(l);
+      }
+    } else {
+      const localMs = getItemFreshnessMs(l);
+      const remoteMs = getItemFreshnessMs(existingRemote);
+      const mergedItem =
+        localMs > remoteMs ? { ...existingRemote, ...l } : { ...l, ...existingRemote };
+      if (!mergedItem.photoRef && (l.photoRef || existingRemote.photoRef)) {
+        mergedItem.photoRef = l.photoRef || existingRemote.photoRef;
+      }
+      byId.set(id, mergedItem);
+      if (localMs > remoteMs) {
+        toUpload.push(mergedItem);
+      }
     }
   }
+
   for (const entry of pending) {
     if (entry.op === 'delete') {
       byId.delete(entry.id);
@@ -455,7 +645,13 @@ function mergeRemoteWithPendingOutbox(colName: string, remoteItems: any[]): any[
       byId.set(entry.id, { ...prev, ...entry.data, id: entry.id });
     }
   }
-  return Array.from(byId.values());
+
+  const merged = Array.from(byId.values());
+  if (colName === SYNC_COLLECTIONS.ATTENDANCE || colName === SYNC_COLLECTIONS.AUDIT_LOGS) {
+    merged.sort((a, b) => getItemFreshnessMs(b) - getItemFreshnessMs(a));
+  }
+
+  return { merged, toUpload };
 }
 
 function mergeSettingsDocuments(localSettings: any, remoteSettings: any): any {
@@ -582,9 +778,27 @@ export async function pullAllCloudDataOnStartup(options?: {
             id: docSnap.id,
             ...docSnap.data(),
           }));
-          const mergedItems = mergeRemoteWithPendingOutbox(colName, remoteItems);
-          if (mergedItems.length > 0 || remoteDbAlreadyInitialized) {
-            localStorage.setItem(storageKey, JSON.stringify(mergedItems));
+          const localItems = readLocalCollectionArray(colName);
+          const { merged: mergedItems, toUpload } = mergeCollectionNonDestructive(
+            colName,
+            localItems,
+            remoteItems,
+            {
+              preserveLocalOnly:
+                APPEND_PROTECTED_COLLECTIONS.has(colName) ||
+                snapshot.metadata.fromCache ||
+                remoteItems.length === 0,
+            }
+          );
+
+          if (mergedItems.length > 0 || (remoteDbAlreadyInitialized && !snapshot.metadata.fromCache)) {
+            safeSaveJsonArray(storageKey, mergedItems);
+          }
+
+          for (const item of toUpload) {
+            if (item && item.id) {
+              syncRecordToCloud(colName, String(item.id), item).catch(() => {});
+            }
           }
         }
       } catch (colErr) {
@@ -611,6 +825,7 @@ export async function syncRecordToCloud(
   recordId: string,
   data: Record<string, any>
 ): Promise<void> {
+  unmarkRecordDeletedLocally(collectionName, recordId);
   const cleanData = JSON.parse(JSON.stringify(data));
   try {
     await setDoc(doc(db, collectionName, recordId), cleanData, { merge: true });
@@ -623,7 +838,7 @@ export async function syncRecordToCloud(
   } catch (err: any) {
     const msg = String(err?.message || err || '');
     if (msg.toLowerCase().includes('permission')) {
-      handleFirestoreError(err, OperationType.WRITE, `${collectionName}/${recordId}`);
+      reportFirestoreError(err, OperationType.WRITE, `${collectionName}/${recordId}`);
     }
     enqueueOutbox({
       op: 'set',
@@ -643,6 +858,7 @@ export async function deleteRecordFromCloud(
   collectionName: string,
   recordId: string
 ): Promise<void> {
+  markRecordDeletedLocally(collectionName, recordId);
   try {
     await deleteDoc(doc(db, collectionName, recordId));
     removeFromOutbox(collectionName, recordId);
@@ -654,7 +870,7 @@ export async function deleteRecordFromCloud(
   } catch (err: any) {
     const msg = String(err?.message || err || '');
     if (msg.toLowerCase().includes('permission')) {
-      handleFirestoreError(err, OperationType.DELETE, `${collectionName}/${recordId}`);
+      reportFirestoreError(err, OperationType.DELETE, `${collectionName}/${recordId}`);
     }
     enqueueOutbox({
       op: 'delete',
@@ -690,7 +906,7 @@ export async function flushCloudOutbox(): Promise<number> {
     } catch (err: any) {
       const msg = String(err?.message || err || '');
       if (msg.toLowerCase().includes('permission')) {
-        handleFirestoreError(
+        reportFirestoreError(
           err,
           entry.op === 'delete' ? OperationType.DELETE : OperationType.WRITE,
           `${entry.col}/${entry.id}`
@@ -921,34 +1137,46 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
             });
           }
         } else {
-          // Koleksi array data lainnya (pertahankan item antrean offline bila ada, serta hormati penghapusan permanen)
+          // Koleksi array data lainnya: gabungkan non-destruktif agar presensi & riwayat sebelumnya TIDAK PERNAH terhapus snapshot kosong/cache
           const remoteItems = snapshot.docs.map((docSnap) => ({
             id: docSnap.id,
             ...docSnap.data(),
           }));
 
           const storageKey = LOCAL_STORAGE_KEYS[colName];
-          const mergedItems = mergeRemoteWithPendingOutbox(colName, remoteItems);
+          const localItems = readLocalCollectionArray(colName);
+
+          // Lindungi data lokal yang sudah ada jika snapshot cache awal kosong sebelum server merespons
+          if (snapshot.metadata.fromCache && remoteItems.length === 0 && localItems.length > 0) {
+            return;
+          }
+
+          const { merged: mergedItems, toUpload } = mergeCollectionNonDestructive(
+            colName,
+            localItems,
+            remoteItems,
+            {
+              preserveLocalOnly:
+                APPEND_PROTECTED_COLLECTIONS.has(colName) ||
+                snapshot.metadata.fromCache ||
+                wasInitial,
+            }
+          );
+
           const alreadySeeded = localStorage.getItem('kitarajin_seed_completed_v1') === 'true';
 
-          if (mergedItems.length > 0 || alreadySeeded || !wasInitial) {
-            localStorage.setItem(storageKey, JSON.stringify(mergedItems));
-          } else {
-            const localDataStr = localStorage.getItem(storageKey);
-            if (localDataStr) {
-              try {
-                const localItems = JSON.parse(localDataStr);
-                if (Array.isArray(localItems) && localItems.length > 0) {
-                  localItems.forEach((item: any) => {
-                    if (item && item.id) {
-                      setDoc(doc(db, colName, item.id), item, { merge: true }).catch(() => {});
-                    }
-                  });
-                }
-              } catch (e) {
-                console.warn(`Gagal auto-seed ${colName} ke cloud:`, e);
+          if (mergedItems.length > 0 || (alreadySeeded && !snapshot.metadata.fromCache && !wasInitial)) {
+            safeSaveJsonArray(storageKey, mergedItems);
+          }
+
+          // Unggah item lokal (mis. presensi lama / offline) yang belum tercatat di server Firestore
+          if (!snapshot.metadata.fromCache && toUpload.length > 0) {
+            toUpload.forEach((item: any) => {
+              if (item && item.id) {
+                const cleanItem = JSON.parse(JSON.stringify(item));
+                setDoc(doc(db, colName, String(item.id)), cleanItem, { merge: true }).catch(() => {});
               }
-            }
+            });
           }
         }
 
