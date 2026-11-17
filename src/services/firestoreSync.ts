@@ -486,6 +486,8 @@ function mergeSettingsDocuments(localSettings: any, remoteSettings: any): any {
     merged.googleDriveFolderId || remoteSettings.googleDriveFolderId || localSettings.googleDriveFolderId;
   merged.googleDriveUsersFileId =
     merged.googleDriveUsersFileId || remoteSettings.googleDriveUsersFileId || localSettings.googleDriveUsersFileId;
+  merged.googleAppsScriptWebhookUrl =
+    merged.googleAppsScriptWebhookUrl || remoteSettings.googleAppsScriptWebhookUrl || localSettings.googleAppsScriptWebhookUrl;
   merged.googleAccountEmail =
     merged.googleAccountEmail || remoteSettings.googleAccountEmail || localSettings.googleAccountEmail;
 

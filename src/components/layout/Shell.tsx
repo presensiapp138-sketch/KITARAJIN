@@ -268,10 +268,14 @@ export const Shell: React.FC<ShellProps> = ({
 
               {/* Google Drive & Sheets Auto-Sync Status Chip (Khusus Kepala Sekolah bila target sudah ditautkan) */}
               {currentUser.role === 'kepala_sekolah' && workspaceStatus.hasTargetConfigured && (
-                workspaceStatus.hasToken ? (
+                (workspaceStatus.hasToken || workspaceStatus.hasWebhook) ? (
                   <div
                     className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-teal-50 border border-teal-200 text-teal-800 text-[11px] font-bold"
-                    title="Sinkronisasi otomatis ke Google Drive & Sheets aktif berjalan di latar belakang untuk setiap presensi dan perubahan data"
+                    title={
+                      workspaceStatus.hasToken
+                        ? 'Sinkronisasi otomatis ke Google Drive & Sheets aktif berjalan di latar belakang untuk setiap presensi dan perubahan data'
+                        : 'Sinkronisasi otomatis tanpa klik via Webhook Apps Script aktif (tetap berjalan otomatis meskipun halaman di-refresh)'
+                    }
                   >
                     <span className={`w-2 h-2 rounded-full bg-teal-500 ${(workspaceStatus.isSyncing || workspaceStatus.isScheduled) ? 'animate-ping' : 'animate-pulse'}`} />
                     <span className="hidden sm:inline">
@@ -293,7 +297,7 @@ export const Shell: React.FC<ShellProps> = ({
                         ? 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-900'
                         : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'
                     }`}
-                    title="Klik 1x pada sesi browser ini (termasuk di Vercel) agar setiap perubahan & presensi otomatis masuk ke Google Drive & Sheets tanpa perlu klik lagi"
+                    title="Klik 1x setelah refresh untuk otorisasi sesi browser ini (atau pasang Webhook Apps Script di Pengaturan agar 0 klik selamanya setelah refresh)"
                   >
                     <span className={`w-2 h-2 rounded-full ${workspaceStatus.hasPending ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'}`} />
                     <span className="hidden sm:inline">

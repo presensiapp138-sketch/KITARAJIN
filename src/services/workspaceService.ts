@@ -7,6 +7,7 @@ import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getAuth,
   signInWithPopup,
+  reauthenticateWithPopup,
   GoogleAuthProvider,
   onAuthStateChanged,
   User as FirebaseUser,
@@ -215,31 +216,42 @@ export const initAuth = (
  * Inisialisasi auto-sync Google Drive & Sheets secara global di tingkat aplikasi (termasuk Vercel),
  * agar perubahan otomatis tersinkron saat sesi token Google aktif tanpa perlu membuka menu Pengaturan.
  */
+export function isValidAppsScriptWebhookUrl(url?: string): boolean {
+  if (!url) return false;
+  const trimmed = url.trim();
+  return /^https:\/\/script\.google\.com\/(macros\/s\/|a\/macros\/).+\/exec(\?.*)?$/i.test(trimmed);
+}
+
+export function hasAppsScriptWebhook(): boolean {
+  const settings = getAppSettings();
+  return isValidAppsScriptWebhookUrl(settings.googleAppsScriptWebhookUrl);
+}
+
 export function initWorkspaceAutoSyncOnStartup(): () => void {
   if (isGlobalAutoSyncBooted || typeof window === 'undefined') {
     return () => {};
   }
   isGlobalAutoSyncBooted = true;
 
-  const tryFlushIfTokenActive = (forceCatchup: boolean) => {
-    if (!hasRealAccessToken()) return;
+  const tryFlushIfReady = (forceCatchup: boolean) => {
+    if (!hasRealAccessToken() && !hasAppsScriptWebhook()) return;
     flushWorkspaceSyncIfReady(forceCatchup).catch(() => {});
   };
 
   const unsubAuth = initAuth(
     () => {
-      tryFlushIfTokenActive(true);
+      tryFlushIfReady(true);
     },
     () => {}
   );
 
-  tryFlushIfTokenActive(true);
+  tryFlushIfReady(true);
 
   const handleSettingsOrCloud = () => {
-    tryFlushIfTokenActive(true);
+    tryFlushIfReady(true);
   };
   const handleOnlineOrFocus = () => {
-    tryFlushIfTokenActive(false);
+    tryFlushIfReady(false);
   };
 
   window.addEventListener('kitarajin_settings_updated', handleSettingsOrCloud);
@@ -438,25 +450,49 @@ async function signInWithGisFallback(emailHint?: string): Promise<{
 }
 
 export const signInWithGoogle = async (
-  emailHint?: string
+  emailHint?: string,
+  options?: { forceAccountSelect?: boolean }
 ): Promise<{
   user: FirebaseUser;
   accessToken: string;
 } | null> => {
+  const cleanHint = emailHint?.trim();
+  const hasHint = Boolean(cleanHint && cleanHint.includes('@'));
+  const forceSelect = options?.forceAccountSelect ?? !hasHint;
+
   try {
     isSigningIn = true;
     const customProvider = new GoogleAuthProvider();
     WORKSPACE_SCOPES.forEach((s) => customProvider.addScope(s));
 
-    const customParams: Record<string, string> = {
-      prompt: 'select_account',
-    };
-    if (emailHint && emailHint.trim().includes('@')) {
-      customParams.login_hint = emailHint.trim();
+    const customParams: Record<string, string> = {};
+    if (forceSelect) {
+      customParams.prompt = 'select_account';
     }
-    customProvider.setCustomParameters(customParams);
+    if (hasHint && cleanHint) {
+      customParams.login_hint = cleanHint;
+    }
+    if (Object.keys(customParams).length > 0) {
+      customProvider.setCustomParameters(customParams);
+    }
 
-    const result = await signInWithPopup(auth, customProvider);
+    let result;
+    const activeFbUser = auth.currentUser;
+    if (
+      !forceSelect &&
+      activeFbUser &&
+      hasHint &&
+      activeFbUser.email?.toLowerCase() === cleanHint?.toLowerCase()
+    ) {
+      try {
+        result = await reauthenticateWithPopup(activeFbUser, customProvider);
+      } catch {
+        result = await signInWithPopup(auth, customProvider);
+      }
+    } else {
+      result = await signInWithPopup(auth, customProvider);
+    }
+
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
       throw new Error('Gagal memperoleh token akses Google Drive & Sheets.');
@@ -481,7 +517,7 @@ export const signInWithGoogle = async (
       errMsg.includes('operation-not-supported')
     ) {
       try {
-        const gisResult = await signInWithGisFallback(emailHint);
+        const gisResult = await signInWithGisFallback(cleanHint);
         if (gisResult) {
           return gisResult;
         }
@@ -1331,6 +1367,106 @@ export async function syncAllUsersToDriveAndSheet(
   };
 }
 
+export function getAppsScriptBridgeTemplate(spreadsheetId?: string, folderId?: string): string {
+  const sId = cleanGoogleId(spreadsheetId || '') || 'TEMPEL_ID_SPREADSHEET_ANDA';
+  const fId = cleanGoogleId(folderId || '');
+  return `// KITARAJIN Auto-Sync Bridge (Google Sheets & Drive)
+// Pasang 1x di Extensions > Apps Script, lalu Deploy > Web App (Execute as: Me, Who has access: Anyone)
+function doPost(e) {
+  try {
+    var payload = JSON.parse(e.postData.contents || '{}');
+    var targetSheetId = payload.spreadsheetId || '${sId}';
+    var ss = SpreadsheetApp.openById(targetSheetId);
+
+    var tabs = payload.tabs || [];
+    for (var i = 0; i < tabs.length; i++) {
+      var tab = tabs[i];
+      var sheet = ss.getSheetByName(tab.name);
+      if (!sheet) {
+        sheet = ss.insertSheet(tab.name);
+      }
+      sheet.clearContents();
+      var values = [tab.headers].concat(tab.rows || []);
+      if (values.length > 0 && tab.headers && tab.headers.length > 0) {
+        sheet.getRange(1, 1, values.length, tab.headers.length).setValues(values);
+        sheet.setFrozenRows(1);
+      }
+    }
+
+    var targetFolderId = payload.folderId || '${fId}';
+    if (targetFolderId && payload.fullSnapshot) {
+      var folder = DriveApp.getFolderById(targetFolderId);
+      upsertJsonFile_(folder, 'KITARAJIN_Full_Database.json', JSON.stringify(payload.fullSnapshot, null, 2));
+      if (payload.usersSnapshot) {
+        upsertJsonFile_(folder, 'KITARAJIN_Users_Database.json', JSON.stringify(payload.usersSnapshot, null, 2));
+      }
+    }
+
+    return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function upsertJsonFile_(folder, fileName, content) {
+  var files = folder.getFilesByName(fileName);
+  if (files.hasNext()) {
+    var file = files.next();
+    file.setContent(content);
+  } else {
+    folder.createFile(fileName, content, MimeType.PLAIN_TEXT);
+  }
+}`;
+}
+
+async function syncWorkspaceViaWebhook(webhookUrl: string): Promise<void> {
+  const settings = getAppSettings();
+  const cleanSheetId = cleanGoogleId(settings.googleSheetSpreadsheetId || '');
+  const cleanFolderId = cleanGoogleId(settings.googleDriveFolderId || '');
+  const users = getAllUsers();
+
+  const payload = {
+    app: 'KITARAJIN',
+    syncedAt: new Date().toISOString(),
+    spreadsheetId: cleanSheetId,
+    folderId: cleanFolderId,
+    schoolName: settings.schoolName,
+    tabs: TAB_DEFINITIONS.map((tab) => ({
+      name: tab.name,
+      headers: tab.headers,
+      rows: tab.getData(),
+    })),
+    usersSnapshot: {
+      app: 'KITARAJIN',
+      updatedAt: new Date().toISOString(),
+      totalUsers: users.length,
+      users,
+    },
+    fullSnapshot: {
+      app: 'KITARAJIN',
+      syncedAt: new Date().toISOString(),
+      schoolName: settings.schoolName,
+      users,
+      departments: getAllDepartments(),
+      schedules: getAllSchedules(),
+      locations: getAllLocations(),
+      faceRegistry: getAllFaceRegistry(),
+      attendance: getAllAttendanceRecords(),
+      leaveRequests: getAllLeaveRequests(),
+      assignments: getAllAssignments(),
+      auditLogs: getAuditLogs().slice(0, 500),
+      settings,
+    },
+  };
+
+  await fetch(webhookUrl.trim(), {
+    method: 'POST',
+    mode: 'no-cors',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload),
+  });
+}
+
 /**
  * Dipanggil otomatis setiap kali ada penambahan/perubahan Username atau Password
  */
@@ -1339,7 +1475,7 @@ export async function autoSyncUsersToWorkspace(): Promise<{
   reason?: string;
   message?: string;
 }> {
-  if (!hasRealAccessToken()) {
+  if (!hasRealAccessToken() && !hasAppsScriptWebhook()) {
     markPendingWorkspaceUserSync();
     return {
       synced: false,
@@ -1363,6 +1499,7 @@ let queuedChangedCollection: string | undefined;
 
 export function getWorkspaceSyncRuntimeStatus(): {
   hasToken: boolean;
+  hasWebhook: boolean;
   isSyncing: boolean;
   isScheduled: boolean;
   hasPending: boolean;
@@ -1372,17 +1509,20 @@ export function getWorkspaceSyncRuntimeStatus(): {
   hasTargetConfigured: boolean;
 } {
   const settings = getAppSettings();
+  const hasWebhook = isValidAppsScriptWebhookUrl(settings.googleAppsScriptWebhookUrl);
   const hasTargetConfigured = Boolean(
     cleanGoogleId(settings.googleSheetSpreadsheetId || '') ||
       cleanGoogleId(settings.googleDriveFolderId || '') ||
-      cleanGoogleId(settings.googleDriveUsersFileId || '')
+      cleanGoogleId(settings.googleDriveUsersFileId || '') ||
+      hasWebhook
   );
   return {
     hasToken: hasRealAccessToken(),
+    hasWebhook,
     isSyncing: isWorkspaceAutoSyncRunning,
     isScheduled: Boolean(workspaceAutoSyncTimer),
     hasPending: hasPendingWorkspaceFullSync(),
-    autoEnabled: Boolean(settings.autoWorkspaceSyncEnabled || settings.isGoogleConnected),
+    autoEnabled: Boolean(settings.autoWorkspaceSyncEnabled || settings.isGoogleConnected || hasWebhook),
     lastFullSyncAt: settings.lastWorkspaceFullSyncAt || settings.lastWorkspaceUserSyncAt,
     connectedEmail: getConnectedGoogleEmail(),
     hasTargetConfigured,
@@ -1408,12 +1548,14 @@ export async function autoSyncAllDataToWorkspace(changedCollection?: string): Pr
   const sheetId = cleanGoogleId(settings.googleSheetSpreadsheetId || '');
   const driveFolderId = cleanGoogleId(settings.googleDriveFolderId || '');
   const driveUsersFileId = cleanGoogleId(settings.googleDriveUsersFileId || '');
+  const webhookUrl = settings.googleAppsScriptWebhookUrl?.trim() || '';
+  const webhookActive = isValidAppsScriptWebhookUrl(webhookUrl);
 
-  if (!sheetId && !driveFolderId && !driveUsersFileId) {
+  if (!sheetId && !driveFolderId && !driveUsersFileId && !webhookActive) {
     return false;
   }
 
-  if (!hasRealAccessToken()) {
+  if (!hasRealAccessToken() && !webhookActive) {
     markPendingWorkspaceFullSync();
     if (changedCollection === 'users') {
       markPendingWorkspaceUserSync();
@@ -1421,8 +1563,8 @@ export async function autoSyncAllDataToWorkspace(changedCollection?: string): Pr
     return false;
   }
 
-  const token = await getAccessToken();
-  if (!token) {
+  const token = hasRealAccessToken() ? await getAccessToken() : null;
+  if (!token && !webhookActive) {
     markPendingWorkspaceFullSync();
     return false;
   }
@@ -1435,9 +1577,9 @@ export async function autoSyncAllDataToWorkspace(changedCollection?: string): Pr
   isWorkspaceAutoSyncRunning = true;
   emitWorkspaceSyncEvent({ syncing: true, scheduled: false, collection: changedCollection });
   try {
-    if (sheetId) {
+    if (token && sheetId) {
       await writeAllTabsData(token, sheetId, { syncUsersMerge: shouldMergeUsers });
-    } else {
+    } else if (token) {
       await Promise.all([
         syncUsersWithGoogleDrive(token, driveFolderId || undefined),
         syncFullAppDatabaseToDrive(token, driveFolderId || undefined),
@@ -1455,6 +1597,21 @@ export async function autoSyncAllDataToWorkspace(changedCollection?: string): Pr
         lastSyncTimestamp: syncIso,
         autoWorkspaceSyncEnabled: true,
         isGoogleConnected: true,
+        storageMode: 'google_workspace_sync' as const,
+      };
+      localStorage.setItem('kitarajin_table_settings', JSON.stringify(updatedSettings));
+      syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', updatedSettings).catch(() => {});
+      clearPendingWorkspaceUserSync();
+    } else if (webhookActive) {
+      await syncWorkspaceViaWebhook(webhookUrl);
+      const syncIso = new Date().toISOString();
+      const latestSettings = getAppSettings();
+      const updatedSettings = {
+        ...latestSettings,
+        lastWorkspaceUserSyncAt: syncIso,
+        lastWorkspaceFullSyncAt: syncIso,
+        lastSyncTimestamp: syncIso,
+        autoWorkspaceSyncEnabled: true,
         storageMode: 'google_workspace_sync' as const,
       };
       localStorage.setItem('kitarajin_table_settings', JSON.stringify(updatedSettings));
@@ -1506,7 +1663,7 @@ export function scheduleWorkspaceAutoSync(changedCollection?: string): void {
     }
     return;
   }
-  if (!hasRealAccessToken()) return;
+  if (!hasRealAccessToken() && !hasAppsScriptWebhook()) return;
 
   if (workspaceAutoSyncTimer) {
     clearTimeout(workspaceAutoSyncTimer);
@@ -1525,11 +1682,11 @@ export function scheduleWorkspaceAutoSync(changedCollection?: string): void {
 }
 
 /**
- * Jika sesi Google aktif dan ada perubahan tertunda,
- * langsung kirim semua perubahan tertunda ke Drive & Sheets tanpa klik tambahan.
+ * Jika sesi Google aktif (OAuth token atau Apps Script Webhook) dan ada perubahan tertunda
+ * atau baru refresh halaman, langsung kirim semua data terbaru ke Drive & Sheets tanpa klik tambahan.
  */
 export async function flushWorkspaceSyncIfReady(forceInitialCatchup = false): Promise<boolean> {
-  if (!hasRealAccessToken()) return false;
+  if (!hasRealAccessToken() && !hasAppsScriptWebhook()) return false;
   const status = getWorkspaceSyncRuntimeStatus();
   if (!status.hasTargetConfigured) return false;
   if (!hasPendingWorkspaceFullSync() && !(forceInitialCatchup && !hasSyncedWorkspaceThisSession)) {
