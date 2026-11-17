@@ -159,6 +159,7 @@ let activeUnsubscribes: Unsubscribe[] = [];
 let cloudConnectionActive = false;
 let lastSyncTime: string = new Date().toISOString();
 let isAutoSyncRunning = false;
+let isInitialRealtimeSyncing = false;
 
 export const SEED_BASELINE_ISO = '2020-01-01T00:00:00.000Z';
 export const SEED_BASELINE_MS = Date.parse(SEED_BASELINE_ISO);
@@ -499,7 +500,7 @@ export async function pullAllCloudDataOnStartup(options?: {
   criticalOnly?: boolean;
   timeoutMs?: number;
 }): Promise<void> {
-  const timeoutMs = options?.timeoutMs ?? 2500;
+  const timeoutMs = options?.timeoutMs ?? 1500;
   const criticalOnly = Boolean(options?.criticalOnly);
 
   const fetchAll = async () => {
@@ -832,15 +833,29 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
     return () => {};
   }
   isSyncInitialized = true;
+  isInitialRealtimeSyncing = true;
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: 'initial_start' } }));
+  }
 
-  // Flush antrean offline hanya jika memang ada antrean tertunda; hindari 10 query getDocs ganda saat startup
-  const initialSyncTimer = setTimeout(() => {
-    if (loadOutbox().length > 0) {
-      flushCloudOutbox().catch(() => {});
-    }
-  }, 800);
+  // Flush antrean offline seketika saat aplikasi/refresh dimulai tanpa jeda
+  if (loadOutbox().length > 0) {
+    flushCloudOutbox().catch(() => {});
+  }
 
   const collectionsToWatch = Object.values(SYNC_COLLECTIONS);
+  const pendingInitialCols = new Set<string>(collectionsToWatch);
+
+  const finishInitialSyncPhase = () => {
+    if (!isInitialRealtimeSyncing) return;
+    isInitialRealtimeSyncing = false;
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: 'initial_complete' } }));
+    }
+  };
+
+  // Pastikan indikator sinkronisasi awal selesai maksimal dalam 1.5 detik
+  const initialDeadlineTimer = setTimeout(finishInitialSyncPhase, 1500);
 
   activeUnsubscribes = collectionsToWatch.map((colName) => {
     let isInitialSnapshot = true;
@@ -852,6 +867,14 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
         cloudConnectionActive = true;
         lastSyncTime = new Date().toISOString();
 
+        if (!snapshot.metadata.fromCache) {
+          pendingInitialCols.delete(colName);
+          if (pendingInitialCols.size === 0) {
+            clearTimeout(initialDeadlineTimer);
+            finishInitialSyncPhase();
+          }
+        }
+
         if (colName === 'settings') {
           // Settings disimpan sebagai objek tunggal (merge agar ID sheet/drive & status sinkron tidak hilang)
           const settingsDoc = snapshot.docs.find((d) => d.id === 'global')?.data();
@@ -861,6 +884,7 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
           if (settingsDoc) {
             const mergedSettings = mergeSettingsDocuments(localSettings, settingsDoc);
             localStorage.setItem(LOCAL_STORAGE_KEYS.settings, JSON.stringify(mergedSettings));
+            localStorage.setItem('kitarajin_seed_completed_v1', 'true');
             syncPendingWorkspaceFlagFromSettings(mergedSettings);
             if (typeof window !== 'undefined') {
               window.dispatchEvent(new CustomEvent('kitarajin_settings_updated'));
@@ -986,7 +1010,7 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
   }, 15000);
 
   return () => {
-    clearTimeout(initialSyncTimer);
+    clearTimeout(initialDeadlineTimer);
     activeUnsubscribes.forEach((unsub) => unsub());
     activeUnsubscribes = [];
     clearInterval(outboxTimer);
@@ -994,6 +1018,7 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
       window.removeEventListener('online', handleOnline);
       document.removeEventListener('visibilitychange', handleVisibility);
     }
+    isInitialRealtimeSyncing = false;
     isSyncInitialized = false;
   };
 }
@@ -1013,7 +1038,7 @@ export function getCloudSyncStatus(): {
     lastSync: lastSyncTime,
     databaseId: firebaseConfig.firestoreDatabaseId,
     pendingCount: loadOutbox().length,
-    isSyncing: isAutoSyncRunning,
+    isSyncing: isAutoSyncRunning || isInitialRealtimeSyncing,
   };
 }
 

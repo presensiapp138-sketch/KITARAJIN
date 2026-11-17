@@ -39,6 +39,7 @@ import {
 import { User, UserRole, AppSettings } from '../../types';
 import { getNavItemsForRole, NavItem } from '../../config/navigation';
 import { updateUser, getAppSettings, getCurrentSession } from '../../services/storage';
+import { getCloudSyncStatus } from '../../services/firestoreSync';
 import {
   getWorkspaceSyncRuntimeStatus,
   signInWithGoogle,
@@ -93,6 +94,7 @@ export const Shell: React.FC<ShellProps> = ({
   const [profileMsg, setProfileMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [settings, setSettings] = useState<AppSettings>(() => getAppSettings());
+  const [cloudStatus, setCloudStatus] = useState(() => getCloudSyncStatus());
   const [workspaceStatus, setWorkspaceStatus] = useState(() => getWorkspaceSyncRuntimeStatus());
   const [isActivatingWorkspace, setIsActivatingWorkspace] = useState(false);
   const [workspaceBannerError, setWorkspaceBannerError] = useState<string | null>(null);
@@ -100,6 +102,7 @@ export const Shell: React.FC<ShellProps> = ({
   React.useEffect(() => {
     const handleSettingsUpdate = () => {
       setSettings(getAppSettings());
+      setCloudStatus(getCloudSyncStatus());
       setWorkspaceStatus(getWorkspaceSyncRuntimeStatus());
     };
     window.addEventListener('kitarajin_settings_updated', handleSettingsUpdate);
@@ -259,11 +262,31 @@ export const Shell: React.FC<ShellProps> = ({
             <div className="flex items-center gap-2 sm:gap-3">
               {/* Multi-Device Real-Time Cloud Sync Badge */}
               <div
-                className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-800 text-[11px] font-bold shadow-2xs"
-                title="Database Cloud Firestore aktif untuk sinkronisasi multi-device real-time (siap deploy ke Vercel dan dibagikan ke banyak pengguna)"
+                className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-bold shadow-2xs transition-colors ${
+                  cloudStatus.isSyncing
+                    ? 'bg-sky-50 border-sky-200 text-sky-800'
+                    : cloudStatus.pendingCount > 0
+                    ? 'bg-amber-50 border-amber-200 text-amber-800'
+                    : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                }`}
+                title="Database Cloud Firestore sinkron otomatis dalam ~1.5 detik setelah buka/refresh tanpa klik"
               >
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>Multi-Device Sync</span>
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    cloudStatus.isSyncing
+                      ? 'bg-sky-500 animate-ping'
+                      : cloudStatus.pendingCount > 0
+                      ? 'bg-amber-500 animate-pulse'
+                      : 'bg-emerald-500 animate-pulse'
+                  }`}
+                />
+                <span>
+                  {cloudStatus.isSyncing
+                    ? 'Menyinkronkan Cloud...'
+                    : cloudStatus.pendingCount > 0
+                    ? `Antrean Sync (${cloudStatus.pendingCount})`
+                    : 'Cloud Tersinkron'}
+                </span>
               </div>
 
               {/* Google Drive & Sheets Auto-Sync Status Chip (Khusus Kepala Sekolah bila target sudah ditautkan) */}

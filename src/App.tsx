@@ -91,7 +91,7 @@ export default function App() {
       const hasLocalUsers = Boolean(localStorage.getItem('kitarajin_table_users'));
 
       if (hasLocalUsers) {
-        // Sesi/perangkat yang sudah punya cache lokal: tampilkan UI instan tanpa menunggu Cloud
+        // Sesi/perangkat yang sudah punya cache lokal: tampilkan UI instan & biarkan onSnapshot multi-device langsung menyinkronkan dalam <= 1.5 detik
         await initializeDatabase();
         if (!isMounted) return;
         const session = refreshCurrentSessionFromUsers() || getCurrentSession();
@@ -100,11 +100,9 @@ export default function App() {
         }
         setIsInitializing(false);
         stopWorkspaceAutoSync = initWorkspaceAutoSyncOnStartup();
-        // Sinkronisasi Cloud berjalan paralel di latar belakang
-        pullAllCloudDataOnStartup({ timeoutMs: 2500 }).catch(() => {});
       } else {
-        // Perangkat / domain baru (mis. Vercel pertama kali): tarik data kritis (settings & users) max 1.5 dtk
-        await pullAllCloudDataOnStartup({ criticalOnly: true, timeoutMs: 1500 }).catch(() => {});
+        // Perangkat / domain baru (mis. Vercel pertama kali): tarik data kritis (settings & users) max 1.2 dtk
+        await pullAllCloudDataOnStartup({ criticalOnly: true, timeoutMs: 1200 }).catch(() => {});
         await initializeDatabase();
         if (!isMounted) return;
         const session = refreshCurrentSessionFromUsers() || getCurrentSession();
