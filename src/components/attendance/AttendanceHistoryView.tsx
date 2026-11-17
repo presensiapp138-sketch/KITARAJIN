@@ -33,6 +33,7 @@ import {
   getAttendanceForUser,
   groupAttendanceByDateAndUser,
   getAllUsers,
+  getLocalDateString,
 } from '../../services/storage';
 import { exportAttendanceToExcel } from '../../services/excelReportService';
 import { generateAttendancePdfReport } from '../../services/pdfReportService';
@@ -88,7 +89,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
 
   // Filter logic
   const now = new Date();
-  const todayStr = now.toISOString().split('T')[0];
+  const todayStr = getLocalDateString(now);
 
   const filteredPairs = pairs.filter((item) => {
     // 1. Date filter

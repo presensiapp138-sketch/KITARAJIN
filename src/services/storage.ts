@@ -1852,23 +1852,68 @@ export function groupAttendanceByDateAndUser(records: AttendanceRecord[]): Daily
   });
 }
 
+export function getLocalDateString(date: Date = new Date()): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 export function recordAttendance(
   recordData: Omit<AttendanceRecord, 'id' | 'timestamp'>
 ): { success: boolean; record?: AttendanceRecord; message: string } {
   const records = getAllAttendanceRecords();
-  const todayStr = new Date().toISOString().split('T')[0];
+  const now = new Date();
+  const todayStr = getLocalDateString(now);
 
-  // Cegah presensi ganda untuk jenis yang sama di hari yang sama (per sesi jika ada sesi)
+  // Validasi ketat aturan jam presensi sesuai sesi yang diatur untuk pengguna
+  const users = getAllUsers();
+  const user = users.find((u) => u.id === recordData.userId);
+  const schedules = getAllSchedules();
+
+  let schedule: Schedule | undefined;
+  if (recordData.sessionId) {
+    schedule = schedules.find((s) => s.id === recordData.sessionId);
+    if (!schedule) {
+      return {
+        success: false,
+        message: 'Sesi presensi yang dipilih tidak ditemukan atau telah dihapus oleh Admin.',
+      };
+    }
+  } else {
+    const allowedIds = user?.assignedSessionIds || [];
+    schedule =
+      (allowedIds.length > 0 ? schedules.find((s) => allowedIds.includes(s.id)) : undefined) ||
+      (user?.scheduleId ? schedules.find((s) => s.id === user.scheduleId) : undefined) ||
+      schedules[0];
+  }
+
+  if (schedule && user?.assignedSessionIds && user.assignedSessionIds.length > 0) {
+    if (!user.assignedSessionIds.includes(schedule.id)) {
+      return {
+        success: false,
+        message: `Anda tidak terdaftar pada ${schedule.sessionName || schedule.name}. Silakan pilih sesi presensi yang diatur untuk akun Anda.`,
+      };
+    }
+  }
+
+  const effectiveSessionId = schedule?.id || recordData.sessionId;
+
+  // Cegah presensi ganda untuk jenis yang sama di hari yang sama per sesi
   const duplicate = records.find(
     (r) =>
       r.userId === recordData.userId &&
       r.date === todayStr &&
       r.type === recordData.type &&
-      (recordData.sessionId ? r.sessionId === recordData.sessionId : true)
+      (effectiveSessionId ? r.sessionId === effectiveSessionId : true)
   );
 
   if (duplicate) {
-    const timeFormatted = new Date(duplicate.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const timeFormatted = new Date(duplicate.timestamp).toLocaleTimeString('id-ID', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
     const sessionLabel = duplicate.sessionName ? ` untuk ${duplicate.sessionName}` : '';
     return {
       success: false,
@@ -1876,43 +1921,33 @@ export function recordAttendance(
     };
   }
 
-  // Validasi ketat aturan jam presensi sesuai jadwal aktif user atau sesi yang dipilih
-  const users = getAllUsers();
-  const user = users.find((u) => u.id === recordData.userId);
-  const schedules = getAllSchedules();
-  const schedule =
-    (recordData.sessionId ? schedules.find((s) => s.id === recordData.sessionId) : null) ||
-    (user?.scheduleId ? schedules.find((s) => s.id === user.scheduleId) : null) ||
-    schedules[0];
-
   if (schedule) {
-    const now = new Date();
     const curTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
     if (recordData.type === 'masuk') {
       if (curTime < schedule.checkInStart) {
         return {
           success: false,
-          message: `Presensi MASUK belum dibuka. Jadwal presensi masuk baru dibuka pukul ${schedule.checkInStart} WIB (Waktu sekarang: ${curTime} WIB).`,
+          message: `Presensi MASUK ${schedule.sessionName || schedule.name} belum dibuka. Jadwal presensi masuk dibuka pukul ${schedule.checkInStart} WIB (Waktu sekarang: ${curTime} WIB).`,
         };
       }
       if (curTime >= schedule.checkOutStart) {
         return {
           success: false,
-          message: `Waktu presensi MASUK sudah ditutup. Saat ini sudah memasuki jam kepulangan (mulai ${schedule.checkOutStart} WIB).`,
+          message: `Waktu presensi MASUK ${schedule.sessionName || schedule.name} sudah ditutup. Saat ini sudah memasuki jam kepulangan (mulai ${schedule.checkOutStart} WIB).`,
         };
       }
     } else if (recordData.type === 'pulang') {
       if (curTime < schedule.checkOutStart) {
         return {
           success: false,
-          message: `Presensi PULANG belum dibuka. Jam presensi pulang baru dibuka pukul ${schedule.checkOutStart} WIB (Waktu sekarang: ${curTime} WIB).`,
+          message: `Presensi PULANG ${schedule.sessionName || schedule.name} belum dibuka. Jam presensi pulang baru dibuka pukul ${schedule.checkOutStart} WIB (Waktu sekarang: ${curTime} WIB).`,
         };
       }
       if (schedule.checkOutEnd && curTime > schedule.checkOutEnd) {
         return {
           success: false,
-          message: `Batas waktu presensi PULANG telah berakhir pada pukul ${schedule.checkOutEnd} WIB (Waktu sekarang: ${curTime} WIB).`,
+          message: `Batas waktu presensi PULANG ${schedule.sessionName || schedule.name} telah berakhir pada pukul ${schedule.checkOutEnd} WIB (Waktu sekarang: ${curTime} WIB).`,
         };
       }
     }
@@ -1920,8 +1955,11 @@ export function recordAttendance(
 
   const newRecord: AttendanceRecord = {
     id: `att-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-    timestamp: new Date().toISOString(),
+    timestamp: now.toISOString(),
     ...recordData,
+    date: todayStr,
+    sessionId: effectiveSessionId,
+    sessionName: schedule ? schedule.sessionName || schedule.name : recordData.sessionName,
   };
 
   records.unshift(newRecord);

@@ -41,6 +41,7 @@ import {
   getAllLeaveRequests,
   getAppSettings,
   groupAttendanceByDateAndUser,
+  getLocalDateString,
 } from '../../services/storage';
 import { exportAttendanceToExcel } from '../../services/excelReportService';
 import { generateAttendancePdfReport } from '../../services/pdfReportService';
@@ -61,9 +62,9 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
     d.setDate(1); // awal bulan
-    return d.toISOString().split('T')[0];
+    return getLocalDateString(d);
   });
-  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState(() => getLocalDateString());
   const [selectedRole, setSelectedRole] = useState<'all' | UserRole>('all');
   const [selectedDeptId, setSelectedDeptId] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
@@ -117,7 +118,7 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
   const handlePeriodChange = (type: 'hari_ini' | 'minggu_ini' | 'bulan_ini' | 'custom') => {
     setPeriodType(type);
     const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
+    const todayStr = getLocalDateString(today);
 
     if (type === 'hari_ini') {
       setStartDate(todayStr);
@@ -126,11 +127,11 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
       const start = new Date(today);
       const day = start.getDay() || 7; // getDay: 0 is Sun
       start.setDate(start.getDate() - day + 1); // Senin
-      setStartDate(start.toISOString().split('T')[0]);
+      setStartDate(getLocalDateString(start));
       setEndDate(todayStr);
     } else if (type === 'bulan_ini') {
       const start = new Date(today.getFullYear(), today.getMonth(), 1);
-      setStartDate(start.toISOString().split('T')[0]);
+      setStartDate(getLocalDateString(start));
       setEndDate(todayStr);
     }
   };

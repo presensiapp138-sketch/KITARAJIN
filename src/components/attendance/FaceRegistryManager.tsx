@@ -30,7 +30,19 @@ import {
   toggleFaceStatus,
   deleteFaceRegistry,
 } from '../../services/storage';
-import { analyzeFaceFromCanvas, FaceAnalysisResult } from '../../services/faceService';
+import {
+  analyzeFaceFromCanvas,
+  detectFaceLiveFromVideo,
+  FaceAnalysisResult,
+  LiveFaceDetectionResult,
+} from '../../services/faceService';
+import {
+  acquireCameraStream,
+  attachStreamToVideo,
+  captureVideoFrameToCanvas,
+  formatCameraError,
+  stopCameraStream,
+} from '../../services/cameraService';
 
 interface FaceRegistryManagerProps {
   currentUser: User;
@@ -47,12 +59,18 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
   const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [cameraFacing, setCameraFacing] = useState<'user' | 'environment'>('user');
+  const [isCameraReady, setIsCameraReady] = useState(false);
+  const [isCameraStarting, setIsCameraStarting] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [cameraRetryTick, setCameraRetryTick] = useState(0);
   const [isCapturing, setIsCapturing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<FaceAnalysisResult | null>(null);
+  const [liveDetection, setLiveDetection] = useState<LiveFaceDetectionResult | null>(null);
+  const [deleteTargetItem, setDeleteTargetItem] = useState<FaceRegistryItem | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const cameraRequestIdRef = useRef<number>(0);
 
   const loadData = () => {
     setUsers(getAllUsers());
@@ -67,50 +85,127 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
     window.addEventListener('kitarajin_cloud_sync', handleRealtimeSync);
     window.addEventListener('storage', handleRealtimeSync);
     return () => {
-      stopCamera();
+      cameraRequestIdRef.current++;
+      stopCameraStream(streamRef.current, videoRef.current);
+      streamRef.current = null;
       window.removeEventListener('kitarajin_cloud_sync', handleRealtimeSync);
       window.removeEventListener('storage', handleRealtimeSync);
     };
   }, []);
 
-  const startCamera = async (facing: 'user' | 'environment') => {
-    stopCamera();
-    setCameraError(null);
-    setAnalysisResult(null);
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: facing,
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-        },
-        audio: false,
-      });
-
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
+  // Kelola siklus hidup kamera secara aman setelah <video> ter-render (termasuk saat Ambil Ulang)
+  useEffect(() => {
+    if (!isCameraModalOpen || !selectedUser || analysisResult) {
+      if (!isCameraModalOpen || !selectedUser) {
+        cameraRequestIdRef.current++;
+        stopCameraStream(streamRef.current, videoRef.current);
+        streamRef.current = null;
+        setIsCameraReady(false);
       }
-    } catch (err: any) {
-      setCameraError('Gagal mengakses kamera. Pastikan izin kamera telah diberikan di peramban Anda.');
+      return;
     }
-  };
+
+    let cancelled = false;
+    const reqId = ++cameraRequestIdRef.current;
+
+    const bootCamera = async () => {
+      setCameraError(null);
+      setIsCameraReady(false);
+      setIsCameraStarting(true);
+      setLiveDetection(null);
+
+      try {
+        // Jika stream sudah ada dan track masih live, cukup pasangkan ulang ke videoRef (mis. setelah Ambil Ulang)
+        let activeStream = streamRef.current;
+        const hasLiveTrack = Boolean(
+          activeStream && activeStream.getVideoTracks().some((t) => t.readyState === 'live')
+        );
+
+        if (!hasLiveTrack) {
+          stopCameraStream(activeStream, videoRef.current);
+          streamRef.current = null;
+          const res = await acquireCameraStream(cameraFacing);
+          if (cancelled || reqId !== cameraRequestIdRef.current) {
+            stopCameraStream(res.stream);
+            return;
+          }
+          activeStream = res.stream;
+          streamRef.current = activeStream;
+        }
+
+        if (videoRef.current && activeStream) {
+          const ready = await attachStreamToVideo(videoRef.current, activeStream);
+          if (!cancelled && reqId === cameraRequestIdRef.current) {
+            setIsCameraReady(ready);
+            if (!ready) {
+              setCameraError('Stream kamera aktif namun frame belum muncul. Klik Coba Kamera Ulang.');
+            }
+          }
+        }
+      } catch (err: any) {
+        if (!cancelled && reqId === cameraRequestIdRef.current) {
+          stopCameraStream(streamRef.current, videoRef.current);
+          streamRef.current = null;
+          setIsCameraReady(false);
+          setCameraError(formatCameraError(err));
+        }
+      } finally {
+        if (!cancelled && reqId === cameraRequestIdRef.current) {
+          setIsCameraStarting(false);
+        }
+      }
+    };
+
+    bootCamera();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isCameraModalOpen, selectedUser?.id, cameraFacing, analysisResult, cameraRetryTick]);
+
+  // Deteksi wajah live otomatis saat kamera aktif di modal perekaman
+  useEffect(() => {
+    if (!isCameraModalOpen || !isCameraReady || analysisResult) return;
+    let cancelled = false;
+    let isScanning = false;
+
+    const runScan = async () => {
+      if (cancelled || isScanning || !videoRef.current) return;
+      isScanning = true;
+      try {
+        const res = await detectFaceLiveFromVideo(videoRef.current, {
+          mirrorHorizontal: cameraFacing === 'user',
+        });
+        if (!cancelled && res) {
+          setLiveDetection(res);
+        }
+      } finally {
+        isScanning = false;
+      }
+    };
+
+    runScan();
+    const timer = setInterval(runScan, 350);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [isCameraModalOpen, isCameraReady, analysisResult, cameraFacing]);
 
   const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
+    cameraRequestIdRef.current++;
+    stopCameraStream(streamRef.current, videoRef.current);
+    streamRef.current = null;
+    setIsCameraReady(false);
+    setLiveDetection(null);
   };
 
   const openRegisterModal = (targetUser: User) => {
     setSelectedUser(targetUser);
     setAnalysisResult(null);
     setCameraError(null);
+    setLiveDetection(null);
     setIsCameraModalOpen(true);
-    startCamera(cameraFacing);
   };
 
   const closeCameraModal = () => {
@@ -121,36 +216,26 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
   };
 
   const switchCameraFacing = () => {
+    stopCamera();
     const nextFacing = cameraFacing === 'user' ? 'environment' : 'user';
     setCameraFacing(nextFacing);
-    startCamera(nextFacing);
+  };
+
+  const retryCamera = () => {
+    stopCamera();
+    setCameraError(null);
+    setCameraRetryTick((t) => t + 1);
   };
 
   const capturePhotoAndAnalyze = () => {
     if (!videoRef.current) return;
     setIsCapturing(true);
 
-    const video = videoRef.current;
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
+    const canvas = captureVideoFrameToCanvas(videoRef.current, cameraFacing === 'user');
+    if (!canvas) {
       setIsCapturing(false);
+      setCameraError('Kamera belum siap menampilkan gambar. Tunggu sebentar lalu coba lagi.');
       return;
-    }
-
-    // Jika kamera depan, flip horizontal agar mirror alami
-    if (cameraFacing === 'user') {
-      ctx.translate(canvas.width, 0);
-      ctx.scale(-1, 1);
-    }
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-    // Reset transformasi untuk analisis
-    if (cameraFacing === 'user') {
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
     }
 
     const result = analyzeFaceFromCanvas(canvas);
@@ -188,16 +273,16 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
     }
   };
 
-  const handleDelete = (item: FaceRegistryItem) => {
-    if (confirm(`Hapus data biometrik wajah untuk "${item.userName}"? Pengguna harus didaftarkan ulang agar dapat presensi.`)) {
-      const res = deleteFaceRegistry(currentUser, item.id);
-      if (res.success) {
-        setFeedback({ type: 'success', message: res.message });
-        loadData();
-      } else {
-        setFeedback({ type: 'error', message: res.message });
-      }
+  const confirmDeleteFace = () => {
+    if (!deleteTargetItem) return;
+    const res = deleteFaceRegistry(currentUser, deleteTargetItem.id);
+    if (res.success) {
+      setFeedback({ type: 'success', message: res.message });
+      loadData();
+    } else {
+      setFeedback({ type: 'error', message: res.message });
     }
+    setDeleteTargetItem(null);
   };
 
   // Filter daftar pengguna
@@ -428,8 +513,8 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
                             </button>
                             <button
                               type="button"
-                              onClick={() => handleDelete(faceData)}
-                              className="p-1.5 rounded-lg border border-slate-200 hover:bg-rose-50 text-rose-600 transition-colors"
+                              onClick={() => setDeleteTargetItem(faceData)}
+                              className="p-1.5 rounded-lg border border-slate-200 hover:bg-rose-50 text-rose-600 transition-colors cursor-pointer"
                               title="Hapus Data Wajah"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -490,25 +575,80 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
                   />
                 )}
 
-                {/* Face Scanning Guide Overlay (Oval) */}
+                {/* Face Scanning Guide Overlay (Oval) + Bounding Box */}
+                {!analysisResult && liveDetection?.box && (
+                  <div
+                    className="absolute border-2 border-emerald-400 rounded-xl pointer-events-none transition-all duration-150 shadow-[0_0_12px_rgba(16,185,129,0.45)]"
+                    style={{
+                      left: `${liveDetection.box.x * 100}%`,
+                      top: `${liveDetection.box.y * 100}%`,
+                      width: `${liveDetection.box.width * 100}%`,
+                      height: `${liveDetection.box.height * 100}%`,
+                    }}
+                  />
+                )}
+
                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                  <div className="w-52 h-64 rounded-full border-2 border-dashed border-white/70 shadow-[0_0_0_9999px_rgba(0,0,0,0.25)] flex items-center justify-center">
-                    <span className="text-[11px] text-white/90 bg-slate-900/60 px-2 py-0.5 rounded-full font-medium">
-                      Posisikan Wajah di Sini
+                  <div
+                    className={`w-52 h-64 rounded-full border-2 border-dashed shadow-[0_0_0_9999px_rgba(0,0,0,0.25)] flex items-end justify-center pb-3 transition-colors ${
+                      !analysisResult && liveDetection?.faceDetected
+                        ? 'border-emerald-400'
+                        : 'border-white/70'
+                    }`}
+                  >
+                    <span
+                      className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold ${
+                        !analysisResult && liveDetection?.faceDetected
+                          ? 'bg-emerald-600/90 text-white'
+                          : 'bg-slate-900/75 text-white/90'
+                      }`}
+                    >
+                      {analysisResult
+                        ? 'Pratinjau Foto Wajah'
+                        : liveDetection?.statusText || 'Posisikan Wajah di Sini'}
                     </span>
                   </div>
                 </div>
 
                 {/* Camera Mode Badge */}
-                <div className="absolute top-3 left-3 px-2 py-1 bg-slate-900/70 backdrop-blur-xs text-white rounded-lg text-[10px] font-semibold">
+                <div className="absolute top-3 left-3 px-2 py-1 bg-slate-900/75 backdrop-blur-xs text-white rounded-lg text-[10px] font-semibold">
                   {cameraFacing === 'user' ? 'Kamera Depan' : 'Kamera Belakang'}
                 </div>
+
+                {/* Overlay Memuat / Error Kamera */}
+                {!analysisResult && (isCameraStarting || (!isCameraReady && !cameraError)) && (
+                  <div className="absolute inset-0 bg-slate-950/85 flex flex-col items-center justify-center text-slate-200 p-4 text-center z-10">
+                    <Camera className="w-8 h-8 text-purple-400 mb-2 animate-pulse" />
+                    <span className="text-xs font-semibold">Menghubungkan Kamera...</span>
+                  </div>
+                )}
+
+                {!analysisResult && cameraError && (
+                  <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center text-white p-5 text-center z-20 gap-3">
+                    <AlertCircle className="w-8 h-8 text-rose-400" />
+                    <p className="text-xs leading-relaxed text-slate-200 max-w-xs">{cameraError}</p>
+                    <button
+                      type="button"
+                      onClick={retryCamera}
+                      className="px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold cursor-pointer flex items-center gap-1.5"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5" />
+                      <span>Coba Kamera Ulang</span>
+                    </button>
+                  </div>
+                )}
               </div>
 
-              {cameraError && (
-                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-                  <span>{cameraError}</span>
+              {!analysisResult && liveDetection && isCameraReady && (
+                <div
+                  className={`px-3 py-2 rounded-xl border text-[11px] font-medium flex items-center justify-between gap-2 ${
+                    liveDetection.faceDetected
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                      : 'bg-amber-50 border-amber-200 text-amber-900'
+                  }`}
+                >
+                  <span>{liveDetection.hintText}</span>
+                  <span className="font-mono font-bold shrink-0">{liveDetection.qualityScore}%</span>
                 </div>
               )}
 
@@ -517,7 +657,7 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
                 <button
                   type="button"
                   onClick={switchCameraFacing}
-                  className="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  className="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <SwitchCamera className="w-4 h-4 text-purple-600" />
                   <span>Ganti Kamera ({cameraFacing === 'user' ? 'Depan' : 'Belakang'})</span>
@@ -527,7 +667,7 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
                   <button
                     type="button"
                     onClick={() => setAnalysisResult(null)}
-                    className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors"
+                    className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
                   >
                     Ambil Ulang
                   </button>
@@ -535,11 +675,11 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
                   <button
                     type="button"
                     onClick={capturePhotoAndAnalyze}
-                    disabled={isCapturing}
-                    className="px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                    disabled={isCapturing || !isCameraReady || Boolean(cameraError)}
+                    className="px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-md transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
                   >
                     <Camera className="w-4 h-4" />
-                    <span>Ambil Foto Wajah</span>
+                    <span>{isCameraReady ? 'Ambil Foto Wajah' : 'Menyiapkan Kamera...'}</span>
                   </button>
                 )}
               </div>
@@ -566,7 +706,7 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
                 <button
                   type="button"
                   onClick={closeCameraModal}
-                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold"
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold cursor-pointer"
                 >
                   Batal
                 </button>
@@ -574,12 +714,43 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
                   type="button"
                   onClick={handleSaveToRegistry}
                   disabled={!analysisResult || !analysisResult.hasFace}
-                  className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-md disabled:opacity-40 transition-all flex items-center gap-1.5"
+                  className="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-md disabled:opacity-40 transition-all flex items-center gap-1.5 cursor-pointer disabled:cursor-not-allowed"
                 >
                   <CheckCircle className="w-4 h-4" />
                   <span>Simpan ke Database Wajah</span>
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Data Wajah */}
+      {deleteTargetItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center gap-2.5 text-rose-700 font-extrabold text-sm">
+              <AlertCircle className="w-5 h-5 shrink-0" />
+              <span>Hapus Data Biometrik Wajah?</span>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Hapus data biometrik wajah untuk <strong>{deleteTargetItem.userName}</strong>? Pengguna harus didaftarkan ulang agar dapat melakukan presensi wajah.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteTargetItem(null)}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteFace}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer"
+              >
+                Ya, Hapus Data
+              </button>
             </div>
           </div>
         </div>

@@ -33,6 +33,7 @@ import {
   groupAttendanceByDateAndUser,
   getAllSchedules,
   getAllDepartments,
+  getLocalDateString,
 } from '../../services/storage';
 
 interface OverviewDashboardProps {
@@ -73,7 +74,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
   const userAssignedSessions = allSchedules.filter((s) => (currentUser.assignedSessionIds || []).includes(s.id));
   const activeSessionsList = userAssignedSessions.length > 0 ? userAssignedSessions : allSchedules;
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateString();
   const allAttendance = getAllAttendanceRecords();
   const todayPresentUserCount = new Set(
     allAttendance.filter((r) => r.date === todayStr && r.type === 'masuk').map((r) => r.userId)

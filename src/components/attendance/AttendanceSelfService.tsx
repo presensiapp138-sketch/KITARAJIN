@@ -50,8 +50,21 @@ import {
   getAllUsers,
   getAppSettings,
   groupAttendanceByDateAndUser,
+  getLocalDateString,
 } from '../../services/storage';
-import { analyzeFaceFromCanvas, calculateFaceSimilarity } from '../../services/faceService';
+import {
+  analyzeFaceFromCanvas,
+  calculateFaceSimilarity,
+  detectFaceLiveFromVideo,
+  LiveFaceDetectionResult,
+} from '../../services/faceService';
+import {
+  acquireCameraStream,
+  attachStreamToVideo,
+  captureVideoFrameToCanvas,
+  formatCameraError,
+  stopCameraStream,
+} from '../../services/cameraService';
 import { TimeInput24 } from '../common/TimeInput24';
 
 interface AttendanceSelfServiceProps {
@@ -90,6 +103,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
   const [allSchedules, setAllSchedules] = useState<Schedule[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [liveUser, setLiveUser] = useState<User>(currentUser);
   const [allAttendanceRecords, setAllAttendanceRecords] = useState<AttendanceRecord[]>([]);
   const [userRecords, setUserRecords] = useState<AttendanceRecord[]>([]);
   const [activeTab, setActiveTab] = useState<'presensi' | 'riwayat'>(initialTab);
@@ -99,7 +113,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
   const [historyScope, setHistoryScope] = useState<'self' | 'team'>('self');
   const [selectedStaffId, setSelectedStaffId] = useState<string>('all');
   const [dateFilterPreset, setDateFilterPreset] = useState<'all' | 'today' | 'yesterday' | 'custom'>('today');
-  const [customDate, setCustomDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [customDate, setCustomDate] = useState<string>(() => getLocalDateString());
 
   // GPS State
   const [deviceCoords, setDeviceCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
@@ -108,10 +122,14 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
-  // Camera State
+  // Camera & Live Face Detection State
   const [cameraFacing, setCameraFacing] = useState<'user' | 'environment'>('user');
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
+  const [isCameraStarting, setIsCameraStarting] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [cameraRetryTick, setCameraRetryTick] = useState<number>(0);
+  const [liveDetection, setLiveDetection] = useState<LiveFaceDetectionResult | null>(null);
+  const [autoSubmitOnMatch, setAutoSubmitOnMatch] = useState<boolean>(false);
   const [capturedSnapshot, setCapturedSnapshot] = useState<string | null>(null);
 
   // Processing & Feedback State
@@ -125,6 +143,8 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const cameraRequestIdRef = useRef<number>(0);
+  const lastAutoSubmitAttemptRef = useRef<number>(0);
 
   // Live Clock Ticker untuk validasi aturan jam presensi real-time
   const [currentNow, setCurrentNow] = useState<Date>(new Date());
@@ -185,7 +205,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     }
   };
 
-  // Filter sesi yang berlaku khusus untuk karyawan ini (Hapus jadwal lama seperti kebersihan, sarpras, satpam, reguler guru)
+  // Filter sesi yang berlaku khusus untuk pengguna ini sesuai pengaturan Admin/Kepala Sekolah
   const userAllowedSchedules = useMemo(() => {
     const validSchedules = allSchedules.filter((s) => {
       const combined = `${s.name || ''} ${s.sessionName || ''}`.toLowerCase();
@@ -198,12 +218,12 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
       );
     });
 
-    if (currentUser.assignedSessionIds && currentUser.assignedSessionIds.length > 0) {
-      const filtered = validSchedules.filter((s) => currentUser.assignedSessionIds?.includes(s.id));
-      if (filtered.length > 0) return filtered;
+    const assignedIds = liveUser.assignedSessionIds || [];
+    if (assignedIds.length > 0) {
+      return validSchedules.filter((s) => assignedIds.includes(s.id));
     }
     return validSchedules;
-  }, [allSchedules, currentUser.assignedSessionIds]);
+  }, [allSchedules, liveUser.assignedSessionIds]);
 
 
   // Evaluasi kepatuhan jam presensi terhadap jadwal kerja / sesi aktif
@@ -295,30 +315,74 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     const schedules = getAllSchedules();
     setAllSchedules(schedules);
 
-    const userSessions = currentUser.assignedSessionIds || [];
-    const assigned = schedules.filter((s) => userSessions.includes(s.id));
-    if (assigned.length === 1) {
-      setUserSchedule(assigned[0]);
-      setHasUserExplicitlySelectedSession(true);
-    } else {
-      setUserSchedule((prev) => {
-        if (prev && schedules.some((s) => s.id === prev.id)) {
-          return schedules.find((s) => s.id === prev.id) || prev;
-        }
-        return assigned[0] || schedules[0] || null;
-      });
-    }
+    const usersList = getAllUsers();
+    const freshestUser = usersList.find((u) => u.id === currentUser.id) || currentUser;
+    setLiveUser(freshestUser);
+    setAllUsers(usersList);
 
-    setUserRecords(getAttendanceForUser(currentUser.id));
+    const userRecordsList = getAttendanceForUser(currentUser.id);
+    setUserRecords(userRecordsList);
     setDepartments(getAllDepartments());
-    setAllUsers(getAllUsers());
     setAllAttendanceRecords(getAllAttendanceRecords());
+
+    const assignedIds = freshestUser.assignedSessionIds || [];
+    const allowed = assignedIds.length > 0 ? schedules.filter((s) => assignedIds.includes(s.id)) : schedules;
+
+    const now = new Date();
+    const todayLocal = getLocalDateString(now);
+    const curTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    const isScheduleOpenNow = (s: Schedule) =>
+      curTime >= s.checkInStart && curTime <= (s.checkOutEnd || '23:59');
+
+    if (allowed.length === 1) {
+      const single = allowed[0];
+      setUserSchedule(single);
+      setHasUserExplicitlySelectedSession(true);
+      const hasMasuk = userRecordsList.some(
+        (r) => r.date === todayLocal && r.type === 'masuk' && r.sessionId === single.id
+      );
+      const hasPulang = userRecordsList.some(
+        (r) => r.date === todayLocal && r.type === 'pulang' && r.sessionId === single.id
+      );
+      if (hasMasuk && !hasPulang) {
+        setAttendanceType('pulang');
+      } else if (!hasMasuk && curTime >= single.checkOutStart && curTime <= (single.checkOutEnd || '23:59')) {
+        setAttendanceType('pulang');
+      } else {
+        setAttendanceType('masuk');
+      }
+    } else if (allowed.length > 1) {
+      setUserSchedule((prev) => {
+        if (prev && allowed.some((s) => s.id === prev.id)) {
+          return allowed.find((s) => s.id === prev.id) || prev;
+        }
+        // Prioritaskan sesi yang sedang buka saat ini, atau sesi pertama yang ditugaskan
+        const openNow = allowed.find(isScheduleOpenNow);
+        if (openNow) {
+          setHasUserExplicitlySelectedSession(true);
+          const hasMasuk = userRecordsList.some(
+            (r) => r.date === todayLocal && r.type === 'masuk' && r.sessionId === openNow.id
+          );
+          const hasPulang = userRecordsList.some(
+            (r) => r.date === todayLocal && r.type === 'pulang' && r.sessionId === openNow.id
+          );
+          if (hasMasuk && !hasPulang) {
+            setAttendanceType('pulang');
+          }
+          return openNow;
+        }
+        return allowed[0] || null;
+      });
+    } else {
+      setUserSchedule(null);
+      setHasUserExplicitlySelectedSession(false);
+    }
   };
 
   useEffect(() => {
     loadData();
     detectDeviceLocation();
-    startCamera(cameraFacing);
 
     const handleSync = () => {
       loadData();
@@ -328,23 +392,122 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     window.addEventListener('storage', handleSync);
 
     return () => {
-      stopCamera();
       window.removeEventListener('kitarajin_cloud_sync', handleSync);
       window.removeEventListener('kitarajin_settings_updated', handleSync);
       window.removeEventListener('storage', handleSync);
     };
-  }, [currentUser]);
+  }, [currentUser.id]);
+
+  // Kelola lifecycle kamera presensi secara aman (otomatis menyambung saat masuk tab Kamera & GPS dan lepas saat pindah tab)
+  useEffect(() => {
+    if (activeTab !== 'presensi') {
+      cameraRequestIdRef.current++;
+      stopCameraStream(streamRef.current, videoRef.current);
+      streamRef.current = null;
+      setIsCameraActive(false);
+      setLiveDetection(null);
+      return;
+    }
+
+    let cancelled = false;
+    const reqId = ++cameraRequestIdRef.current;
+
+    const bootCamera = async () => {
+      stopCameraStream(streamRef.current, videoRef.current);
+      streamRef.current = null;
+      setIsCameraActive(false);
+      setIsCameraStarting(true);
+      setCameraError(null);
+      setLiveDetection(null);
+
+      try {
+        const res = await acquireCameraStream(cameraFacing);
+        if (cancelled || reqId !== cameraRequestIdRef.current) {
+          stopCameraStream(res.stream);
+          return;
+        }
+        streamRef.current = res.stream;
+
+        if (videoRef.current) {
+          const ready = await attachStreamToVideo(videoRef.current, res.stream);
+          if (!cancelled && reqId === cameraRequestIdRef.current) {
+            setIsCameraActive(ready);
+            if (!ready) {
+              setCameraError('Stream kamera terbuka namun gambar belum tampil. Klik Buka Kamera Ulang.');
+            }
+          }
+        }
+      } catch (err: any) {
+        if (!cancelled && reqId === cameraRequestIdRef.current) {
+          stopCameraStream(streamRef.current, videoRef.current);
+          streamRef.current = null;
+          setIsCameraActive(false);
+          setCameraError(formatCameraError(err));
+        }
+      } finally {
+        if (!cancelled && reqId === cameraRequestIdRef.current) {
+          setIsCameraStarting(false);
+        }
+      }
+    };
+
+    bootCamera();
+
+    return () => {
+      cancelled = true;
+      cameraRequestIdRef.current++;
+      stopCameraStream(streamRef.current, videoRef.current);
+      streamRef.current = null;
+    };
+  }, [activeTab, cameraFacing, cameraRetryTick, currentUser.id]);
+
+  // Deteksi wajah REAL-TIME langsung pada kamera presensi (350ms interval)
+  useEffect(() => {
+    if (activeTab !== 'presensi' || !isCameraActive) return;
+
+    let cancelled = false;
+    let isScanning = false;
+
+    const scanFrame = async () => {
+      if (cancelled || isScanning || !videoRef.current) return;
+      isScanning = true;
+      try {
+        const registeredFace = getFaceRegistryByUserId(currentUser.id);
+        const settings = getAppSettings();
+        const res = await detectFaceLiveFromVideo(videoRef.current, {
+          mirrorHorizontal: cameraFacing === 'user',
+          referenceEmbedding: registeredFace?.isActive ? registeredFace.faceEmbedding : undefined,
+          minMatchThreshold: settings.minFaceMatchThreshold || 0.75,
+        });
+        if (!cancelled && res) {
+          setLiveDetection(res);
+        }
+      } finally {
+        isScanning = false;
+      }
+    };
+
+    scanFrame();
+    const timer = setInterval(scanFrame, 350);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [activeTab, isCameraActive, cameraFacing, currentUser.id]);
 
   // Otomatis atur tombol Masuk vs Pulang saat karyawan memilih sesi
   const handleSelectSession = (sched: Schedule) => {
     setUserSchedule(sched);
     setHasUserExplicitlySelectedSession(true);
     setResultMessage(null);
-    const today = currentNow.toISOString().split('T')[0];
+    const today = getLocalDateString(currentNow);
     const hasMasuk = userRecords.some((r) => r.date === today && r.type === 'masuk' && r.sessionId === sched.id);
     const hasPulang = userRecords.some((r) => r.date === today && r.type === 'pulang' && r.sessionId === sched.id);
+    const curTime = `${String(currentNow.getHours()).padStart(2, '0')}:${String(currentNow.getMinutes()).padStart(2, '0')}`;
 
     if (hasMasuk && !hasPulang) {
+      setAttendanceType('pulang');
+    } else if (!hasMasuk && curTime >= sched.checkOutStart && (!sched.checkOutEnd || curTime <= sched.checkOutEnd)) {
       setAttendanceType('pulang');
     } else {
       setAttendanceType('masuk');
@@ -391,72 +554,35 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     );
   };
 
-  const startCamera = async (facing: 'user' | 'environment') => {
-    stopCamera();
+  const retryCamera = () => {
     setCameraError(null);
-
-    try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        setCameraError('Peramban Anda tidak mendukung akses kamera.');
-        return;
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: facing,
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-        },
-        audio: false,
-      });
-
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.onloadedmetadata = () => {
-          videoRef.current?.play().catch((err) => {
-            console.warn('Video play error:', err);
-          });
-        };
-      }
-      setIsCameraActive(true);
-    } catch (err: any) {
-      console.error('Camera error:', err);
-      setIsCameraActive(false);
-      if (err.name === 'NotAllowedError') {
-        setCameraError('Akses kamera ditolak. Berikan izin kamera di peramban Anda.');
-      } else if (err.name === 'NotFoundError') {
-        setCameraError('Kamera tidak ditemukan di perangkat ini.');
-      } else {
-        setCameraError('Gagal menghubungkan kamera perangkat.');
-      }
-    }
-  };
-
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-    setIsCameraActive(false);
+    setCameraRetryTick((t) => t + 1);
   };
 
   const toggleCameraFacing = () => {
     const nextFacing = cameraFacing === 'user' ? 'environment' : 'user';
     setCameraFacing(nextFacing);
-    startCamera(nextFacing);
   };
 
   // Submit Presensi
   const handleSubmitAttendance = async () => {
-    if (!videoRef.current) {
+    if (!videoRef.current || !isCameraActive) {
       setResultMessage({
         type: 'error',
-        title: 'Kamera Tidak Aktif',
-        description: 'Pastikan kamera aktif sebelum melakukan verifikasi presensi.',
+        title: 'Kamera Belum Siap',
+        description: 'Pastikan kamera aktif dan menampilkan wajah Anda sebelum melakukan verifikasi presensi.',
+      });
+      return;
+    }
+
+    if (!userSchedule || !userAllowedSchedules.some((s) => s.id === userSchedule.id)) {
+      setResultMessage({
+        type: 'error',
+        title: 'Sesi Presensi Tidak Valid',
+        description:
+          userAllowedSchedules.length === 0
+            ? 'Akun Anda belum memiliki sesi presensi yang diatur oleh Admin atau Kepala Sekolah.'
+            : 'Sesi yang dipilih tidak sesuai dengan jadwal sesi yang diatur untuk akun Anda.',
       });
       return;
     }
@@ -465,7 +591,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
       setResultMessage({
         type: 'error',
         title: 'Wajib Memilih Sesi Terlebih Dahulu',
-        description: 'Silakan pilih sesi yang akan Anda presensikan (Sesi 1, Sesi 2, atau Sesi 3) pada pilihan tombol sesi di bawah sebelum melakukan presensi.',
+        description: 'Silakan klik salah satu sesi yang Anda ikuti pada pilihan sesi di atas sebelum melakukan presensi.',
       });
       return;
     }
@@ -474,8 +600,22 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     if (!schedStatus.allowed) {
       setResultMessage({
         type: 'error',
-        title: 'Presensi Ditolak Aturan Jam',
+        title: 'Presensi Ditolak Aturan Jam Sesi',
         description: schedStatus.reason,
+      });
+      return;
+    }
+
+    const now = new Date();
+    const todayStr = getLocalDateString(now);
+    const alreadySubmitted = userRecords.find(
+      (r) => r.date === todayStr && r.type === attendanceType && r.sessionId === userSchedule.id
+    );
+    if (alreadySubmitted) {
+      setResultMessage({
+        type: 'error',
+        title: 'Sudah Presensi di Sesi Ini',
+        description: `Anda sudah melakukan presensi ${attendanceType.toUpperCase()} untuk ${userSchedule.sessionName || userSchedule.name} hari ini.`,
       });
       return;
     }
@@ -495,28 +635,42 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     setIsProcessing(true);
     setResultMessage(null);
 
-    // 2. Capture Frame Kamera
-    const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth || 640;
-    canvas.height = videoRef.current.videoHeight || 480;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      setIsProcessing(false);
-      return;
-    }
-    ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-    const liveFaceAnalysis = analyzeFaceFromCanvas(canvas);
-    setCapturedSnapshot(liveFaceAnalysis.photoDataUrl);
-
-    // 3. Ambil Database Wajah Terdaftar Pegawai
-    const registeredFace = getFaceRegistryByUserId(currentUser.id);
-    if (!registeredFace) {
+    // 2. Capture Frame Kamera dengan orientasi mirror konsisten dengan perekaman wajah
+    const canvas = captureVideoFrameToCanvas(videoRef.current, cameraFacing === 'user');
+    if (!canvas) {
       setIsProcessing(false);
       setResultMessage({
         type: 'error',
-        title: 'Wajah Belum Terdaftar',
+        title: 'Frame Kamera Belum Siap',
+        description: 'Kamera sedang menyiapkan gambar. Tunggu sebentar atau klik Buka Kamera Ulang.',
+      });
+      return;
+    }
+
+    const liveFaceAnalysis = analyzeFaceFromCanvas(canvas);
+    setCapturedSnapshot(liveFaceAnalysis.photoDataUrl);
+
+    if (!liveFaceAnalysis.hasFace) {
+      setIsProcessing(false);
+      setResultMessage({
+        type: 'error',
+        title: 'Wajah Tidak Terdeteksi Jelas',
         description:
-          'Data wajah Anda belum terdaftar di sistem. Hubungi Kepala Sekolah atau Admin untuk registrasi biometrik.',
+          liveFaceAnalysis.feedbackMessage ||
+          'Pastikan wajah terlihat jelas di dalam bingkai oval dan pencahayaan cukup.',
+      });
+      return;
+    }
+
+    // 3. Ambil Database Wajah Terdaftar Pegawai
+    const registeredFace = getFaceRegistryByUserId(currentUser.id);
+    if (!registeredFace || !registeredFace.isActive) {
+      setIsProcessing(false);
+      setResultMessage({
+        type: 'error',
+        title: 'Wajah Belum Terdaftar / Nonaktif',
+        description:
+          'Data wajah aktif Anda belum terdaftar di sistem. Hubungi Kepala Sekolah atau Admin untuk perekaman wajah.',
       });
       return;
     }
@@ -541,9 +695,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     }
 
     // 5. Tentukan Status Tepat Waktu atau Terlambat
-    const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
-    const currentHoursMinutes = now.toTimeString().substring(0, 5); // 'HH:MM'
+    const currentHoursMinutes = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
     let status: 'tepat_waktu' | 'terlambat' = 'tepat_waktu';
     if (attendanceType === 'masuk' && userSchedule) {
@@ -568,19 +720,20 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
       isFaceValid: true,
       faceSimilarityScore: similarityScore,
       photoRef: liveFaceAnalysis.photoDataUrl,
-      deviceInfo: `${navigator.userAgent.substring(0, 50)} &bull; ${cameraFacing}`,
-      sessionId: userSchedule?.id,
-      sessionName: userSchedule?.sessionName || userSchedule?.name,
-      notes: `Sesi: ${userSchedule?.sessionName || userSchedule?.name || 'Reguler'}`,
+      deviceInfo: `${navigator.userAgent.substring(0, 50)} • ${cameraFacing}`,
+      sessionId: userSchedule.id,
+      sessionName: userSchedule.sessionName || userSchedule.name,
+      notes: `Sesi: ${userSchedule.sessionName || userSchedule.name}`,
     });
 
     setIsProcessing(false);
 
     if (res.success) {
+      setAutoSubmitOnMatch(false);
       setResultMessage({
         type: 'success',
         title: `Presensi ${attendanceType.toUpperCase()} Berhasil!`,
-        description: `Status: ${status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}. Sesi: ${userSchedule?.sessionName || userSchedule?.name || 'Reguler'}. Jam: ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })} WIB. Verifikasi Wajah (${Math.round(similarityScore * 100)}%) dan Validasi GPS (${gpsDistance}m) Sah.`,
+        description: `Status: ${status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}. Sesi: ${userSchedule.sessionName || userSchedule.name}. Jam: ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })} WIB. Verifikasi Wajah (${Math.round(similarityScore * 100)}%) dan Validasi GPS (${gpsDistance ?? 0}m) Sah.`,
       });
       loadData();
     } else {
@@ -592,6 +745,28 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     }
   };
 
+  // Presensi Otomatis Cepat jika pengguna mengaktifkan mode Auto-Presensi & seluruh syarat sesi/GPS/wajah sudah hijau
+  useEffect(() => {
+    if (!autoSubmitOnMatch || activeTab !== 'presensi' || isProcessing || !isCameraActive) return;
+    if (!liveDetection?.faceDetected || !liveDetection?.isMatch) return;
+    if (!userSchedule || (!hasUserExplicitlySelectedSession && userAllowedSchedules.length > 1)) return;
+    const schedStatus = getScheduleStatus();
+    if (!schedStatus.allowed) return;
+    const settings = getAppSettings();
+    if (settings.requireStrictGps && !isInsideRadius) return;
+
+    const todayStr = getLocalDateString(currentNow);
+    const alreadyDone = userRecords.some(
+      (r) => r.date === todayStr && r.type === attendanceType && r.sessionId === userSchedule.id
+    );
+    if (alreadyDone) return;
+
+    const nowMs = Date.now();
+    if (nowMs - lastAutoSubmitAttemptRef.current < 3000) return;
+    lastAutoSubmitAttemptRef.current = nowMs;
+    handleSubmitAttendance();
+  }, [autoSubmitOnMatch, activeTab, isProcessing, isCameraActive, liveDetection, userSchedule?.id, attendanceType, isInsideRadius]);
+
   const getFilteredRecords = () => {
     // Karyawan hanya boleh melihat riwayat presensi pribadi (Request 2)
     const isRestrictedKaryawan = currentUser.role === 'karyawan';
@@ -602,12 +777,12 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     }
 
     if (dateFilterPreset === 'today') {
-      const today = currentNow.toISOString().split('T')[0];
+      const today = getLocalDateString(currentNow);
       records = records.filter((r) => r.date === today);
     } else if (dateFilterPreset === 'yesterday') {
-      const y = new Date();
+      const y = new Date(currentNow);
       y.setDate(y.getDate() - 1);
-      const yesterday = y.toISOString().split('T')[0];
+      const yesterday = getLocalDateString(y);
       records = records.filter((r) => r.date === yesterday);
     } else if (dateFilterPreset === 'custom' && customDate) {
       records = records.filter((r) => r.date === customDate);
@@ -750,72 +925,91 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                  {userAllowedSchedules.map((sch) => {
-                    const todayIso = currentNow.toISOString().split('T')[0];
-                    const recMasuk = userRecords.find(
-                      (r) => r.date === todayIso && r.type === 'masuk' && r.sessionId === sch.id
-                    );
-                    const recPulang = userRecords.find(
-                      (r) => r.date === todayIso && r.type === 'pulang' && r.sessionId === sch.id
-                    );
-                    const isSelected = userSchedule?.id === sch.id;
+                {userAllowedSchedules.length === 0 ? (
+                  <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>Belum ada sesi presensi yang diatur untuk akun Anda. Hubungi Admin atau Kepala Sekolah.</span>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    {userAllowedSchedules.map((sch) => {
+                      const todayIso = getLocalDateString(currentNow);
+                      const recMasuk = userRecords.find(
+                        (r) => r.date === todayIso && r.type === 'masuk' && r.sessionId === sch.id
+                      );
+                      const recPulang = userRecords.find(
+                        (r) => r.date === todayIso && r.type === 'pulang' && r.sessionId === sch.id
+                      );
+                      const isSelected = userSchedule?.id === sch.id;
+                      const curTime = `${String(currentNow.getHours()).padStart(2, '0')}:${String(currentNow.getMinutes()).padStart(2, '0')}`;
+                      const isOpenWindow =
+                        curTime >= sch.checkInStart && curTime <= (sch.checkOutEnd || '23:59');
 
-                    return (
-                      <button
-                        key={sch.id}
-                        type="button"
-                        onClick={() => handleSelectSession(sch)}
-                        className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
-                          isSelected
-                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-md ring-2 ring-emerald-400/40'
-                            : 'bg-white border-slate-200/90 text-slate-800 hover:bg-slate-100/90 shadow-2xs'
-                        }`}
-                      >
-                        <div>
-                          <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-white/20">
-                            <span className="font-extrabold text-xs">
-                              {sch.sessionName || sch.name}
-                            </span>
-                            {isSelected ? (
-                              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-white text-emerald-800">
-                                ✓ Aktif
+                      return (
+                        <button
+                          key={sch.id}
+                          type="button"
+                          onClick={() => handleSelectSession(sch)}
+                          className={`p-3 rounded-2xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                            isSelected
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-md ring-2 ring-emerald-400/40'
+                              : 'bg-white border-slate-200/90 text-slate-800 hover:bg-slate-100/90 shadow-2xs'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-white/20">
+                              <span className="font-extrabold text-xs">
+                                {sch.sessionName || sch.name}
                               </span>
-                            ) : (
-                              <span className="text-[10px] text-slate-400 font-medium">
-                                Pilih
-                              </span>
-                            )}
-                          </div>
-                        </div>
+                              {isSelected ? (
+                                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-white text-emerald-800">
+                                  ✓ Aktif
+                                </span>
+                              ) : isOpenWindow ? (
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
+                                  Buka
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-slate-400 font-medium">
+                                  Pilih
+                                </span>
+                              )}
+                            </div>
 
-                        {/* Status Presensi Hari Ini - Bersih tanpa tampilan jam/menit */}
-                        <div className={`mt-2 pt-1.5 border-t text-[10px] space-y-0.5 ${isSelected ? 'border-white/20 text-white' : 'border-slate-100 text-slate-600'}`}>
-                          <div className="flex items-center justify-between">
-                            <span>Masuk:</span>
-                            {recMasuk ? (
-                              <span className={`font-bold ${isSelected ? 'text-emerald-100' : 'text-emerald-700'}`}>
-                                Tercatat ✓
-                              </span>
-                            ) : (
-                              <span className={isSelected ? 'text-emerald-200/70 italic' : 'text-slate-400 italic'}>Belum</span>
-                            )}
+                            <div className={`text-[10px] space-y-0.5 ${isSelected ? 'text-emerald-100' : 'text-slate-500'}`}>
+                              <div>Masuk: <span className="font-mono font-bold">{sch.checkInStart}–{sch.checkInDeadline}</span></div>
+                              <div>Pulang: <span className="font-mono font-bold">{sch.checkOutStart}–{sch.checkOutEnd || '18:00'}</span></div>
+                            </div>
                           </div>
-                          <div className="flex items-center justify-between">
-                            <span>Pulang:</span>
-                            {recPulang ? (
-                              <span className={`font-bold ${isSelected ? 'text-indigo-100' : 'text-indigo-700'}`}>
-                                Tercatat ✓
-                              </span>
-                            ) : (
-                              <span className={isSelected ? 'text-emerald-200/70 italic' : 'text-slate-400 italic'}>Belum</span>
-                            )}
+
+                          {/* Status Presensi Hari Ini */}
+                          <div className={`mt-2 pt-1.5 border-t text-[10px] space-y-0.5 ${isSelected ? 'border-white/20 text-white' : 'border-slate-100 text-slate-600'}`}>
+                            <div className="flex items-center justify-between">
+                              <span>Masuk:</span>
+                              {recMasuk ? (
+                                <span className={`font-bold ${isSelected ? 'text-emerald-100' : 'text-emerald-700'}`}>
+                                  Tercatat ✓
+                                </span>
+                              ) : (
+                                <span className={isSelected ? 'text-emerald-200/70 italic' : 'text-slate-400 italic'}>Belum</span>
+                              )}
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span>Pulang:</span>
+                              {recPulang ? (
+                                <span className={`font-bold ${isSelected ? 'text-indigo-100' : 'text-indigo-700'}`}>
+                                  Tercatat ✓
+                                </span>
+                              ) : (
+                                <span className={isSelected ? 'text-emerald-200/70 italic' : 'text-slate-400 italic'}>Belum</span>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
 
@@ -897,7 +1091,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                 );
               })()}
 
-              {/* Viewport Kamera Video */}
+              {/* Viewport Kamera Video + Deteksi Wajah Langsung */}
               <div className="relative aspect-4/3 bg-slate-950 rounded-2xl overflow-hidden border-2 border-slate-200 flex items-center justify-center shadow-inner">
                 <video
                   ref={videoRef}
@@ -907,42 +1101,148 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                   className={`w-full h-full object-cover ${cameraFacing === 'user' ? 'scale-x-[-1]' : ''}`}
                 />
 
-                {/* Target Face Guide Oval */}
+                {/* Bounding Box Otomatis (jika didukung FaceDetector browser) */}
+                {isCameraActive && liveDetection?.box && (
+                  <div
+                    className={`absolute border-2 rounded-xl pointer-events-none transition-all duration-150 ${
+                      liveDetection.isMatch
+                        ? 'border-emerald-400 shadow-[0_0_16px_rgba(16,185,129,0.55)]'
+                        : 'border-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.45)]'
+                    }`}
+                    style={{
+                      left: `${liveDetection.box.x * 100}%`,
+                      top: `${liveDetection.box.y * 100}%`,
+                      width: `${liveDetection.box.width * 100}%`,
+                      height: `${liveDetection.box.height * 100}%`,
+                    }}
+                  />
+                )}
+
+                {/* Target Face Guide Oval + Live Status */}
                 <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                  <div className="w-48 h-60 border-2 border-dashed border-emerald-400/70 rounded-full animate-pulse shadow-[0_0_20px_rgba(16,185,129,0.2)] flex items-center justify-center">
-                    <span className="text-[10px] text-emerald-300 font-bold uppercase tracking-wider bg-slate-900/70 px-2 py-0.5 rounded-full">
-                      Posisikan Wajah Di Sini
+                  <div
+                    className={`w-48 h-60 border-2 border-dashed rounded-full flex items-end justify-center pb-3 transition-colors ${
+                      liveDetection?.isMatch
+                        ? 'border-emerald-400 shadow-[0_0_24px_rgba(16,185,129,0.35)]'
+                        : liveDetection?.faceDetected
+                        ? 'border-amber-400 shadow-[0_0_20px_rgba(245,158,11,0.25)]'
+                        : 'border-emerald-400/60 animate-pulse'
+                    }`}
+                  >
+                    <span
+                      className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
+                        liveDetection?.isMatch
+                          ? 'bg-emerald-600/95 text-white'
+                          : liveDetection?.faceDetected
+                          ? 'bg-amber-600/90 text-white'
+                          : 'bg-slate-900/80 text-emerald-300'
+                      }`}
+                    >
+                      {liveDetection?.statusText || 'Mendeteksi Wajah...'}
                     </span>
                   </div>
                 </div>
 
+                {/* Badge Mode Kamera & Status Deteksi Wajah */}
+                {isCameraActive && (
+                  <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none">
+                    <span className="px-2 py-1 bg-slate-900/75 backdrop-blur-xs text-white rounded-lg text-[10px] font-semibold">
+                      {cameraFacing === 'user' ? 'Kamera Depan' : 'Kamera Belakang'}
+                    </span>
+                    {liveDetection && (
+                      <span
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-extrabold backdrop-blur-xs ${
+                          liveDetection.isMatch
+                            ? 'bg-emerald-600/90 text-white'
+                            : liveDetection.faceDetected
+                            ? 'bg-amber-500/90 text-slate-950'
+                            : 'bg-slate-900/75 text-slate-200'
+                        }`}
+                      >
+                        {liveDetection.isMatch
+                          ? `Cocok ${Math.round((liveDetection.similarityScore || 0) * 100)}% ✓`
+                          : liveDetection.faceDetected
+                          ? `Terdeteksi (${liveDetection.qualityScore}%)`
+                          : 'Pindai Wajah...'}
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 {!isCameraActive && (
-                  <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center text-slate-300 p-4 text-center">
-                    <Camera className="w-10 h-10 text-slate-500 mb-2 animate-bounce" />
-                    <span className="text-xs font-semibold">Menghubungkan Kamera...</span>
-                    <button
-                      type="button"
-                      onClick={() => startCamera(cameraFacing)}
-                      className="mt-3 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold cursor-pointer"
-                    >
-                      Buka Kamera Ulang
-                    </button>
+                  <div className="absolute inset-0 bg-slate-950/90 flex flex-col items-center justify-center text-slate-200 p-5 text-center z-10 gap-2.5">
+                    {cameraError ? (
+                      <>
+                        <AlertCircle className="w-9 h-9 text-rose-400" />
+                        <p className="text-xs leading-relaxed text-slate-200 max-w-xs">{cameraError}</p>
+                        <button
+                          type="button"
+                          onClick={retryCamera}
+                          className="mt-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold cursor-pointer flex items-center gap-1.5"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Coba Kamera Ulang</span>
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <Camera className="w-10 h-10 text-emerald-400 animate-pulse" />
+                        <span className="text-xs font-semibold">
+                          {isCameraStarting ? 'Menghubungkan Kamera...' : 'Menyiapkan Kamera...'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={retryCamera}
+                          className="mt-1 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold cursor-pointer"
+                        >
+                          Buka Kamera Ulang
+                        </button>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
 
-              {cameraError && (
-                <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-                  <span>{cameraError}</span>
+              {/* Strip Status Deteksi Wajah Live + Toggle Auto-Presensi Cepat */}
+              {isCameraActive && (
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+                        liveDetection?.isMatch
+                          ? 'bg-emerald-500 animate-pulse'
+                          : liveDetection?.faceDetected
+                          ? 'bg-amber-500 animate-pulse'
+                          : 'bg-slate-400'
+                      }`}
+                    />
+                    <span className="text-[11px] font-semibold text-slate-700">
+                      {!getFaceRegistryByUserId(currentUser.id)?.isActive
+                        ? 'Data wajah Anda belum terdaftar. Hubungi Admin/Kepala Sekolah untuk perekaman wajah.'
+                        : liveDetection?.hintText || 'Kamera aktif mendeteksi wajah secara langsung...'}
+                    </span>
+                  </div>
+
+                  <label className="flex items-center gap-2 shrink-0 cursor-pointer select-none bg-white px-2.5 py-1.5 rounded-xl border border-slate-200">
+                    <input
+                      type="checkbox"
+                      checked={autoSubmitOnMatch}
+                      onChange={(e) => setAutoSubmitOnMatch(e.target.checked)}
+                      className="w-3.5 h-3.5 accent-emerald-600 cursor-pointer"
+                    />
+                    <span className="text-[11px] font-bold text-slate-700">Auto-Presensi Saat Cocok</span>
+                  </label>
                 </div>
               )}
 
               {/* Primary Action Button */}
               {(() => {
                 const schedStatus = getScheduleStatus();
-                const isSessionConfirmed = hasUserExplicitlySelectedSession || userAllowedSchedules.length <= 1;
-                const isDisabled = isProcessing || !schedStatus.allowed || !isSessionConfirmed;
+                const isSessionConfirmed =
+                  Boolean(userSchedule) &&
+                  userAllowedSchedules.some((s) => s.id === userSchedule?.id) &&
+                  (hasUserExplicitlySelectedSession || userAllowedSchedules.length <= 1);
+                const isDisabled = isProcessing || !isCameraActive || !schedStatus.allowed || !isSessionConfirmed;
 
                 return (
                   <button
@@ -959,10 +1259,15 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                   >
                     {isProcessing ? (
                       <span>Memverifikasi Wajah &amp; GPS...</span>
+                    ) : !isCameraActive ? (
+                      <div className="flex items-center gap-2">
+                        <Camera className="w-4 h-4 text-slate-200" />
+                        <span>Menunggu Kamera Siap...</span>
+                      </div>
                     ) : !isSessionConfirmed ? (
                       <div className="flex items-center gap-2">
                         <AlertCircle className="w-4 h-4 text-amber-200" />
-                        <span>⚠️ Silakan Pilih Sesi (Sesi 1, 2, atau 3) di Atas</span>
+                        <span>Pilih Sesi Presensi Anda di Atas</span>
                       </div>
                     ) : !schedStatus.allowed ? (
                       <div className="flex items-center gap-2">
@@ -1184,7 +1489,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                 type="button"
                 onClick={() => {
                   setDateFilterPreset('today');
-                  setCustomDate(new Date().toISOString().split('T')[0]);
+                  setCustomDate(getLocalDateString(currentNow));
                 }}
                 className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   dateFilterPreset === 'today'
@@ -1199,9 +1504,9 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                 type="button"
                 onClick={() => {
                   setDateFilterPreset('yesterday');
-                  const d = new Date();
+                  const d = new Date(currentNow);
                   d.setDate(d.getDate() - 1);
-                  setCustomDate(d.toISOString().split('T')[0]);
+                  setCustomDate(getLocalDateString(d));
                 }}
                 className={`px-3 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                   dateFilterPreset === 'yesterday'
@@ -1284,7 +1589,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-2 border-b border-slate-200/60 gap-1.5">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-bold text-slate-900 text-xs">{pair.date}</span>
-                        {pair.date === currentNow.toISOString().split('T')[0] && (
+                        {pair.date === getLocalDateString(currentNow) && (
                           <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-100 text-emerald-800">
                             Hari Ini
                           </span>
