@@ -187,7 +187,6 @@ export interface AppSettings {
   googleSheetSpreadsheetId?: string;
   googleDriveFolderId?: string;
   googleDriveUsersFileId?: string;
-  googleAppsScriptWebhookUrl?: string;
   requireStrictFaceVerification: boolean;
   requireStrictGps: boolean;
   minFaceMatchThreshold: number; // e.g. 0.75 (75%)

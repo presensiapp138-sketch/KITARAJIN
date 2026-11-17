@@ -486,8 +486,6 @@ function mergeSettingsDocuments(localSettings: any, remoteSettings: any): any {
     merged.googleDriveFolderId || remoteSettings.googleDriveFolderId || localSettings.googleDriveFolderId;
   merged.googleDriveUsersFileId =
     merged.googleDriveUsersFileId || remoteSettings.googleDriveUsersFileId || localSettings.googleDriveUsersFileId;
-  merged.googleAppsScriptWebhookUrl =
-    merged.googleAppsScriptWebhookUrl || remoteSettings.googleAppsScriptWebhookUrl || localSettings.googleAppsScriptWebhookUrl;
   merged.googleAccountEmail =
     merged.googleAccountEmail || remoteSettings.googleAccountEmail || localSettings.googleAccountEmail;
 
@@ -495,91 +493,109 @@ function mergeSettingsDocuments(localSettings: any, remoteSettings: any): any {
 }
 
 /**
- * Tarik seluruh data Cloud Firestore saat aplikasi pertama kali dibuka (khususnya domain baru seperti Vercel)
- * SEBELUM initializeDatabase() berjalan agar akun/pengaturan yang sudah diubah tidak pernah tertimpa data demo awal.
+ * Tarik seluruh data Cloud Firestore secara paralel & cepat (tidak memblokir render UI berulang)
  */
-export async function pullAllCloudDataOnStartup(): Promise<void> {
-  const fetchAll = async () => {
-    // Kirim dulu antrean offline yang tersimpan di perangkat sebelum menarik snapshot terbaru
-    await flushCloudOutbox().catch(() => {});
+export async function pullAllCloudDataOnStartup(options?: {
+  criticalOnly?: boolean;
+  timeoutMs?: number;
+}): Promise<void> {
+  const timeoutMs = options?.timeoutMs ?? 2500;
+  const criticalOnly = Boolean(options?.criticalOnly);
 
-    // Tarik settings lebih dulu agar flag inisialisasi & ID Workspace selalu tersedia
+  const fetchAll = async () => {
+    // Kirim dulu antrean offline yang tersimpan di perangkat secara paralel dengan pull
+    const outboxPromise = loadOutbox().length > 0 ? flushCloudOutbox().catch(() => 0) : Promise.resolve(0);
+
+    const targetCollections = criticalOnly
+      ? [SYNC_COLLECTIONS.SETTINGS, SYNC_COLLECTIONS.USERS]
+      : Object.values(SYNC_COLLECTIONS);
+
+    const [, collectionSettled] = await Promise.all([
+      outboxPromise,
+      Promise.allSettled(
+        targetCollections.map(async (colName) => ({
+          colName,
+          snapshot: await getDocs(collection(db, colName)),
+        }))
+      ),
+    ]);
+
     let remoteDbAlreadyInitialized = false;
-    try {
-      const settingsSnap = await getDocs(collection(db, SYNC_COLLECTIONS.SETTINGS));
-      const settingsDoc = settingsSnap.docs.find((d) => d.id === 'global')?.data();
-      if (settingsDoc) {
-        remoteDbAlreadyInitialized = true;
-        cloudConnectionActive = true;
-        lastSyncTime = new Date().toISOString();
-        const storageKey = LOCAL_STORAGE_KEYS.settings;
-        const localStr = localStorage.getItem(storageKey);
-        const localSettings = localStr ? JSON.parse(localStr) : null;
-        const mergedSettings = mergeSettingsDocuments(localSettings, settingsDoc);
-        localStorage.setItem(storageKey, JSON.stringify(mergedSettings));
-        localStorage.setItem('kitarajin_seed_completed_v1', 'true');
-        syncPendingWorkspaceFlagFromSettings(mergedSettings);
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new CustomEvent('kitarajin_settings_updated'));
+    const otherResults: { colName: typeof targetCollections[number]; snapshot: any }[] = [];
+
+    for (const item of collectionSettled) {
+      if (item.status !== 'fulfilled') continue;
+      const { colName, snapshot } = item.value;
+      if (colName === SYNC_COLLECTIONS.SETTINGS) {
+        const settingsDoc = snapshot.docs.find((d: any) => d.id === 'global')?.data();
+        if (settingsDoc) {
+          remoteDbAlreadyInitialized = true;
+          cloudConnectionActive = true;
+          lastSyncTime = new Date().toISOString();
+          const storageKey = LOCAL_STORAGE_KEYS.settings;
+          const localStr = localStorage.getItem(storageKey);
+          const localSettings = localStr ? JSON.parse(localStr) : null;
+          const mergedSettings = mergeSettingsDocuments(localSettings, settingsDoc);
+          localStorage.setItem(storageKey, JSON.stringify(mergedSettings));
+          localStorage.setItem('kitarajin_seed_completed_v1', 'true');
+          syncPendingWorkspaceFlagFromSettings(mergedSettings);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('kitarajin_settings_updated'));
+          }
         }
+      } else {
+        otherResults.push({ colName, snapshot });
       }
-    } catch (err) {
-      console.warn('Startup pull note (settings):', err);
     }
 
-    const otherCollections = Object.values(SYNC_COLLECTIONS).filter((c) => c !== SYNC_COLLECTIONS.SETTINGS);
-    await Promise.allSettled(
-      otherCollections.map(async (colName) => {
-        try {
-          const snapshot = await getDocs(collection(db, colName));
-          const storageKey = LOCAL_STORAGE_KEYS[colName];
-
-          if (colName === 'users') {
-            if (snapshot.empty) return;
+    for (const { colName, snapshot } of otherResults) {
+      try {
+        const storageKey = LOCAL_STORAGE_KEYS[colName];
+        if (colName === 'users') {
+          if (snapshot.empty) continue;
+          cloudConnectionActive = true;
+          lastSyncTime = new Date().toISOString();
+          const remoteUsers = snapshot.docs.map((docSnap: any) => ({
+            id: docSnap.id,
+            ...docSnap.data(),
+          }));
+          const localStr = localStorage.getItem(storageKey);
+          const localUsers = localStr ? JSON.parse(localStr) : [];
+          const { merged, toUpload } = mergeUserRecordsNonDestructive(
+            Array.isArray(localUsers) ? localUsers : [],
+            remoteUsers
+          );
+          if (merged.length > 0) {
+            localStorage.setItem(storageKey, JSON.stringify(merged));
+            syncCurrentSessionUserFromList(merged);
+          }
+          for (const u of toUpload) {
+            syncRecordToCloud(SYNC_COLLECTIONS.USERS, String(u.id), u).catch(() => {});
+          }
+        } else {
+          if (!snapshot.empty) {
             cloudConnectionActive = true;
             lastSyncTime = new Date().toISOString();
-            const remoteUsers = snapshot.docs.map((docSnap) => ({
-              id: docSnap.id,
-              ...docSnap.data(),
-            }));
-            const localStr = localStorage.getItem(storageKey);
-            const localUsers = localStr ? JSON.parse(localStr) : [];
-            const { merged, toUpload } = mergeUserRecordsNonDestructive(
-              Array.isArray(localUsers) ? localUsers : [],
-              remoteUsers
-            );
-            if (merged.length > 0) {
-              localStorage.setItem(storageKey, JSON.stringify(merged));
-              syncCurrentSessionUserFromList(merged);
-            }
-            for (const u of toUpload) {
-              syncRecordToCloud(SYNC_COLLECTIONS.USERS, String(u.id), u).catch(() => {});
-            }
-          } else {
-            if (!snapshot.empty) {
-              cloudConnectionActive = true;
-              lastSyncTime = new Date().toISOString();
-            }
-            const remoteItems = snapshot.docs.map((docSnap) => ({
-              id: docSnap.id,
-              ...docSnap.data(),
-            }));
-            const mergedItems = mergeRemoteWithPendingOutbox(colName, remoteItems);
-            if (mergedItems.length > 0 || remoteDbAlreadyInitialized) {
-              localStorage.setItem(storageKey, JSON.stringify(mergedItems));
-            }
           }
-        } catch (colErr) {
-          console.warn(`Startup pull note (${colName}):`, colErr);
+          const remoteItems = snapshot.docs.map((docSnap: any) => ({
+            id: docSnap.id,
+            ...docSnap.data(),
+          }));
+          const mergedItems = mergeRemoteWithPendingOutbox(colName, remoteItems);
+          if (mergedItems.length > 0 || remoteDbAlreadyInitialized) {
+            localStorage.setItem(storageKey, JSON.stringify(mergedItems));
+          }
         }
-      })
-    );
+      } catch (colErr) {
+        console.warn(`Startup pull note (${colName}):`, colErr);
+      }
+    }
   };
 
   try {
     await Promise.race([
       fetchAll(),
-      new Promise<void>((resolve) => setTimeout(resolve, 6000)),
+      new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
     ]);
   } catch (err) {
     console.warn('pullAllCloudDataOnStartup warning:', err);
@@ -817,10 +833,12 @@ export function startMultiDeviceRealtimeSync(onUpdateCallback?: (collectionName:
   }
   isSyncInitialized = true;
 
-  testFirestoreConnection().catch(() => {});
+  // Flush antrean offline hanya jika memang ada antrean tertunda; hindari 10 query getDocs ganda saat startup
   const initialSyncTimer = setTimeout(() => {
-    autoSyncCloudInBackground().catch(() => {});
-  }, 1500);
+    if (loadOutbox().length > 0) {
+      flushCloudOutbox().catch(() => {});
+    }
+  }, 800);
 
   const collectionsToWatch = Object.values(SYNC_COLLECTIONS);
 

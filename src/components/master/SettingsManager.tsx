@@ -80,8 +80,6 @@ import {
   autoSyncAllDataToWorkspace,
   getWorkspaceSyncRuntimeStatus,
   getGoogleConsoleSetupInfo,
-  isValidAppsScriptWebhookUrl,
-  getAppsScriptBridgeTemplate,
 } from '../../services/workspaceService';
 
 interface SettingsManagerProps {
@@ -131,8 +129,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [requireStrictFace, setRequireStrictFace] = useState(settings.requireStrictFaceVerification);
   const [sheetIdInput, setSheetIdInput] = useState(settings.googleSheetSpreadsheetId || '');
   const [driveIdInput, setDriveIdInput] = useState(settings.googleDriveFolderId || '');
-  const [webhookUrlInput, setWebhookUrlInput] = useState(settings.googleAppsScriptWebhookUrl || '');
-  const [showWebhookGuide, setShowWebhookGuide] = useState(Boolean(settings.googleAppsScriptWebhookUrl));
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Ubah Password Kepala Sekolah State
@@ -183,24 +179,21 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const googleConsoleInfo = getGoogleConsoleSetupInfo();
   const hasMountedTargetsRef = React.useRef(false);
 
-  const persistWorkspaceTargetIds = (rawSheet: string, rawDrive: string, rawWebhook?: string) => {
+  const persistWorkspaceTargetIds = (rawSheet: string, rawDrive: string) => {
     const cleanSheet = cleanGoogleId(rawSheet);
     const cleanDrive = cleanGoogleId(rawDrive);
-    const cleanWebhook = (rawWebhook !== undefined ? rawWebhook : webhookUrlInput).trim();
     const currentSettings = getAppSettings();
     const prevSheet = cleanGoogleId(currentSettings.googleSheetSpreadsheetId || '');
     const prevDrive = cleanGoogleId(currentSettings.googleDriveFolderId || '');
-    const prevWebhook = (currentSettings.googleAppsScriptWebhookUrl || '').trim();
 
-    if (cleanSheet === prevSheet && cleanDrive === prevDrive && cleanWebhook === prevWebhook) return;
+    if (cleanSheet === prevSheet && cleanDrive === prevDrive) return;
 
-    const hasTarget = Boolean(cleanSheet || cleanDrive || isValidAppsScriptWebhookUrl(cleanWebhook));
+    const hasTarget = Boolean(cleanSheet || cleanDrive);
     updateAppSettings(
       currentUser,
       {
         googleSheetSpreadsheetId: cleanSheet,
         googleDriveFolderId: cleanDrive,
-        googleAppsScriptWebhookUrl: cleanWebhook,
         autoWorkspaceSyncEnabled: hasTarget ? true : currentSettings.autoWorkspaceSyncEnabled,
         storageMode: hasTarget ? 'google_workspace_sync' : currentSettings.storageMode,
       },
@@ -237,7 +230,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     setRequireStrictFace(data.requireStrictFaceVerification);
     setSheetIdInput(data.googleSheetSpreadsheetId || '');
     setDriveIdInput(data.googleDriveFolderId || '');
-    setWebhookUrlInput(data.googleAppsScriptWebhookUrl || '');
     hasMountedTargetsRef.current = true;
 
     // Sinkronkan status profile terbaru
@@ -296,9 +288,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       if (latestData.googleDriveFolderId) {
         setDriveIdInput((prev) => prev || latestData.googleDriveFolderId || '');
       }
-      if (latestData.googleAppsScriptWebhookUrl) {
-        setWebhookUrlInput((prev) => prev || latestData.googleAppsScriptWebhookUrl || '');
-      }
       const syncedGoogleEmail = getConnectedGoogleEmail() || latestData.googleAccountEmail;
       if (syncedGoogleEmail) {
         setIsGoogleConnected(true);
@@ -322,15 +311,15 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     };
   }, []);
 
-  // Auto-simpan ID Spreadsheet, Folder Drive & Webhook URL setelah pengguna selesai menempel/mengetik
+  // Auto-simpan ID Spreadsheet & Folder Drive setelah pengguna selesai menempel/mengetik
   // agar tidak perlu mengetik ulang meskipun aplikasi di-refresh, ditutup & dibuka kembali
   useEffect(() => {
     if (!hasMountedTargetsRef.current) return;
     const timer = setTimeout(() => {
-      persistWorkspaceTargetIds(sheetIdInput, driveIdInput, webhookUrlInput);
+      persistWorkspaceTargetIds(sheetIdInput, driveIdInput);
     }, 900);
     return () => clearTimeout(timer);
-  }, [sheetIdInput, driveIdInput, webhookUrlInput]);
+  }, [sheetIdInput, driveIdInput]);
 
   useEffect(() => {
     setKsName(currentUser.name);
@@ -743,8 +732,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
     const cleanSheet = cleanGoogleId(sheetIdInput);
     const cleanDrive = cleanGoogleId(driveIdInput);
-    const cleanWebhook = webhookUrlInput.trim();
-    const hasTarget = Boolean(cleanSheet || cleanDrive || isValidAppsScriptWebhookUrl(cleanWebhook));
+    const hasTarget = Boolean(cleanSheet || cleanDrive);
 
     const res = updateAppSettings(currentUser, {
       schoolName: schoolName.trim(),
@@ -756,7 +744,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       requireStrictFaceVerification: requireStrictFace,
       googleSheetSpreadsheetId: cleanSheet,
       googleDriveFolderId: cleanDrive,
-      googleAppsScriptWebhookUrl: cleanWebhook,
       autoWorkspaceSyncEnabled: hasTarget ? true : settings.autoWorkspaceSyncEnabled,
       storageMode: hasTarget ? 'google_workspace_sync' : settings.storageMode,
     });
@@ -764,7 +751,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     if (res.success) {
       setSheetIdInput(cleanSheet);
       setDriveIdInput(cleanDrive);
-      setWebhookUrlInput(cleanWebhook);
       setFeedback({
         type: 'success',
         message: 'Pengaturan sekolah & tautan Drive/Sheets berhasil disimpan permanen dan disinkronkan ke database!',
@@ -1306,22 +1292,20 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 {workspaceRuntime.hasTargetConfigured && (
                   <span
                     className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-extrabold border ${
-                      (workspaceRuntime.hasToken || workspaceRuntime.hasWebhook)
+                      workspaceRuntime.hasToken
                         ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                         : 'bg-amber-50 text-amber-800 border-amber-200'
                     }`}
                   >
                     <span
                       className={`w-1.5 h-1.5 rounded-full ${
-                        (workspaceRuntime.hasToken || workspaceRuntime.hasWebhook) ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                        workspaceRuntime.hasToken ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
                       }`}
                     />
                     {(workspaceRuntime.isSyncing || workspaceRuntime.isScheduled)
                       ? 'MENYINKRONKAN OTOMATIS DI LATAR BELAKANG...'
                       : workspaceRuntime.hasToken
                       ? 'AUTO-SYNC DRIVE & SHEET AKTIF'
-                      : workspaceRuntime.hasWebhook
-                      ? 'AUTO-SYNC WEBHOOK AKTIF (TAHAN REFRESH)'
                       : workspaceRuntime.hasPending
                       ? 'MENUNGGU OTORISASI 1x UNTUK AUTO-SYNC'
                       : 'TERTAUT (SIAP AUTO-SYNC)'}
@@ -1331,10 +1315,8 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               <p className="text-xs font-normal text-slate-500">
                 {workspaceRuntime.hasToken && workspaceRuntime.hasTargetConfigured
                   ? 'Auto-Sync aktif: setiap tambah, edit, hapus, maupun presensi otomatis tersinkron ke Cloud Firestore, Google Drive & Sheets tanpa perlu klik manual.'
-                  : workspaceRuntime.hasWebhook
-                  ? 'Mode Auto-Sync Webhook aktif: sinkronisasi ke Google Drive & Sheets berjalan otomatis di latar belakang termasuk setelah refresh browser tanpa klik tombol.'
                   : workspaceRuntime.hasTargetConfigured
-                  ? 'ID Spreadsheet & Folder Drive tersimpan permanen. Klik 1x "Aktifkan Auto-Sync Sesi" setelah refresh browser, atau pasang URL Webhook di bawah untuk auto-sync 0 klik setelah refresh.'
+                  ? 'ID Spreadsheet & Folder Drive tersimpan permanen (tidak perlu diketik ulang). Klik 1x "Aktifkan Auto-Sync Sesi" setelah refresh untuk melanjutkan auto-sync di sesi browser ini.'
                   : 'Tempel ID/Link 1x saja (otomatis tersimpan permanen) lalu hubungkan akun Google; setiap tambah, edit, hapus, & presensi akan tersinkron di latar belakang ke Drive & Sheets.'}
               </p>
             </div>
@@ -1345,24 +1327,24 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             {isGoogleConnected ? (
               <div
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-xl flex-wrap border ${
-                  (workspaceRuntime.hasToken || workspaceRuntime.hasWebhook)
+                  workspaceRuntime.hasToken
                     ? 'bg-emerald-50 border-emerald-200'
                     : 'bg-amber-50 border-amber-200'
                 }`}
               >
                 <span
                   className={`w-2 h-2 rounded-full ${
-                    (workspaceRuntime.hasToken || workspaceRuntime.hasWebhook) ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+                    workspaceRuntime.hasToken ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
                   }`}
                 />
                 <span
                   className={`text-xs font-bold ${
-                    (workspaceRuntime.hasToken || workspaceRuntime.hasWebhook) ? 'text-emerald-800' : 'text-amber-900'
+                    workspaceRuntime.hasToken ? 'text-emerald-800' : 'text-amber-900'
                   }`}
                 >
                   {googleUserEmail || 'Akun Google Tersimpan'}
                 </span>
-                {!workspaceRuntime.hasToken && !workspaceRuntime.hasWebhook && (
+                {!workspaceRuntime.hasToken && (
                   <button
                     type="button"
                     onClick={() => handleGoogleConnect(googleUserEmail || ksEmail, false)}
@@ -1481,85 +1463,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               💡 Otomatis tersimpan ke Cloud — boleh kosong jika ingin dibuatkan Folder baru otomatis.
             </span>
           </div>
-        </div>
-
-        {/* Opsional: Webhook Apps Script agar tetap auto-sync setelah Refresh browser tanpa klik */}
-        <div className="p-4 rounded-xl bg-teal-50/60 border border-teal-200/80 space-y-2.5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs font-extrabold text-teal-950">
-                  Mode Tanpa Klik Setelah Refresh (Webhook Apps Script)
-                </span>
-                {workspaceRuntime.hasWebhook ? (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
-                    Webhook Aktif (Auto-Sync saat Refresh)
-                  </span>
-                ) : (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
-                    Opsional
-                  </span>
-                )}
-              </div>
-              <p className="text-[11px] text-teal-900/80 mt-0.5">
-                Keamanan browser menghapus token login Google saat halaman di-refresh. Jika URL Web App Apps Script dipasang 1x di sini, sinkronisasi Drive &amp; Sheets tetap berjalan otomatis saat refresh maupun dari HP karyawan tanpa perlu klik apa pun.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowWebhookGuide((prev) => !prev)}
-              className="text-xs font-bold text-teal-800 hover:text-teal-950 underline shrink-0 self-start sm:self-center cursor-pointer"
-            >
-              {showWebhookGuide ? 'Tutup Panduan' : 'Pasang Webhook (0 Klik saat Refresh)'}
-            </button>
-          </div>
-
-          {showWebhookGuide && (
-            <div className="space-y-2.5 pt-2 border-t border-teal-200/60">
-              <div className="flex flex-col sm:flex-row gap-2">
-                <input
-                  type="url"
-                  value={webhookUrlInput}
-                  onChange={(e) => setWebhookUrlInput(e.target.value)}
-                  onBlur={() => persistWorkspaceTargetIds(sheetIdInput, driveIdInput, webhookUrlInput)}
-                  placeholder="https://script.google.com/macros/s/.../exec"
-                  className="flex-1 px-3 py-2 rounded-xl border border-teal-300 text-xs font-mono bg-white focus:ring-2 focus:ring-teal-500 focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleCopyConsoleValue(
-                      'apps_script_code',
-                      getAppsScriptBridgeTemplate(
-                        cleanGoogleId(sheetIdInput) || settings.googleSheetSpreadsheetId,
-                        cleanGoogleId(driveIdInput) || settings.googleDriveFolderId
-                      )
-                    )
-                  }
-                  className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border shrink-0 transition-colors cursor-pointer ${
-                    copiedField === 'apps_script_code'
-                      ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                      : 'bg-white hover:bg-teal-50 text-teal-900 border-teal-300'
-                  }`}
-                >
-                  {copiedField === 'apps_script_code' ? (
-                    <>
-                      <Check className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Kode Apps Script Tersalin</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5 text-teal-700" />
-                      <span>Salin Kode Apps Script</span>
-                    </>
-                  )}
-                </button>
-              </div>
-              <p className="text-[11px] text-slate-600 leading-relaxed">
-                Langkah 1x: Buka Google Spreadsheet Anda &rarr; <strong>Extensions &rarr; Apps Script</strong> &rarr; tempel kode yang disalin &rarr; <strong>Deploy &rarr; New deployment &rarr; Web app</strong> (Execute as: <em>Me</em>, Who has access: <em>Anyone</em>) &rarr; tempel URL <code className="bg-white px-1 rounded">/exec</code> di atas. Setelah itu, di-refresh berkali-kali pun tetap sinkron otomatis!
-              </p>
-            </div>
-          )}
         </div>
 
         {/* Live Progress Bar saat pembuatan berlangsung */}

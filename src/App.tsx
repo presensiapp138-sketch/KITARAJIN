@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { User, UserRole } from './types';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
+import { User } from './types';
 import {
   initializeDatabase,
   getCurrentSession,
@@ -15,18 +15,6 @@ import {
 import { LoginForm } from './components/auth/LoginForm';
 import { Shell } from './components/layout/Shell';
 import { OverviewDashboard } from './components/dashboard/OverviewDashboard';
-import { UserManager } from './components/users/UserManager';
-import { DepartmentManager } from './components/master/DepartmentManager';
-import { ScheduleManager } from './components/master/ScheduleManager';
-import { LocationManager } from './components/master/LocationManager';
-import { SettingsManager } from './components/master/SettingsManager';
-import { FaceRegistryManager } from './components/attendance/FaceRegistryManager';
-import { AttendanceSelfService } from './components/attendance/AttendanceSelfService';
-import { AttendanceHistoryView } from './components/attendance/AttendanceHistoryView';
-import { LeaveManager } from './components/operations/LeaveManager';
-import { AssignmentManager } from './components/operations/AssignmentManager';
-import { ReportManager } from './components/reports/ReportManager';
-import { AuditLogManager } from './components/audit/AuditLogManager';
 import { AlertCircle } from 'lucide-react';
 import {
   startMultiDeviceRealtimeSync,
@@ -37,28 +25,95 @@ import {
   flushWorkspaceSyncIfReady,
 } from './services/workspaceService';
 
+const UserManager = lazy(() =>
+  import('./components/users/UserManager').then((m) => ({ default: m.UserManager }))
+);
+const LocationManager = lazy(() =>
+  import('./components/master/LocationManager').then((m) => ({ default: m.LocationManager }))
+);
+const SettingsManager = lazy(() =>
+  import('./components/master/SettingsManager').then((m) => ({ default: m.SettingsManager }))
+);
+const FaceRegistryManager = lazy(() =>
+  import('./components/attendance/FaceRegistryManager').then((m) => ({
+    default: m.FaceRegistryManager,
+  }))
+);
+const AttendanceSelfService = lazy(() =>
+  import('./components/attendance/AttendanceSelfService').then((m) => ({
+    default: m.AttendanceSelfService,
+  }))
+);
+const AttendanceHistoryView = lazy(() =>
+  import('./components/attendance/AttendanceHistoryView').then((m) => ({
+    default: m.AttendanceHistoryView,
+  }))
+);
+const LeaveManager = lazy(() =>
+  import('./components/operations/LeaveManager').then((m) => ({ default: m.LeaveManager }))
+);
+const AssignmentManager = lazy(() =>
+  import('./components/operations/AssignmentManager').then((m) => ({
+    default: m.AssignmentManager,
+  }))
+);
+const ReportManager = lazy(() =>
+  import('./components/reports/ReportManager').then((m) => ({ default: m.ReportManager }))
+);
+const AuditLogManager = lazy(() =>
+  import('./components/audit/AuditLogManager').then((m) => ({ default: m.AuditLogManager }))
+);
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeMenuId, setActiveMenuId] = useState<string>('dashboard');
   const [isInitializing, setIsInitializing] = useState<boolean>(true);
-  const [syncVersion, setSyncVersion] = useState<number>(0);
+  const [, setSyncVersion] = useState<number>(0);
 
   useEffect(() => {
     let isMounted = true;
     let stopWorkspaceAutoSync: (() => void) | null = null;
+    let renderDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleSyncRender = () => {
+      if (renderDebounceTimer) {
+        clearTimeout(renderDebounceTimer);
+      }
+      renderDebounceTimer = setTimeout(() => {
+        renderDebounceTimer = null;
+        if (isMounted) {
+          setSyncVersion((v) => v + 1);
+        }
+      }, 80);
+    };
 
     async function init() {
-      // Tarik seluruh data Cloud Firestore lebih dulu (agar Vercel / domain baru langsung mewarisi akun & database tersinkron)
-      await pullAllCloudDataOnStartup();
-      await initializeDatabase();
-      // Inisialisasi auto-sync Google Drive & Sheets secara global di sesi token aktif
-      stopWorkspaceAutoSync = initWorkspaceAutoSyncOnStartup();
-      if (!isMounted) return;
-      const session = refreshCurrentSessionFromUsers() || getCurrentSession();
-      if (session) {
-        setCurrentUser(session);
+      const hasLocalUsers = Boolean(localStorage.getItem('kitarajin_table_users'));
+
+      if (hasLocalUsers) {
+        // Sesi/perangkat yang sudah punya cache lokal: tampilkan UI instan tanpa menunggu Cloud
+        await initializeDatabase();
+        if (!isMounted) return;
+        const session = refreshCurrentSessionFromUsers() || getCurrentSession();
+        if (session) {
+          setCurrentUser(session);
+        }
+        setIsInitializing(false);
+        stopWorkspaceAutoSync = initWorkspaceAutoSyncOnStartup();
+        // Sinkronisasi Cloud berjalan paralel di latar belakang
+        pullAllCloudDataOnStartup({ timeoutMs: 2500 }).catch(() => {});
+      } else {
+        // Perangkat / domain baru (mis. Vercel pertama kali): tarik data kritis (settings & users) max 1.5 dtk
+        await pullAllCloudDataOnStartup({ criticalOnly: true, timeoutMs: 1500 }).catch(() => {});
+        await initializeDatabase();
+        if (!isMounted) return;
+        const session = refreshCurrentSessionFromUsers() || getCurrentSession();
+        if (session) {
+          setCurrentUser(session);
+        }
+        setIsInitializing(false);
+        stopWorkspaceAutoSync = initWorkspaceAutoSyncOnStartup();
       }
-      setIsInitializing(false);
     }
     init();
 
@@ -75,7 +130,7 @@ export default function App() {
           setCurrentUser(session);
         }
       }
-      setSyncVersion((v) => v + 1);
+      scheduleSyncRender();
     };
 
     // Mulai sinkronisasi multi-device real-time dengan Cloud Firestore
@@ -91,7 +146,7 @@ export default function App() {
       if (!ev.key || ev.key === 'kitarajin_table_users' || ev.key === 'kitarajin_session_user') {
         syncSessionAndReferences('users');
       } else {
-        setSyncVersion((v) => v + 1);
+        scheduleSyncRender();
       }
     };
 
@@ -100,6 +155,7 @@ export default function App() {
 
     return () => {
       isMounted = false;
+      if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
       stopSync();
       if (stopWorkspaceAutoSync) stopWorkspaceAutoSync();
       window.removeEventListener('kitarajin_cloud_sync', handleCloudEvent);
@@ -269,7 +325,15 @@ export default function App() {
       onUpdateCurrentUser={(updated) => setCurrentUser(updated)}
     >
       <div key={activeMenuId}>
-        {renderContent()}
+        <Suspense
+          fallback={
+            <div className="flex items-center justify-center py-20">
+              <div className="w-7 h-7 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          }
+        >
+          {renderContent()}
+        </Suspense>
       </div>
     </Shell>
   );

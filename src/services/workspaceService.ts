@@ -216,42 +216,31 @@ export const initAuth = (
  * Inisialisasi auto-sync Google Drive & Sheets secara global di tingkat aplikasi (termasuk Vercel),
  * agar perubahan otomatis tersinkron saat sesi token Google aktif tanpa perlu membuka menu Pengaturan.
  */
-export function isValidAppsScriptWebhookUrl(url?: string): boolean {
-  if (!url) return false;
-  const trimmed = url.trim();
-  return /^https:\/\/script\.google\.com\/(macros\/s\/|a\/macros\/).+\/exec(\?.*)?$/i.test(trimmed);
-}
-
-export function hasAppsScriptWebhook(): boolean {
-  const settings = getAppSettings();
-  return isValidAppsScriptWebhookUrl(settings.googleAppsScriptWebhookUrl);
-}
-
 export function initWorkspaceAutoSyncOnStartup(): () => void {
   if (isGlobalAutoSyncBooted || typeof window === 'undefined') {
     return () => {};
   }
   isGlobalAutoSyncBooted = true;
 
-  const tryFlushIfReady = (forceCatchup: boolean) => {
-    if (!hasRealAccessToken() && !hasAppsScriptWebhook()) return;
+  const tryFlushIfTokenActive = (forceCatchup: boolean) => {
+    if (!hasRealAccessToken()) return;
     flushWorkspaceSyncIfReady(forceCatchup).catch(() => {});
   };
 
   const unsubAuth = initAuth(
     () => {
-      tryFlushIfReady(true);
+      tryFlushIfTokenActive(true);
     },
     () => {}
   );
 
-  tryFlushIfReady(true);
+  tryFlushIfTokenActive(true);
 
   const handleSettingsOrCloud = () => {
-    tryFlushIfReady(true);
+    tryFlushIfTokenActive(true);
   };
   const handleOnlineOrFocus = () => {
-    tryFlushIfReady(false);
+    tryFlushIfTokenActive(false);
   };
 
   window.addEventListener('kitarajin_settings_updated', handleSettingsOrCloud);
@@ -1367,106 +1356,6 @@ export async function syncAllUsersToDriveAndSheet(
   };
 }
 
-export function getAppsScriptBridgeTemplate(spreadsheetId?: string, folderId?: string): string {
-  const sId = cleanGoogleId(spreadsheetId || '') || 'TEMPEL_ID_SPREADSHEET_ANDA';
-  const fId = cleanGoogleId(folderId || '');
-  return `// KITARAJIN Auto-Sync Bridge (Google Sheets & Drive)
-// Pasang 1x di Extensions > Apps Script, lalu Deploy > Web App (Execute as: Me, Who has access: Anyone)
-function doPost(e) {
-  try {
-    var payload = JSON.parse(e.postData.contents || '{}');
-    var targetSheetId = payload.spreadsheetId || '${sId}';
-    var ss = SpreadsheetApp.openById(targetSheetId);
-
-    var tabs = payload.tabs || [];
-    for (var i = 0; i < tabs.length; i++) {
-      var tab = tabs[i];
-      var sheet = ss.getSheetByName(tab.name);
-      if (!sheet) {
-        sheet = ss.insertSheet(tab.name);
-      }
-      sheet.clearContents();
-      var values = [tab.headers].concat(tab.rows || []);
-      if (values.length > 0 && tab.headers && tab.headers.length > 0) {
-        sheet.getRange(1, 1, values.length, tab.headers.length).setValues(values);
-        sheet.setFrozenRows(1);
-      }
-    }
-
-    var targetFolderId = payload.folderId || '${fId}';
-    if (targetFolderId && payload.fullSnapshot) {
-      var folder = DriveApp.getFolderById(targetFolderId);
-      upsertJsonFile_(folder, 'KITARAJIN_Full_Database.json', JSON.stringify(payload.fullSnapshot, null, 2));
-      if (payload.usersSnapshot) {
-        upsertJsonFile_(folder, 'KITARAJIN_Users_Database.json', JSON.stringify(payload.usersSnapshot, null, 2));
-      }
-    }
-
-    return ContentService.createTextOutput(JSON.stringify({ ok: true })).setMimeType(ContentService.MimeType.JSON);
-  } catch (err) {
-    return ContentService.createTextOutput(JSON.stringify({ ok: false, error: String(err) })).setMimeType(ContentService.MimeType.JSON);
-  }
-}
-
-function upsertJsonFile_(folder, fileName, content) {
-  var files = folder.getFilesByName(fileName);
-  if (files.hasNext()) {
-    var file = files.next();
-    file.setContent(content);
-  } else {
-    folder.createFile(fileName, content, MimeType.PLAIN_TEXT);
-  }
-}`;
-}
-
-async function syncWorkspaceViaWebhook(webhookUrl: string): Promise<void> {
-  const settings = getAppSettings();
-  const cleanSheetId = cleanGoogleId(settings.googleSheetSpreadsheetId || '');
-  const cleanFolderId = cleanGoogleId(settings.googleDriveFolderId || '');
-  const users = getAllUsers();
-
-  const payload = {
-    app: 'KITARAJIN',
-    syncedAt: new Date().toISOString(),
-    spreadsheetId: cleanSheetId,
-    folderId: cleanFolderId,
-    schoolName: settings.schoolName,
-    tabs: TAB_DEFINITIONS.map((tab) => ({
-      name: tab.name,
-      headers: tab.headers,
-      rows: tab.getData(),
-    })),
-    usersSnapshot: {
-      app: 'KITARAJIN',
-      updatedAt: new Date().toISOString(),
-      totalUsers: users.length,
-      users,
-    },
-    fullSnapshot: {
-      app: 'KITARAJIN',
-      syncedAt: new Date().toISOString(),
-      schoolName: settings.schoolName,
-      users,
-      departments: getAllDepartments(),
-      schedules: getAllSchedules(),
-      locations: getAllLocations(),
-      faceRegistry: getAllFaceRegistry(),
-      attendance: getAllAttendanceRecords(),
-      leaveRequests: getAllLeaveRequests(),
-      assignments: getAllAssignments(),
-      auditLogs: getAuditLogs().slice(0, 500),
-      settings,
-    },
-  };
-
-  await fetch(webhookUrl.trim(), {
-    method: 'POST',
-    mode: 'no-cors',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(payload),
-  });
-}
-
 /**
  * Dipanggil otomatis setiap kali ada penambahan/perubahan Username atau Password
  */
@@ -1475,7 +1364,7 @@ export async function autoSyncUsersToWorkspace(): Promise<{
   reason?: string;
   message?: string;
 }> {
-  if (!hasRealAccessToken() && !hasAppsScriptWebhook()) {
+  if (!hasRealAccessToken()) {
     markPendingWorkspaceUserSync();
     return {
       synced: false,
@@ -1499,7 +1388,6 @@ let queuedChangedCollection: string | undefined;
 
 export function getWorkspaceSyncRuntimeStatus(): {
   hasToken: boolean;
-  hasWebhook: boolean;
   isSyncing: boolean;
   isScheduled: boolean;
   hasPending: boolean;
@@ -1509,20 +1397,17 @@ export function getWorkspaceSyncRuntimeStatus(): {
   hasTargetConfigured: boolean;
 } {
   const settings = getAppSettings();
-  const hasWebhook = isValidAppsScriptWebhookUrl(settings.googleAppsScriptWebhookUrl);
   const hasTargetConfigured = Boolean(
     cleanGoogleId(settings.googleSheetSpreadsheetId || '') ||
       cleanGoogleId(settings.googleDriveFolderId || '') ||
-      cleanGoogleId(settings.googleDriveUsersFileId || '') ||
-      hasWebhook
+      cleanGoogleId(settings.googleDriveUsersFileId || '')
   );
   return {
     hasToken: hasRealAccessToken(),
-    hasWebhook,
     isSyncing: isWorkspaceAutoSyncRunning,
     isScheduled: Boolean(workspaceAutoSyncTimer),
     hasPending: hasPendingWorkspaceFullSync(),
-    autoEnabled: Boolean(settings.autoWorkspaceSyncEnabled || settings.isGoogleConnected || hasWebhook),
+    autoEnabled: Boolean(settings.autoWorkspaceSyncEnabled || settings.isGoogleConnected),
     lastFullSyncAt: settings.lastWorkspaceFullSyncAt || settings.lastWorkspaceUserSyncAt,
     connectedEmail: getConnectedGoogleEmail(),
     hasTargetConfigured,
@@ -1548,14 +1433,12 @@ export async function autoSyncAllDataToWorkspace(changedCollection?: string): Pr
   const sheetId = cleanGoogleId(settings.googleSheetSpreadsheetId || '');
   const driveFolderId = cleanGoogleId(settings.googleDriveFolderId || '');
   const driveUsersFileId = cleanGoogleId(settings.googleDriveUsersFileId || '');
-  const webhookUrl = settings.googleAppsScriptWebhookUrl?.trim() || '';
-  const webhookActive = isValidAppsScriptWebhookUrl(webhookUrl);
 
-  if (!sheetId && !driveFolderId && !driveUsersFileId && !webhookActive) {
+  if (!sheetId && !driveFolderId && !driveUsersFileId) {
     return false;
   }
 
-  if (!hasRealAccessToken() && !webhookActive) {
+  if (!hasRealAccessToken()) {
     markPendingWorkspaceFullSync();
     if (changedCollection === 'users') {
       markPendingWorkspaceUserSync();
@@ -1563,8 +1446,8 @@ export async function autoSyncAllDataToWorkspace(changedCollection?: string): Pr
     return false;
   }
 
-  const token = hasRealAccessToken() ? await getAccessToken() : null;
-  if (!token && !webhookActive) {
+  const token = await getAccessToken();
+  if (!token) {
     markPendingWorkspaceFullSync();
     return false;
   }
@@ -1577,9 +1460,9 @@ export async function autoSyncAllDataToWorkspace(changedCollection?: string): Pr
   isWorkspaceAutoSyncRunning = true;
   emitWorkspaceSyncEvent({ syncing: true, scheduled: false, collection: changedCollection });
   try {
-    if (token && sheetId) {
+    if (sheetId) {
       await writeAllTabsData(token, sheetId, { syncUsersMerge: shouldMergeUsers });
-    } else if (token) {
+    } else {
       await Promise.all([
         syncUsersWithGoogleDrive(token, driveFolderId || undefined),
         syncFullAppDatabaseToDrive(token, driveFolderId || undefined),
@@ -1597,21 +1480,6 @@ export async function autoSyncAllDataToWorkspace(changedCollection?: string): Pr
         lastSyncTimestamp: syncIso,
         autoWorkspaceSyncEnabled: true,
         isGoogleConnected: true,
-        storageMode: 'google_workspace_sync' as const,
-      };
-      localStorage.setItem('kitarajin_table_settings', JSON.stringify(updatedSettings));
-      syncRecordToCloud(SYNC_COLLECTIONS.SETTINGS, 'global', updatedSettings).catch(() => {});
-      clearPendingWorkspaceUserSync();
-    } else if (webhookActive) {
-      await syncWorkspaceViaWebhook(webhookUrl);
-      const syncIso = new Date().toISOString();
-      const latestSettings = getAppSettings();
-      const updatedSettings = {
-        ...latestSettings,
-        lastWorkspaceUserSyncAt: syncIso,
-        lastWorkspaceFullSyncAt: syncIso,
-        lastSyncTimestamp: syncIso,
-        autoWorkspaceSyncEnabled: true,
         storageMode: 'google_workspace_sync' as const,
       };
       localStorage.setItem('kitarajin_table_settings', JSON.stringify(updatedSettings));
@@ -1663,7 +1531,7 @@ export function scheduleWorkspaceAutoSync(changedCollection?: string): void {
     }
     return;
   }
-  if (!hasRealAccessToken() && !hasAppsScriptWebhook()) return;
+  if (!hasRealAccessToken()) return;
 
   if (workspaceAutoSyncTimer) {
     clearTimeout(workspaceAutoSyncTimer);
@@ -1682,11 +1550,11 @@ export function scheduleWorkspaceAutoSync(changedCollection?: string): void {
 }
 
 /**
- * Jika sesi Google aktif (OAuth token atau Apps Script Webhook) dan ada perubahan tertunda
- * atau baru refresh halaman, langsung kirim semua data terbaru ke Drive & Sheets tanpa klik tambahan.
+ * Jika sesi Google aktif dan ada perubahan tertunda,
+ * langsung kirim semua perubahan tertunda ke Drive & Sheets tanpa klik tambahan.
  */
 export async function flushWorkspaceSyncIfReady(forceInitialCatchup = false): Promise<boolean> {
-  if (!hasRealAccessToken() && !hasAppsScriptWebhook()) return false;
+  if (!hasRealAccessToken()) return false;
   const status = getWorkspaceSyncRuntimeStatus();
   if (!status.hasTargetConfigured) return false;
   if (!hasPendingWorkspaceFullSync() && !(forceInitialCatchup && !hasSyncedWorkspaceThisSession)) {

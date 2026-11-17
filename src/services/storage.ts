@@ -122,11 +122,13 @@ const INITIAL_LOCATIONS: LocationConfig[] = [
 export async function initializeDatabase(): Promise<void> {
   const existingUsers = localStorage.getItem(STORAGE_KEYS.USERS);
   if (!existingUsers) {
-    // Generate secure hashes for initial accounts
-    const kepsekHash = await hashPassword('kepsek123');
-    const adminHash = await hashPassword('admin123');
-    const guruHash = await hashPassword('staff123');
-    const satpamHash = await hashPassword('staff123');
+    // Generate secure hashes for initial accounts in parallel
+    const [kepsekHash, adminHash, guruHash, satpamHash] = await Promise.all([
+      hashPassword('kepsek123'),
+      hashPassword('admin123'),
+      hashPassword('staff123'),
+      hashPassword('staff123'),
+    ]);
 
     const seedUsers: User[] = [
       {
