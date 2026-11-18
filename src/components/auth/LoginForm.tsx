@@ -3,21 +3,32 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   UserCheck,
   Lock,
-  Mail,
   User,
   ShieldCheck,
   AlertCircle,
-  KeyRound,
   Eye,
   EyeOff,
   ArrowRight,
-  School,
+  KeyRound,
+  Link2,
+  CheckCircle2,
+  UserPlus,
 } from 'lucide-react';
-import { authenticateUser } from '../../services/storage';
+import {
+  authenticateUser,
+  bootstrapFirstKepalaSekolahAccount,
+  getAllUsers,
+} from '../../services/storage';
+import {
+  getAppsScriptConfig,
+  isAppsScriptConfigured,
+  pullChangesFromAppsScript,
+  saveAppsScriptConfig,
+} from '../../services/appsScriptSync';
 import { User as UserType } from '../../types';
 
 interface LoginFormProps {
@@ -30,6 +41,50 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+
+  const [configured, setConfigured] = useState<boolean>(() => isAppsScriptConfigured());
+  const [usersCount, setUsersCount] = useState<number>(() => getAllUsers().length);
+  const [showSetupOverride, setShowSetupOverride] = useState<boolean>(false);
+
+  // Form Hubungkan Apps Script 1x (muncul otomatis jika URL & Token belum tersimpan di browser/Vercel)
+  const [webAppUrlInput, setWebAppUrlInput] = useState<string>(() => getAppsScriptConfig().webAppUrl);
+  const [apiTokenInput, setApiTokenInput] = useState<string>(() => getAppsScriptConfig().apiToken);
+  const [showTokenInput, setShowTokenInput] = useState(false);
+  const [isConnectingScript, setIsConnectingScript] = useState(false);
+
+  // Form Buat Akun Kepala Sekolah Pertama (hanya muncul jika Sheet Users benar-benar masih kosong 0 baris)
+  const [firstName, setFirstName] = useState('');
+  const [firstNip, setFirstNip] = useState('');
+  const [firstEmail, setFirstEmail] = useState('');
+  const [firstUsername, setFirstUsername] = useState('');
+  const [firstPassword, setFirstPassword] = useState('');
+  const [isCreatingFirstKepsek, setIsCreatingFirstKepsek] = useState(false);
+
+  useEffect(() => {
+    const syncState = () => {
+      setConfigured(isAppsScriptConfigured());
+      setUsersCount(getAllUsers().length);
+    };
+
+    window.addEventListener('kitarajin_cloud_sync', syncState);
+    window.addEventListener('kitarajin_settings_updated', syncState);
+    window.addEventListener('storage', syncState);
+
+    if (isAppsScriptConfigured()) {
+      pullChangesFromAppsScript(true, true)
+        .then(() => {
+          syncState();
+        })
+        .catch(() => {});
+    }
+
+    return () => {
+      window.removeEventListener('kitarajin_cloud_sync', syncState);
+      window.removeEventListener('kitarajin_settings_updated', syncState);
+      window.removeEventListener('storage', syncState);
+    };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,6 +95,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
 
     setIsLoading(true);
     setErrorMessage(null);
+    setInfoMessage(null);
 
     try {
       const res = await authenticateUser(identifier, password);
@@ -54,6 +110,84 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
       setIsLoading(false);
     }
   };
+
+  const handleConnectAppsScript = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanUrl = webAppUrlInput.trim();
+    const cleanToken = apiTokenInput.trim();
+
+    if (!cleanUrl || !cleanUrl.startsWith('https://')) {
+      setErrorMessage('URL Web App Apps Script harus diawali https:// (akhiran /exec).');
+      return;
+    }
+    if (!cleanToken || cleanToken.length < 6) {
+      setErrorMessage('Token Rahasia minimal 6 karakter dan harus sama dengan API_TOKEN di Apps Script.');
+      return;
+    }
+
+    setIsConnectingScript(true);
+    setErrorMessage(null);
+    setInfoMessage(null);
+
+    try {
+      saveAppsScriptConfig({
+        webAppUrl: cleanUrl,
+        apiToken: cleanToken,
+        isLocked: true,
+      });
+      const ok = await pullChangesFromAppsScript(true, true);
+      const count = getAllUsers().length;
+      setConfigured(true);
+      setUsersCount(count);
+      if (ok) {
+        setShowSetupOverride(false);
+        setInfoMessage(
+          count > 0
+            ? `URL & Token dikunci. ${count} akun dari Google Sheets berhasil disinkronkan dan siap login.`
+            : 'Terhubung ke Google Sheets. Sheet Users masih kosong, silakan buat akun Kepala Sekolah pertama.'
+        );
+      } else {
+        setErrorMessage(
+          'Gagal membaca Google Sheets. Periksa URL Web App (/exec), Token Rahasia, dan izin deployment Web App.'
+        );
+      }
+    } catch {
+      setErrorMessage('Gagal terhubung ke Google Apps Script.');
+    } finally {
+      setIsConnectingScript(false);
+    }
+  };
+
+  const handleCreateFirstKepsek = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!firstName.trim() || !firstUsername.trim() || !firstPassword.trim()) {
+      setErrorMessage('Nama, Username, dan Password wajib diisi.');
+      return;
+    }
+    setIsCreatingFirstKepsek(true);
+    setErrorMessage(null);
+    try {
+      const res = await bootstrapFirstKepalaSekolahAccount({
+        name: firstName,
+        nip: firstNip,
+        email: firstEmail,
+        username: firstUsername,
+        rawPassword: firstPassword,
+      });
+      if (res.success && res.user) {
+        onLoginSuccess(res.user);
+      } else {
+        setErrorMessage(res.message);
+      }
+    } catch {
+      setErrorMessage('Gagal menyimpan akun Kepala Sekolah ke Google Sheets.');
+    } finally {
+      setIsCreatingFirstKepsek(false);
+    }
+  };
+
+  const showAppsScriptSetupForm = !configured || showSetupOverride;
+  const showFirstKepsekBootstrap = configured && !showSetupOverride && usersCount === 0;
 
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col justify-center py-12 sm:px-6 lg:px-8 relative overflow-hidden">
@@ -74,15 +208,8 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
           </p>
         </div>
 
-        {/* Login Card */}
+        {/* Main Card */}
         <div className="mt-8 bg-white/95 backdrop-blur-md py-8 px-6 sm:px-10 shadow-2xl rounded-3xl border border-slate-700/30">
-          <div className="mb-6">
-            <h2 className="text-xl font-bold text-slate-900">Masuk Akun</h2>
-            <p className="text-xs text-slate-500 mt-1">
-              Gunakan Email (Kepala Sekolah), Username (Admin), atau NIP/ID (Karyawan).
-            </p>
-          </div>
-
           {errorMessage && (
             <div className="mb-5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 flex items-start gap-2.5 text-xs">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
@@ -90,69 +217,277 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                Email / Username / NIP
-              </label>
-              <div className="relative rounded-xl shadow-2xs">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <User className="w-4 h-4" />
-                </div>
-                <input
-                  type="text"
-                  required
-                  value={identifier}
-                  onChange={(e) => setIdentifier(e.target.value)}
-                  placeholder="Masukkan Email, Username, atau NIP akun Anda"
-                  className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all placeholder:text-slate-400"
-                />
-              </div>
+          {infoMessage && (
+            <div className="mb-5 p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 flex items-start gap-2.5 text-xs">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <span>{infoMessage}</span>
             </div>
+          )}
 
-            <div>
-              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                Password
-              </label>
-              <div className="relative rounded-xl shadow-2xs">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-                  <Lock className="w-4 h-4" />
+          {showAppsScriptSetupForm ? (
+            <>
+              <div className="mb-6">
+                <h2 className="text-xl font-bold text-slate-900">Hubungkan Database Google Sheets</h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Tempel URL Web App & Token Rahasia Apps Script satu kali untuk menyinkronkan data dari Sheet.
+                </p>
+              </div>
+
+              <form onSubmit={handleConnectAppsScript} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    URL Web App Apps Script (/exec)
+                  </label>
+                  <div className="relative rounded-xl shadow-2xs">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                      <Link2 className="w-4 h-4" />
+                    </div>
+                    <input
+                      type="url"
+                      required
+                      value={webAppUrlInput}
+                      onChange={(e) => setWebAppUrlInput(e.target.value)}
+                      placeholder="https://script.google.com/macros/s/.../exec"
+                      className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all placeholder:text-slate-400"
+                    />
+                  </div>
                 </div>
-                <input
-                  type={showPassword ? 'text' : 'password'}
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Masukkan password akun Anda"
-                  className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all placeholder:text-slate-400"
-                />
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Token Rahasia (API_TOKEN)
+                  </label>
+                  <div className="relative rounded-xl shadow-2xs">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                      <KeyRound className="w-4 h-4" />
+                    </div>
+                    <input
+                      type={showTokenInput ? 'text' : 'password'}
+                      required
+                      value={apiTokenInput}
+                      onChange={(e) => setApiTokenInput(e.target.value)}
+                      placeholder="Masukkan API_TOKEN sesuai Script Properties"
+                      className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all placeholder:text-slate-400"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowTokenInput(!showTokenInput)}
+                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600"
+                    >
+                      {showTokenInput ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-2 flex flex-col gap-2">
+                  <button
+                    type="submit"
+                    disabled={isConnectingScript}
+                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-sm shadow-md shadow-emerald-600/30 active:scale-[0.99] transition-all flex items-center justify-center gap-2 disabled:opacity-70"
+                  >
+                    {isConnectingScript ? (
+                      <span>Menyinkronkan Google Sheets...</span>
+                    ) : (
+                      <>
+                        <span>Simpan, Kunci & Muat Data Sheet</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+
+                  {configured && (
+                    <button
+                      type="button"
+                      onClick={() => setShowSetupOverride(false)}
+                      className="w-full py-2 text-xs font-semibold text-slate-500 hover:text-slate-700"
+                    >
+                      Kembali ke Form Login
+                    </button>
+                  )}
+                </div>
+              </form>
+            </>
+          ) : showFirstKepsekBootstrap ? (
+            <>
+              <div className="mb-5">
+                <h2 className="text-xl font-bold text-slate-900">Buat Akun Kepala Sekolah</h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Sheet Users masih kosong. Daftarkan akun Kepala Sekolah utama untuk mulai mengelola data di Google Sheets.
+                </p>
+              </div>
+
+              <form onSubmit={handleCreateFirstKepsek} className="space-y-3.5">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Nama Lengkap
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={firstName}
+                    onChange={(e) => setFirstName(e.target.value)}
+                    placeholder="Nama Kepala Sekolah"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      NIP / ID
+                    </label>
+                    <input
+                      type="text"
+                      value={firstNip}
+                      onChange={(e) => setFirstNip(e.target.value)}
+                      placeholder="NIP"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      Username
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={firstUsername}
+                      onChange={(e) => setFirstUsername(e.target.value)}
+                      placeholder="username"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    value={firstEmail}
+                    onChange={(e) => setFirstEmail(e.target.value)}
+                    placeholder="email@sekolah.sch.id"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={firstPassword}
+                    onChange={(e) => setFirstPassword(e.target.value)}
+                    placeholder="Minimal 6 karakter"
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isCreatingFirstKepsek}
+                  className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-sm shadow-md shadow-emerald-600/30 transition-all flex items-center justify-center gap-2 disabled:opacity-70"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>{isCreatingFirstKepsek ? 'Menyimpan ke Sheet...' : 'Simpan & Masuk sebagai Kepala Sekolah'}</span>
+                </button>
+
                 <button
                   type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600"
+                  onClick={() => setShowSetupOverride(true)}
+                  className="w-full py-1.5 text-xs font-semibold text-slate-500 hover:text-slate-700"
                 >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  Ganti URL / Token Apps Script
                 </button>
+              </form>
+            </>
+          ) : (
+            <>
+              <div className="mb-6">
+                <h2 className="text-xl font-bold text-slate-900">Masuk Akun</h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Gunakan Email, Username, atau NIP yang terdaftar di Google Sheets.
+                </p>
               </div>
-            </div>
 
-            <div className="pt-2">
-              <button
-                type="submit"
-                disabled={isLoading}
-                className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-sm shadow-md shadow-emerald-600/30 active:scale-[0.99] transition-all flex items-center justify-center gap-2 disabled:opacity-70"
-              >
-                {isLoading ? (
-                  <span>Memverifikasi enkripsi...</span>
-                ) : (
-                  <>
-                    <span>Masuk ke Sistem</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
-              </button>
-            </div>
-          </form>
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Email / Username / NIP
+                  </label>
+                  <div className="relative rounded-xl shadow-2xs">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                      <User className="w-4 h-4" />
+                    </div>
+                    <input
+                      type="text"
+                      required
+                      value={identifier}
+                      onChange={(e) => setIdentifier(e.target.value)}
+                      placeholder="Masukkan Email, Username, atau NIP akun Anda"
+                      className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all placeholder:text-slate-400"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                    Password
+                  </label>
+                  <div className="relative rounded-xl shadow-2xs">
+                    <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                      <Lock className="w-4 h-4" />
+                    </div>
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      placeholder="Masukkan password akun Anda"
+                      className="w-full pl-10 pr-10 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all placeholder:text-slate-400"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="pt-2 space-y-2.5">
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold text-sm shadow-md shadow-emerald-600/30 active:scale-[0.99] transition-all flex items-center justify-center gap-2 disabled:opacity-70"
+                  >
+                    {isLoading ? (
+                      <span>Memverifikasi akun ke Google Sheets...</span>
+                    ) : (
+                      <>
+                        <span>Masuk ke Sistem</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setErrorMessage(null);
+                      setInfoMessage(null);
+                      setShowSetupOverride(true);
+                    }}
+                    className="w-full py-1.5 text-xs font-medium text-slate-500 hover:text-emerald-700 transition-colors"
+                  >
+                    Ganti URL / Token Database Sheet
+                  </button>
+                </div>
+              </form>
+            </>
+          )}
 
           {/* Enkripsi Info Security Badge */}
           <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-center gap-1.5 text-[11px] text-slate-500">

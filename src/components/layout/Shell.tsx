@@ -34,18 +34,13 @@ import {
   Eye,
   EyeOff,
   Lock,
+  Activity,
 } from 'lucide-react';
 
 import { User, UserRole, AppSettings } from '../../types';
-import { getNavItemsForRole, NavItem } from '../../config/navigation';
+import { getNavItemsForRole } from '../../config/navigation';
 import { updateUser, getAppSettings, getCurrentSession } from '../../services/storage';
-import { getCloudSyncStatus } from '../../services/firestoreSync';
-import {
-  getWorkspaceSyncRuntimeStatus,
-  signInWithGoogle,
-  autoSyncAllDataToWorkspace,
-  formatAuthErrorMessage,
-} from '../../services/workspaceService';
+import { getSyncUiState, subscribeSyncUiState, SyncUiState } from '../../services/appsScriptSync';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
 
 interface ShellProps {
@@ -72,6 +67,7 @@ const ICON_MAP: Record<string, React.ElementType> = {
   MapPin,
   ShieldAlert,
   Settings,
+  Activity,
 };
 
 export const Shell: React.FC<ShellProps> = ({
@@ -94,46 +90,23 @@ export const Shell: React.FC<ShellProps> = ({
   const [profileMsg, setProfileMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [settings, setSettings] = useState<AppSettings>(() => getAppSettings());
-  const [cloudStatus, setCloudStatus] = useState(() => getCloudSyncStatus());
-  const [workspaceStatus, setWorkspaceStatus] = useState(() => getWorkspaceSyncRuntimeStatus());
-  const [isActivatingWorkspace, setIsActivatingWorkspace] = useState(false);
-  const [workspaceBannerError, setWorkspaceBannerError] = useState<string | null>(null);
+  const [syncUiState, setSyncUiState] = useState<SyncUiState>(() => getSyncUiState());
 
   React.useEffect(() => {
+    const unsubscribeSync = subscribeSyncUiState((next) => setSyncUiState(next));
     const handleSettingsUpdate = () => {
       setSettings(getAppSettings());
-      setCloudStatus(getCloudSyncStatus());
-      setWorkspaceStatus(getWorkspaceSyncRuntimeStatus());
     };
     window.addEventListener('kitarajin_settings_updated', handleSettingsUpdate);
     window.addEventListener('kitarajin_cloud_sync', handleSettingsUpdate);
-    window.addEventListener('kitarajin_workspace_sync', handleSettingsUpdate);
     window.addEventListener('storage', handleSettingsUpdate);
     return () => {
+      unsubscribeSync();
       window.removeEventListener('kitarajin_settings_updated', handleSettingsUpdate);
       window.removeEventListener('kitarajin_cloud_sync', handleSettingsUpdate);
-      window.removeEventListener('kitarajin_workspace_sync', handleSettingsUpdate);
       window.removeEventListener('storage', handleSettingsUpdate);
     };
   }, []);
-
-  const handleQuickActivateWorkspaceSync = async () => {
-    setIsActivatingWorkspace(true);
-    setWorkspaceBannerError(null);
-    try {
-      const res = await signInWithGoogle(workspaceStatus.connectedEmail || currentUser.email);
-      if (res) {
-        setWorkspaceStatus(getWorkspaceSyncRuntimeStatus());
-        if (workspaceStatus.hasTargetConfigured) {
-          autoSyncAllDataToWorkspace('shell_activate').catch(() => {});
-        }
-      }
-    } catch (err: any) {
-      setWorkspaceBannerError(formatAuthErrorMessage(err));
-    } finally {
-      setIsActivatingWorkspace(false);
-    }
-  };
 
   React.useEffect(() => {
     setEditName(currentUser.name);
@@ -143,8 +116,17 @@ export const Shell: React.FC<ShellProps> = ({
     setEditPassword('');
   }, [currentUser]);
 
+  const isConsoleInspector = currentUser.id === 'kepsek-console';
+
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isConsoleInspector) {
+      setProfileMsg({
+        type: 'error',
+        text: 'Mode cek & perbaikan Sheet aktif. Klik "Login Akun Sheet" di kanan atas untuk masuk menggunakan akun Google Sheets Anda sebelum mengubah profil pribadi.',
+      });
+      return;
+    }
     if (!editName.trim()) {
       setProfileMsg({ type: 'error', text: 'Nama tidak boleh kosong.' });
       return;
@@ -258,79 +240,35 @@ export const Shell: React.FC<ShellProps> = ({
               </button>
             </div>
 
-            {/* Right Controls: Cloud Sync Badge, PWA Install Button & Current User Info & Logout */}
+            {/* Right Controls: Save/Write Status Indicator, PWA Install Button & Current User Info */}
             <div className="flex items-center gap-2 sm:gap-3">
-              {/* Multi-Device Real-Time Cloud Sync Badge */}
-              <div
-                className={`hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-bold shadow-2xs transition-colors ${
-                  cloudStatus.isSyncing
-                    ? 'bg-sky-50 border-sky-200 text-sky-800'
-                    : cloudStatus.pendingCount > 0
-                    ? 'bg-amber-50 border-amber-200 text-amber-800'
-                    : 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                }`}
-                title="Database Cloud Firestore sinkron otomatis dalam ~1.5 detik setelah buka/refresh tanpa klik"
-              >
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    cloudStatus.isSyncing
-                      ? 'bg-sky-500 animate-ping'
-                      : cloudStatus.pendingCount > 0
-                      ? 'bg-amber-500 animate-pulse'
-                      : 'bg-emerald-500 animate-pulse'
+              {/* Tampilan status penulisan & antrean: Menyimpan..., Tersimpan, Offline, atau Error */}
+              {syncUiState.kind !== 'idle' && (
+                <div
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px] font-bold transition-colors max-w-[210px] sm:max-w-[280px] ${
+                    syncUiState.kind === 'saving'
+                      ? 'bg-sky-50 border-sky-200 text-sky-800'
+                      : syncUiState.kind === 'saved'
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      : syncUiState.kind === 'offline'
+                      ? 'bg-amber-50 border-amber-200 text-amber-800'
+                      : 'bg-rose-50 border-rose-200 text-rose-800'
                   }`}
-                />
-                <span>
-                  {cloudStatus.isSyncing
-                    ? 'Menyinkronkan Cloud...'
-                    : cloudStatus.pendingCount > 0
-                    ? `Antrean Sync (${cloudStatus.pendingCount})`
-                    : 'Cloud Tersinkron'}
-                </span>
-              </div>
-
-              {/* Google Drive & Sheets Auto-Sync Status Chip (Khusus Kepala Sekolah bila target sudah ditautkan) */}
-              {currentUser.role === 'kepala_sekolah' && workspaceStatus.hasTargetConfigured && (
-                workspaceStatus.hasToken ? (
-                  <div
-                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-teal-50 border border-teal-200 text-teal-800 text-[11px] font-bold"
-                    title="Sinkronisasi otomatis ke Google Drive & Sheets aktif berjalan di latar belakang untuk setiap presensi dan perubahan data"
-                  >
-                    <span className={`w-2 h-2 rounded-full bg-teal-500 ${(workspaceStatus.isSyncing || workspaceStatus.isScheduled) ? 'animate-ping' : 'animate-pulse'}`} />
-                    <span className="hidden sm:inline">
-                      {(workspaceStatus.isSyncing || workspaceStatus.isScheduled)
-                        ? 'Menyinkronkan Otomatis...'
-                        : 'Drive & Sheet Auto'}
-                    </span>
-                    <span className="sm:hidden">
-                      {(workspaceStatus.isSyncing || workspaceStatus.isScheduled) ? 'Sync...' : 'Drive Auto'}
-                    </span>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={handleQuickActivateWorkspaceSync}
-                    disabled={isActivatingWorkspace}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-bold border transition-colors cursor-pointer disabled:opacity-60 ${
-                      workspaceStatus.hasPending
-                        ? 'bg-amber-50 hover:bg-amber-100 border-amber-300 text-amber-900'
-                        : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700'
+                  title={syncUiState.message}
+                >
+                  <span
+                    className={`w-2 h-2 rounded-full shrink-0 ${
+                      syncUiState.kind === 'saving'
+                        ? 'bg-sky-500 animate-ping'
+                        : syncUiState.kind === 'saved'
+                        ? 'bg-emerald-500'
+                        : syncUiState.kind === 'offline'
+                        ? 'bg-amber-500 animate-pulse'
+                        : 'bg-rose-500'
                     }`}
-                    title="Klik 1x pada sesi browser ini (termasuk di Vercel) agar setiap perubahan & presensi otomatis masuk ke Google Drive & Sheets di latar belakang"
-                  >
-                    <span className={`w-2 h-2 rounded-full ${workspaceStatus.hasPending ? 'bg-amber-500 animate-pulse' : 'bg-slate-400'}`} />
-                    <span className="hidden sm:inline">
-                      {isActivatingWorkspace
-                        ? 'Menghubungkan Google...'
-                        : workspaceStatus.hasPending
-                        ? 'Aktifkan Auto-Sync Drive/Sheet'
-                        : 'Hubungkan Auto Drive/Sheet'}
-                    </span>
-                    <span className="sm:hidden">
-                      {isActivatingWorkspace ? '...' : 'Auto Drive'}
-                    </span>
-                  </button>
-                )
+                  />
+                  <span className="truncate">{syncUiState.message}</span>
+                </div>
               )}
 
               <PWAInstallButton variant="header" />
@@ -377,36 +315,31 @@ export const Shell: React.FC<ShellProps> = ({
                   </div>
                 </button>
 
-                {/* Logout Button */}
-                <button
-                  type="button"
-                  onClick={onLogout}
-                  className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                  title="Keluar (Logout)"
-                >
-                  <LogOut className="w-4 h-4" />
-                </button>
+                {isConsoleInspector ? (
+                  <button
+                    type="button"
+                    onClick={onLogout}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
+                    title="Masuk menggunakan akun yang terdaftar di Google Sheets"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Login Akun Sheet</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={onLogout}
+                    className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                    title="Keluar (Logout)"
+                  >
+                    <LogOut className="w-4 h-4" />
+                  </button>
+                )}
               </div>
             </div>
           </div>
         </div>
       </header>
-
-      {workspaceBannerError && (
-        <div className="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 pt-4">
-          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs flex items-center justify-between gap-2">
-            <span>{workspaceBannerError}</span>
-            <button
-              type="button"
-              onClick={() => setWorkspaceBannerError(null)}
-              className="text-rose-500 hover:text-rose-700 p-1 cursor-pointer"
-              aria-label="Tutup pesan"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Main Body */}
       <div className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 flex gap-6">
@@ -573,10 +506,14 @@ export const Shell: React.FC<ShellProps> = ({
                   setMobileDrawerOpen(false);
                   onLogout();
                 }}
-                className="w-full py-2.5 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors active:scale-[0.98]"
+                className={`w-full py-2.5 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors active:scale-[0.98] ${
+                  isConsoleInspector
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    : 'bg-rose-50 hover:bg-rose-100 text-rose-700'
+                }`}
               >
-                <LogOut className="w-4 h-4" />
-                <span>Keluar dari Akun</span>
+                {isConsoleInspector ? <Lock className="w-4 h-4" /> : <LogOut className="w-4 h-4" />}
+                <span>{isConsoleInspector ? 'Login Akun Sheet' : 'Keluar dari Akun'}</span>
               </button>
             </div>
           </div>

@@ -11,19 +11,18 @@ import {
   clearSession,
   refreshCurrentSessionFromUsers,
   reconcileUserReferences,
+  getAllUsers,
 } from './services/storage';
 import { LoginForm } from './components/auth/LoginForm';
 import { Shell } from './components/layout/Shell';
 import { OverviewDashboard } from './components/dashboard/OverviewDashboard';
 import { AlertCircle } from 'lucide-react';
 import {
-  startMultiDeviceRealtimeSync,
-  pullAllCloudDataOnStartup,
-} from './services/firestoreSync';
-import {
-  initWorkspaceAutoSyncOnStartup,
-  flushWorkspaceSyncIfReady,
-} from './services/workspaceService';
+  startAppsScriptRealtimeSync,
+  pullChangesFromAppsScript,
+  isAppsScriptConfigured,
+  flushAttendanceBatch,
+} from './services/appsScriptSync';
 
 const UserManager = lazy(() =>
   import('./components/users/UserManager').then((m) => ({ default: m.UserManager }))
@@ -33,6 +32,9 @@ const LocationManager = lazy(() =>
 );
 const SettingsManager = lazy(() =>
   import('./components/master/SettingsManager').then((m) => ({ default: m.SettingsManager }))
+);
+const SystemCheckManager = lazy(() =>
+  import('./components/master/SystemCheckManager').then((m) => ({ default: m.SystemCheckManager }))
 );
 const FaceRegistryManager = lazy(() =>
   import('./components/attendance/FaceRegistryManager').then((m) => ({
@@ -64,6 +66,22 @@ const AuditLogManager = lazy(() =>
   import('./components/audit/AuditLogManager').then((m) => ({ default: m.AuditLogManager }))
 );
 
+const KEPSEK_REQUIRE_LOGIN_KEY = 'kitarajin_require_login';
+
+const KEPSEK_CONSOLE_USER: User = {
+  id: 'kepsek-console',
+  nip: '-',
+  name: 'Kepala Sekolah (Cek & Perbaikan Sheet)',
+  username: 'kepsek-console',
+  passwordHash: '',
+  role: 'kepala_sekolah',
+  position: 'Kepala Sekolah',
+  assignedSessionIds: ['sesi-1', 'sesi-2', 'sesi-3'],
+  isActive: true,
+  createdAt: '',
+  updatedAt: '',
+};
+
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeMenuId, setActiveMenuId] = useState<string>('dashboard');
@@ -72,7 +90,6 @@ export default function App() {
 
   useEffect(() => {
     let isMounted = true;
-    let stopWorkspaceAutoSync: (() => void) | null = null;
     let renderDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
     const scheduleSyncRender = () => {
@@ -84,33 +101,50 @@ export default function App() {
         if (isMounted) {
           setSyncVersion((v) => v + 1);
         }
-      }, 80);
+      }, 60);
+    };
+
+    const resolveInitialOrFallbackUser = (): { user: User | null; defaultMenu?: string } => {
+      const session = refreshCurrentSessionFromUsers() || getCurrentSession();
+      if (session) {
+        return { user: session };
+      }
+      if (localStorage.getItem(KEPSEK_REQUIRE_LOGIN_KEY) !== '1') {
+        return { user: KEPSEK_CONSOLE_USER, defaultMenu: 'cek_sistem' };
+      }
+      return { user: null };
     };
 
     async function init() {
-      const hasLocalUsers = Boolean(localStorage.getItem('kitarajin_table_users'));
+      await initializeDatabase();
+      const hasRealLocalUsers = getAllUsers().length > 0;
 
-      if (hasLocalUsers) {
-        // Sesi/perangkat yang sudah punya cache lokal: tampilkan UI instan & biarkan onSnapshot multi-device langsung menyinkronkan dalam <= 1.5 detik
-        await initializeDatabase();
+      if (hasRealLocalUsers) {
         if (!isMounted) return;
-        const session = refreshCurrentSessionFromUsers() || getCurrentSession();
-        if (session) {
-          setCurrentUser(session);
+        const resolved = resolveInitialOrFallbackUser();
+        setCurrentUser(resolved.user);
+        if (resolved.defaultMenu) {
+          setActiveMenuId(resolved.defaultMenu);
         }
         setIsInitializing(false);
-        stopWorkspaceAutoSync = initWorkspaceAutoSyncOnStartup();
+
+        if (isAppsScriptConfigured()) {
+          pullChangesFromAppsScript(true, true).catch(() => false);
+        }
       } else {
-        // Perangkat / domain baru (mis. Vercel pertama kali): tarik data kritis (settings & users) max 1.2 dtk
-        await pullAllCloudDataOnStartup({ criticalOnly: true, timeoutMs: 1200 }).catch(() => {});
-        await initializeDatabase();
+        if (isAppsScriptConfigured()) {
+          await Promise.race([
+            pullChangesFromAppsScript(true, true).catch(() => false),
+            new Promise((resolve) => setTimeout(resolve, 15000)),
+          ]);
+        }
         if (!isMounted) return;
-        const session = refreshCurrentSessionFromUsers() || getCurrentSession();
-        if (session) {
-          setCurrentUser(session);
+        const resolved = resolveInitialOrFallbackUser();
+        setCurrentUser(resolved.user);
+        if (resolved.defaultMenu) {
+          setActiveMenuId(resolved.defaultMenu);
         }
         setIsInitializing(false);
-        stopWorkspaceAutoSync = initWorkspaceAutoSyncOnStartup();
       }
     }
     init();
@@ -118,28 +152,28 @@ export default function App() {
     const syncSessionAndReferences = (collectionName?: string) => {
       if (
         !collectionName ||
+        collectionName === 'all' ||
         collectionName === 'users' ||
-        collectionName === 'auto' ||
-        collectionName === 'outbox'
+        collectionName === 'auto'
       ) {
         reconcileUserReferences(undefined, false);
         const session = refreshCurrentSessionFromUsers() || getCurrentSession();
         if (session) {
           setCurrentUser(session);
+        } else if (localStorage.getItem(KEPSEK_REQUIRE_LOGIN_KEY) !== '1') {
+          setCurrentUser((prev) => (prev?.id === 'kepsek-console' ? prev : KEPSEK_CONSOLE_USER));
+        } else {
+          setCurrentUser(null);
         }
       }
       scheduleSyncRender();
     };
 
-    // Mulai sinkronisasi multi-device real-time dengan Cloud Firestore
-    const stopSync = startMultiDeviceRealtimeSync((collectionName) => {
+    // Sinkronisasi dua arah & auto-reload tiap ~1.2s + saat tab aktif / online kembali
+    const stopRealtimeSync = startAppsScriptRealtimeSync((collectionName) => {
       syncSessionAndReferences(collectionName);
     });
 
-    const handleCloudEvent = (ev: Event) => {
-      const col = (ev as CustomEvent)?.detail?.collection as string | undefined;
-      syncSessionAndReferences(col);
-    };
     const handleStorageEvent = (ev: StorageEvent) => {
       if (!ev.key || ev.key === 'kitarajin_table_users' || ev.key === 'kitarajin_session_user') {
         syncSessionAndReferences('users');
@@ -148,31 +182,31 @@ export default function App() {
       }
     };
 
-    window.addEventListener('kitarajin_cloud_sync', handleCloudEvent);
     window.addEventListener('storage', handleStorageEvent);
 
     return () => {
       isMounted = false;
       if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
-      stopSync();
-      if (stopWorkspaceAutoSync) stopWorkspaceAutoSync();
-      window.removeEventListener('kitarajin_cloud_sync', handleCloudEvent);
+      stopRealtimeSync();
       window.removeEventListener('storage', handleStorageEvent);
     };
   }, []);
 
   const handleLoginSuccess = (user: User) => {
+    localStorage.removeItem(KEPSEK_REQUIRE_LOGIN_KEY);
     setCurrentUser(user);
     setActiveMenuId('dashboard');
-    if (user.role === 'kepala_sekolah' || user.role === 'admin') {
-      flushWorkspaceSyncIfReady(true).catch(() => {});
+    if (isAppsScriptConfigured()) {
+      pullChangesFromAppsScript(false).catch(() => {});
+      flushAttendanceBatch().catch(() => {});
     }
   };
 
   const handleLogout = () => {
-    if (currentUser) {
+    if (currentUser && currentUser.id !== 'kepsek-console') {
       clearSession(currentUser);
     }
+    localStorage.setItem(KEPSEK_REQUIRE_LOGIN_KEY, '1');
     setCurrentUser(null);
     setActiveMenuId('dashboard');
   };
@@ -182,18 +216,16 @@ export default function App() {
       <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white">
         <div className="text-center space-y-3">
           <div className="w-10 h-10 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mx-auto" />
-          <p className="text-sm font-semibold text-slate-300">Menyiapkan Database KITARAJIN...</p>
+          <p className="text-sm font-semibold text-slate-300">Menyiapkan KITARAJIN...</p>
         </div>
       </div>
     );
   }
 
-  // Jika belum login, tampilkan LoginForm
   if (!currentUser) {
     return <LoginForm onLoginSuccess={handleLoginSuccess} />;
   }
 
-  // Render view berdasarkan activeMenuId
   const renderContent = () => {
     switch (activeMenuId) {
       case 'dashboard':
@@ -216,7 +248,6 @@ export default function App() {
         );
 
       case 'database_wajah':
-        // Perekaman & Database Wajah dapat diakses oleh Admin dan Kepala Sekolah
         if (currentUser.role !== 'admin' && currentUser.role !== 'kepala_sekolah') {
           return (
             <div className="p-8 bg-purple-50 rounded-2xl border border-purple-200 text-purple-900 text-center max-w-md mx-auto my-8">
@@ -231,7 +262,6 @@ export default function App() {
         return <FaceRegistryManager currentUser={currentUser} />;
 
       case 'lokasi':
-        // Admin DILARANG atur lokasi & radius, cukup kepala sekolah yang bisa
         if (currentUser.role !== 'kepala_sekolah') {
           return (
             <div className="p-8 bg-rose-50 rounded-2xl border border-rose-200 text-rose-800 text-center max-w-md mx-auto my-8">
@@ -255,16 +285,16 @@ export default function App() {
             </div>
           );
         }
-        return <UserManager currentUser={currentUser} initialRoleFilter="admin" />;
+        return <UserManager key="admin_users" currentUser={currentUser} initialRoleFilter="admin" />;
 
       case 'karyawan_users':
-        return <UserManager currentUser={currentUser} initialRoleFilter="karyawan" />;
+        return <UserManager key="karyawan_users" currentUser={currentUser} initialRoleFilter="karyawan" />;
 
       case 'departemen':
-        return <UserManager currentUser={currentUser} initialTab="departments" />;
+        return <UserManager key="departemen" currentUser={currentUser} initialTab="departments" />;
 
       case 'jadwal':
-        return <UserManager currentUser={currentUser} initialTab="sessions" />;
+        return <UserManager key="jadwal" currentUser={currentUser} initialTab="sessions" />;
 
       case 'izin':
         return <LeaveManager currentUser={currentUser} />;
@@ -281,7 +311,7 @@ export default function App() {
             <div className="p-8 bg-rose-50 rounded-2xl border border-rose-200 text-rose-800 text-center max-w-md mx-auto my-8">
               <AlertCircle className="w-8 h-8 text-rose-600 mx-auto mb-2" />
               <h3 className="font-bold text-base">Akses Ditolak</h3>
-              <p className="text-xs mt-1">Log Audit Admin hanya dapat diakses oleh Kepala Sekolah.</p>
+              <p className="text-xs mt-1">Log Audit hanya dapat diakses oleh Kepala Sekolah.</p>
             </div>
           );
         }
@@ -301,6 +331,23 @@ export default function App() {
           <SettingsManager
             currentUser={currentUser}
             onUpdateCurrentUser={(updated) => setCurrentUser(updated)}
+          />
+        );
+
+      case 'cek_sistem':
+        if (currentUser.role !== 'kepala_sekolah') {
+          return (
+            <div className="p-8 bg-rose-50 rounded-2xl border border-rose-200 text-rose-800 text-center max-w-md mx-auto my-8">
+              <AlertCircle className="w-8 h-8 text-rose-600 mx-auto mb-2" />
+              <h3 className="font-bold text-base">Akses Ditolak</h3>
+              <p className="text-xs mt-1">Menu Cek Sistem hanya dapat diakses oleh Kepala Sekolah.</p>
+            </div>
+          );
+        }
+        return (
+          <SystemCheckManager
+            currentUser={currentUser}
+            onNavigateToSettings={() => setActiveMenuId('pengaturan')}
           />
         );
 

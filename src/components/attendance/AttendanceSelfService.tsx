@@ -154,8 +154,25 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
     const timer = setInterval(() => {
       setCurrentNow(new Date());
     }, 1000);
-    return () => clearInterval(timer);
-  }, []);
+    const handleBatchResult = (ev: Event) => {
+      const rejected = (ev as CustomEvent)?.detail?.rejected as Array<{ userId?: string; reason: string }> | undefined;
+      if (rejected && rejected.length > 0) {
+        const myRejection = rejected.find((r) => !r.userId || r.userId === currentUser.id) || rejected[0];
+        if (myRejection?.reason) {
+          setResultMessage({
+            type: 'error',
+            title: 'Presensi Ditolak Server',
+            description: myRejection.reason,
+          });
+        }
+      }
+    };
+    window.addEventListener('kitarajin_attendance_batch_result', handleBatchResult);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('kitarajin_attendance_batch_result', handleBatchResult);
+    };
+  }, [currentUser.id]);
 
   // Status Pemilihan Sesi Wajib Oleh Karyawan
   const [hasUserExplicitlySelectedSession, setHasUserExplicitlySelectedSession] = useState<boolean>(false);
@@ -693,7 +710,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
         }
       }
 
-      // 6. Simpan Transaksi Presensi (Terhubung Sesi & Realtime Cloud Sync)
+      // 6. Simpan Transaksi Presensi (TANPA menyimpan foto - hanya nama, NIP, kecocokan wajah & GPS)
       const res = recordAttendance({
         userId: currentUser.id,
         nip: currentUser.nip,
@@ -708,7 +725,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
         isLocationValid: isInsideRadius,
         isFaceValid: true,
         faceSimilarityScore: similarityScore,
-        photoRef: liveFaceAnalysis.photoDataUrl,
+        photoRef: '',
         deviceInfo: `${navigator.userAgent.substring(0, 50)} • ${cameraFacing}`,
         sessionId: userSchedule.id,
         sessionName: userSchedule.sessionName || userSchedule.name,
@@ -720,7 +737,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
         setResultMessage({
           type: 'success',
           title: `Presensi ${attendanceType.toUpperCase()} Berhasil!`,
-          description: `Status: ${status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}. Sesi: ${userSchedule.sessionName || userSchedule.name}. Jam: ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })} WIB. Verifikasi Wajah (${Math.round(similarityScore * 100)}%) dan Validasi GPS (${gpsDistance ?? 0}m) Sah.`,
+          description: `${res.message} Sesi: ${userSchedule.sessionName || userSchedule.name}. Jam: ${now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })} WIB. Verifikasi Wajah (${Math.round(similarityScore * 100)}%) dan Validasi GPS (${gpsDistance ?? 0}m) Sah.`,
         });
         loadData();
       } else {
@@ -1638,7 +1655,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                                 type="button"
                                 onClick={() =>
                                   setPreviewPhoto({
-                                    url: pair.masukRecord!.photoRef,
+                                    url: pair.masukRecord!.photoRef || '',
                                     title: `Foto Absen Masuk - ${pair.userName} (${pair.date})`,
                                   })
                                 }
@@ -1710,7 +1727,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                                 type="button"
                                 onClick={() =>
                                   setPreviewPhoto({
-                                    url: pair.pulangRecord!.photoRef,
+                                    url: pair.pulangRecord!.photoRef || '',
                                     title: `Foto Absen Pulang - ${pair.userName} (${pair.date})`,
                                   })
                                 }

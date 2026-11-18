@@ -203,7 +203,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                     type="button"
                     onClick={() =>
                       setPreviewPhoto({
-                        url: todayMasuk.photoRef,
+                        url: todayMasuk.photoRef || '',
                         title: `Absen Masuk - ${currentUser.name}`,
                         subtitle: `Hari Ini &bull; ${new Date(todayMasuk.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} WIB`,
                       })
@@ -291,7 +291,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                     type="button"
                     onClick={() =>
                       setPreviewPhoto({
-                        url: todayPulang.photoRef,
+                        url: todayPulang.photoRef || '',
                         title: `Absen Pulang - ${currentUser.name}`,
                         subtitle: `Hari Ini &bull; ${new Date(todayPulang.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })} WIB`,
                       })
@@ -700,7 +700,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                               type="button"
                               onClick={() =>
                                 setPreviewPhoto({
-                                  url: pair.masukRecord!.photoRef,
+                                  url: pair.masukRecord!.photoRef || '',
                                   title: `Absen Masuk - ${pair.userName}`,
                                   subtitle: `${pair.date} &bull; ${new Date(pair.masukRecord!.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })} WIB`,
                                 })
@@ -765,7 +765,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                               type="button"
                               onClick={() =>
                                 setPreviewPhoto({
-                                  url: pair.pulangRecord!.photoRef,
+                                  url: pair.pulangRecord!.photoRef || '',
                                   title: `Absen Pulang - ${pair.userName}`,
                                   subtitle: `${pair.date} &bull; ${new Date(pair.pulangRecord!.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false })} WIB`,
                                 })

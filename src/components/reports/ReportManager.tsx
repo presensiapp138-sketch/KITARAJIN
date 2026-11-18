@@ -766,7 +766,7 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                                   type="button"
                                   onClick={() =>
                                     setPreviewPhoto({
-                                      url: p.masukRecord!.photoRef,
+                                      url: p.masukRecord!.photoRef || '',
                                       title: `Absen Masuk - ${p.userName} (${p.date})`,
                                     })
                                   }
@@ -820,7 +820,7 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                                   type="button"
                                   onClick={() =>
                                     setPreviewPhoto({
-                                      url: p.pulangRecord!.photoRef,
+                                      url: p.pulangRecord!.photoRef || '',
                                       title: `Absen Pulang - ${p.userName} (${p.date})`,
                                     })
                                   }
@@ -1021,7 +1021,7 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                               type="button"
                               onClick={() =>
                                 setPreviewPhoto({
-                                  url: r.photoRef,
+                                  url: r.photoRef || '',
                                   title: `${r.userName} - Presensi ${r.type.toUpperCase()} (${r.date} ${timeStr})`,
                                 })
                               }

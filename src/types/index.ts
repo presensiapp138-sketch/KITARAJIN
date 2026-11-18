@@ -19,7 +19,7 @@ export interface User {
   email?: string;
   username: string;
   passwordHash: string; // Enkripsi SHA-256 + salt
-  savedPassword?: string; // Sandi tersimpan agar dapat ditampilkan/disembunyikan & disinkronkan ke Sheet/Drive
+  savedPassword?: string; // Sandi tersimpan agar dapat ditampilkan/disembunyikan & disinkronkan ke Sheet
   role: UserRole;
   departmentId?: string;
   departmentName?: string; // Nama departemen yang diketik secara manual oleh Admin/Kepala Sekolah
@@ -31,6 +31,8 @@ export interface User {
   avatarUrl?: string;
   createdAt: string;
   updatedAt: string;
+  diubah_pada?: string;
+  status?: 'aktif' | 'dihapus';
 }
 
 // 2. Departments Table Schema
@@ -41,22 +43,26 @@ export interface Department {
   description?: string;
   headName?: string;
   createdAt: string;
+  diubah_pada?: string;
+  status?: 'aktif' | 'dihapus';
 }
 
 // 3. Schedules Table Schema
 export interface Schedule {
   id: string;
   name: string;
-  sessionName?: string; // Sesi / Shift (e.g. Sesi Pagi, Sesi Khusus KS & Admin, Sesi Piket)
-  targetRole?: 'semua' | UserRole; // 'semua' | 'kepala_sekolah' | 'admin' | 'karyawan'
-  checkInStart: string; // '06:30' (Jam & Menit presensi dibuka)
-  checkInDeadline: string; // '07:30' (Jam & Menit batas masuk tepat waktu)
-  lateToleranceMinutes: number; // Toleransi keterlambatan (misal 15 menit)
-  checkOutStart: string; // '15:00' (Jam & Menit mulai presensi pulang)
-  checkOutEnd?: string; // '18:00' (Jam & Menit batas akhir presensi pulang)
-  workDays: number[]; // [1,2,3,4,5] (Senin-Jumat)
-  ruleNotes?: string; // Catatan dan ketentuan manual jadwal
+  sessionName?: string; // Sesi / Shift (e.g. Sesi 1, Sesi 2, Sesi 3)
+  targetRole?: 'semua' | UserRole;
+  checkInStart: string; // '06:00'
+  checkInDeadline: string; // '07:30'
+  lateToleranceMinutes: number;
+  checkOutStart: string; // '11:30'
+  checkOutEnd?: string; // '13:00'
+  workDays: number[]; // [1,2,3,4,5,6]
+  ruleNotes?: string;
   isActive: boolean;
+  diubah_pada?: string;
+  status?: 'aktif' | 'dihapus';
 }
 
 // 4. Locations Table Schema (Titik Presensi & Geofence)
@@ -65,37 +71,42 @@ export interface LocationConfig {
   name: string;
   latitude: number;
   longitude: number;
-  radiusMeters: number; // Radius toleransi (e.g. 50 meter)
+  radiusMeters: number;
   address: string;
   isActive: boolean;
+  diubah_pada?: string;
+  status?: 'aktif' | 'dihapus';
 }
 
-// 5. FaceRegistry Table Schema (Database Wajah Terpusat Kepala Sekolah)
+// 5. FaceRegistry Table Schema (Database Wajah + ID File Drive)
 export interface FaceRegistryItem {
   id: string;
   userId: string;
   nip: string;
   userName: string;
   role: UserRole;
-  faceEmbedding: number[]; // Vektor fitur wajah numerik nyata (bukan teks palsu)
-  registeredPhotoRef: string; // Referensi URL/Blob penyimpanan foto
-  registeredBy: string; // ID Kepala Sekolah / Admin yang mendaftarkan
+  faceEmbedding: number[];
+  registeredPhotoRef: string; // Data URL cache lokal atau placeholder saat dimuat dari Drive endpoint
+  registeredPhotoFileId?: string; // ID File privat di Google Drive (via DriveApp)
+  registeredBy: string;
   cameraUsed: 'user' | 'environment';
-  qualityScore: number; // Skor kualitas pengambilan (0-100)
+  qualityScore: number;
   updatedAt: string;
   isActive: boolean;
+  diubah_pada?: string;
+  status?: 'aktif' | 'dihapus';
 }
 
-// 6. Attendance Table Schema (Riwayat Presensi Masuk & Pulang)
+// 6. Attendance Table Schema (Presensi TIDAK menyimpan foto, hanya nama, NIP, verifikasi & GPS)
 export interface AttendanceRecord {
   id: string;
   userId: string;
   nip: string;
   userName: string;
   role: UserRole;
-  date: string; // 'YYYY-MM-DD'
+  date: string; // 'YYYY-MM-DD' otoritatif dari server Apps Script
   type: AttendanceType;
-  timestamp: string; // ISO string
+  timestamp: string; // ISO string otoritatif dari server Apps Script
   status: AttendanceStatus;
   latitude: number;
   longitude: number;
@@ -103,16 +114,19 @@ export interface AttendanceRecord {
   isLocationValid: boolean;
   isFaceValid: boolean;
   faceSimilarityScore: number;
-  photoRef: string; // Foto bukti presensi
+  photoRef?: string; // Kosong untuk presensi baru (presensi tidak menyimpan foto)
   deviceInfo: string;
   notes?: string;
   sessionId?: string;
   sessionName?: string;
+  diubah_pada?: string;
+  rowStatus?: 'aktif' | 'dihapus';
+  syncState?: 'synced' | 'queued' | 'offline';
 }
 
 // Pasangan Riwayat Presensi Harian (Absen Masuk & Pulang)
 export interface DailyAttendancePair {
-  date: string; // 'YYYY-MM-DD'
+  date: string;
   userId: string;
   userName: string;
   nip: string;
@@ -121,7 +135,7 @@ export interface DailyAttendancePair {
   pulangRecord?: AttendanceRecord;
 }
 
-// 7. LeaveRequests Table Schema (Pengajuan Izin, Sakit, Dinas)
+// 7. LeaveRequests Table Schema
 export interface LeaveRequest {
   id: string;
   userId: string;
@@ -132,15 +146,17 @@ export interface LeaveRequest {
   endDate: string;
   durationDays: number;
   reason: string;
-  documentRef?: string; // Dokumen surat dokter / surat tugas
+  documentRef?: string;
   status: LeaveStatus;
   reviewedBy?: string;
   reviewNotes?: string;
   reviewedAt?: string;
   createdAt: string;
+  diubah_pada?: string;
+  rowStatus?: 'aktif' | 'dihapus';
 }
 
-// 8. Assignments Table Schema (Tugas & Dokumentasi)
+// 8. Assignments Table Schema
 export interface Assignment {
   id: string;
   title: string;
@@ -161,44 +177,77 @@ export interface Assignment {
   };
   feedback?: string;
   createdAt: string;
+  diubah_pada?: string;
+  rowStatus?: 'aktif' | 'dihapus';
 }
 
-// 9. AuditLogs Table Schema (Log Rekam Jejak Admin & Sistem)
+// 9. AuditLogs / Log Sheet Table Schema
 export interface AuditLog {
   id: string;
   actorUserId: string;
   actorName: string;
   actorRole: UserRole;
-  action: string; // e.g. 'UPDATE_LOCATION', 'REGISTER_FACE', 'APPROVE_LEAVE'
-  targetEntity: string; // 'FaceRegistry', 'Locations', 'Users', etc.
+  action: string;
+  targetEntity: string;
   targetId?: string;
   details: string;
   ipAddress?: string;
   timestamp: string;
+  diubah_pada?: string;
 }
 
-// 10. Settings Table Schema (Pengaturan Global & Koneksi Spreadsheet)
+// 10. Settings Table Schema
 export interface AppSettings {
+  id?: string;
   schoolName: string;
   schoolAddress: string;
   schoolEmail?: string;
   appTitle: string;
-  storageMode: 'local_secure_vault' | 'google_workspace_sync' | 'hybrid';
-  googleSheetSpreadsheetId?: string;
-  googleDriveFolderId?: string;
-  googleDriveUsersFileId?: string;
+  storageMode: 'google_apps_script' | 'local_cache';
   requireStrictFaceVerification: boolean;
   requireStrictGps: boolean;
-  minFaceMatchThreshold: number; // e.g. 0.75 (75%)
+  minFaceMatchThreshold: number;
   themeColor: string;
   lastSyncTimestamp?: string;
-  lastWorkspaceUserSyncAt?: string;
-  lastWorkspaceFullSyncAt?: string;
-  lastUserMutationAt?: string;
-  lastDataMutationAt?: string;
-  autoWorkspaceSyncEnabled?: boolean;
-  googleAccountEmail?: string;
-  isGoogleConnected?: boolean;
-  googleConnectedAt?: string;
+  diubah_pada?: string;
 }
 
+export interface AppsScriptConfig {
+  webAppUrl: string;
+  apiToken: string;
+  isLocked: boolean;
+  updatedAt?: string;
+}
+
+export interface SheetRepairReport {
+  tabsCreated: string[];
+  headersAdded: Array<{ table: string; columns: string[] }>;
+  idsRepaired: number;
+  legacyRowsImported: number;
+  metadataNormalized: number;
+  demoRemoved: number;
+  photosLinked: number;
+  crossRefsRepaired: number;
+  summary: string;
+}
+
+export interface SystemCheckResult {
+  checkedAt: string;
+  latencyMs: number;
+  frontendConfigured: boolean;
+  frontendUrlPresent: boolean;
+  frontendTokenPresent: boolean;
+  scriptReachable: boolean;
+  authorized: boolean;
+  sheetsConnected: boolean;
+  driveConnected: boolean;
+  sheetName?: string;
+  spreadsheetId?: string;
+  driveFolderName?: string;
+  tabsStatus?: Array<{ name: string; exists: boolean; rows: number }>;
+  syncIssues?: string[];
+  missingFrontendFields: string[];
+  missingScriptProperties: string[];
+  serverTime?: string;
+  error?: string;
+}

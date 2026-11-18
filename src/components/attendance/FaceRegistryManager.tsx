@@ -43,10 +43,53 @@ import {
   formatCameraError,
   stopCameraStream,
 } from '../../services/cameraService';
+import { fetchFacePhotoUrl } from '../../services/appsScriptSync';
 
 interface FaceRegistryManagerProps {
   currentUser: User;
 }
+
+const FaceAvatarThumb: React.FC<{
+  photoRef?: string;
+  fileId?: string;
+  alt: string;
+}> = ({ photoRef, fileId, alt }) => {
+  const [resolvedUrl, setResolvedUrl] = useState<string | null>(photoRef || null);
+
+  useEffect(() => {
+    let active = true;
+    if (photoRef) {
+      setResolvedUrl(photoRef);
+      return;
+    }
+    if (!fileId) {
+      setResolvedUrl(null);
+      return;
+    }
+    setResolvedUrl(null);
+    fetchFacePhotoUrl(fileId).then((url) => {
+      if (active) setResolvedUrl(url);
+    });
+    return () => {
+      active = false;
+    };
+  }, [photoRef, fileId]);
+
+  if (resolvedUrl) {
+    return (
+      <img
+        src={resolvedUrl}
+        alt={alt}
+        className="w-10 h-10 rounded-full object-cover border-2 border-purple-400 shadow-xs"
+      />
+    );
+  }
+  return (
+    <div className="w-10 h-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400">
+      <ScanFace className="w-5 h-5" />
+    </div>
+  );
+};
 
 export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ currentUser }) => {
   const [users, setUsers] = useState<User[]>([]);
@@ -437,17 +480,11 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
                   <tr key={u.id} className="hover:bg-slate-50 transition-colors">
                     <td className="py-3.5 px-4">
                       <div className="flex items-center gap-3">
-                        {faceData?.registeredPhotoRef ? (
-                          <img
-                            src={faceData.registeredPhotoRef}
-                            alt={u.name}
-                            className="w-10 h-10 rounded-full object-cover border-2 border-purple-400 shadow-xs"
-                          />
-                        ) : (
-                          <div className="w-10 h-10 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-400">
-                            <ScanFace className="w-5 h-5" />
-                          </div>
-                        )}
+                        <FaceAvatarThumb
+                          photoRef={faceData?.registeredPhotoRef}
+                          fileId={faceData?.registeredPhotoFileId}
+                          alt={u.name}
+                        />
                         <div>
                           <div className="font-bold text-slate-900">{u.name}</div>
                           <div className="text-[11px] text-slate-500">{u.position}</div>

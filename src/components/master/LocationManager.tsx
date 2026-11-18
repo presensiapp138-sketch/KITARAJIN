@@ -31,7 +31,6 @@ import {
   deleteLocation,
   getAppSettings,
 } from '../../services/storage';
-import { autoSyncCloudInBackground } from '../../services/firestoreSync';
 
 interface LocationManagerProps {
   currentUser: User;
@@ -78,6 +77,7 @@ export const LocationManager: React.FC<LocationManagerProps> = ({ currentUser })
   const [formRadius, setFormRadius] = useState<number>(50);
   const [formAddress, setFormAddress] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteTargetLoc, setDeleteTargetLoc] = useState<{ id: string; name: string } | null>(null);
 
   const loadData = () => {
     setLocations(getAllLocations());
@@ -169,11 +169,6 @@ export const LocationManager: React.FC<LocationManagerProps> = ({ currentUser })
           const syncedRadius = activePrimary?.radiusMeters || defaultRadius;
           setLastCalibrationSuccess(true);
           loadData();
-          try {
-            await autoSyncCloudInBackground();
-          } catch (syncErr) {
-            console.warn('Auto cloud sync note:', syncErr);
-          }
 
           setFeedback({
             type: 'success',
@@ -368,15 +363,19 @@ export const LocationManager: React.FC<LocationManagerProps> = ({ currentUser })
   };
 
   const handleDelete = (id: string, name: string) => {
-    if (confirm(`Apakah Anda yakin ingin menghapus titik lokasi "${name}"?`)) {
-      const res = deleteLocation(currentUser, id);
-      if (res.success) {
-        setFeedback({ type: 'success', message: res.message });
-        loadData();
-      } else {
-        setFeedback({ type: 'error', message: res.message });
-      }
+    setDeleteTargetLoc({ id, name });
+  };
+
+  const confirmDeleteLocation = () => {
+    if (!deleteTargetLoc) return;
+    const res = deleteLocation(currentUser, deleteTargetLoc.id);
+    if (res.success) {
+      setFeedback({ type: 'success', message: res.message });
+      loadData();
+    } else {
+      setFeedback({ type: 'error', message: res.message });
     }
+    setDeleteTargetLoc(null);
   };
 
   const handleToggleActive = (loc: LocationConfig) => {
@@ -837,6 +836,37 @@ export const LocationManager: React.FC<LocationManagerProps> = ({ currentUser })
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Lokasi */}
+      {deleteTargetLoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center gap-2.5 text-rose-700 font-extrabold text-sm">
+              <AlertCircle className="w-5 h-5 shrink-0" />
+              <span>Hapus Titik Lokasi Presensi?</span>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Apakah Anda yakin ingin menghapus titik lokasi <strong>"{deleteTargetLoc.name}"</strong>? Perubahan akan langsung tercatat ke Google Sheets.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteTargetLoc(null)}
+                className="px-3.5 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteLocation}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer"
+              >
+                Ya, Hapus Lokasi
+              </button>
+            </div>
           </div>
         </div>
       )}

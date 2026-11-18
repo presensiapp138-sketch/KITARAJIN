@@ -49,6 +49,7 @@ export const ScheduleManager: React.FC<ScheduleManagerProps> = ({ currentUser })
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<Schedule | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   // Form State for Schedule & Session
   const [formName, setFormName] = useState('');
@@ -85,6 +86,13 @@ export const ScheduleManager: React.FC<ScheduleManagerProps> = ({ currentUser })
 
   useEffect(() => {
     loadData();
+    const handleSync = () => loadData();
+    window.addEventListener('kitarajin_cloud_sync', handleSync);
+    window.addEventListener('storage', handleSync);
+    return () => {
+      window.removeEventListener('kitarajin_cloud_sync', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
   }, []);
 
   const parseTime = (timeStr?: string) => {
@@ -254,15 +262,19 @@ export const ScheduleManager: React.FC<ScheduleManagerProps> = ({ currentUser })
   };
 
   const handleDelete = (id: string, name: string) => {
-    if (confirm(`Apakah Anda yakin ingin menghapus jadwal & sesi "${name}"?`)) {
-      const res = deleteSchedule(currentUser, id);
-      if (res.success) {
-        setFeedback({ type: 'success', message: res.message });
-        loadData();
-      } else {
-        setFeedback({ type: 'error', message: res.message });
-      }
+    setDeleteTarget({ id, name });
+  };
+
+  const confirmDelete = () => {
+    if (!deleteTarget) return;
+    const res = deleteSchedule(currentUser, deleteTarget.id);
+    if (res.success) {
+      setFeedback({ type: 'success', message: res.message });
+      loadData();
+    } else {
+      setFeedback({ type: 'error', message: res.message });
     }
+    setDeleteTarget(null);
   };
 
   const handleToggleActive = (sch: Schedule) => {
@@ -869,6 +881,33 @@ export const ScheduleManager: React.FC<ScheduleManagerProps> = ({ currentUser })
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-100 space-y-4">
+            <h3 className="font-bold text-slate-900 text-sm">Konfirmasi Hapus Jadwal &amp; Sesi</h3>
+            <p className="text-xs text-slate-600">
+              Apakah Anda yakin ingin menghapus jadwal &amp; sesi <strong>{deleteTarget.name}</strong>?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-semibold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer"
+              >
+                Hapus
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -13,34 +13,28 @@ import {
   AlertCircle,
   X,
   Save,
-  Database,
-  RefreshCw,
-  ExternalLink,
-  Activity,
-  Check,
-  FolderOpen,
   UserCheck,
   Mail,
   User as UserIcon,
   Phone,
   Clock,
-  CloudUpload,
-  Sparkles,
   Lock,
-  ArrowRight,
-  Layers,
-  Cloud,
-  Radio,
-  Smartphone,
-  Laptop,
+  Unlock,
   Eye,
   EyeOff,
   Key,
   Copy,
-  Globe,
+  Check,
+  Code2,
+  ChevronDown,
+  ChevronUp,
+  HardDrive,
+  Activity,
+  Sparkles,
+  Wrench,
 } from 'lucide-react';
 
-import { AppSettings, User } from '../../types';
+import { AppSettings, SystemCheckResult, User } from '../../types';
 import {
   getAppSettings,
   updateAppSettings,
@@ -57,51 +51,40 @@ import {
   getCurrentSession,
 } from '../../services/storage';
 import {
-  getCloudSyncStatus,
-  testFirestoreConnection,
-} from '../../services/firestoreSync';
-import {
-  signInWithGoogle,
-  signOutGoogle,
-  getAccessToken,
-  getGoogleUser,
-  executeAutoCreateDatabase,
-  checkRealGoogleDatabaseHealth,
-  cleanGoogleId,
-  initAuth,
-  formatAuthErrorMessage,
-  linkGoogleAccount,
-  unlinkGoogleAccount,
-  getConnectedGoogleEmail,
-  syncAllUsersToDriveAndSheet,
-  syncAllAppDataToDriveAndSheet,
-  hasPendingWorkspaceUserSync,
-  hasRealAccessToken,
-  autoSyncAllDataToWorkspace,
-  getWorkspaceSyncRuntimeStatus,
-  getGoogleConsoleSetupInfo,
-} from '../../services/workspaceService';
+  getAppsScriptConfig,
+  saveAppsScriptConfig,
+  setAppsScriptConfigLocked,
+  subscribeSyncUiState,
+  getSyncUiState,
+  SyncUiState,
+  runSystemCheck,
+  repairSheetSync,
+} from '../../services/appsScriptSync';
+import { APPS_SCRIPT_CODE, APPS_SCRIPT_DEPLOY_STEPS } from '../../config/appsScriptTemplate';
 
 interface SettingsManagerProps {
   currentUser: User;
   onUpdateCurrentUser?: (user: User) => void;
 }
 
-interface TabHealthInfo {
-  id: number;
-  name: string;
-  key: string;
-  count: number;
-  status: 'valid' | 'syncing';
-  description: string;
-}
-
 export const SettingsManager: React.FC<SettingsManagerProps> = ({
   currentUser,
   onUpdateCurrentUser,
 }) => {
-  const [settings, setSettings] = useState<AppSettings>(getAppSettings());
+  const [settings, setSettings] = useState<AppSettings>(() => getAppSettings());
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Apps Script Config (Tempel 1x -> Simpan & Kunci Permanen)
+  const [gasConfig, setGasConfig] = useState(() => getAppsScriptConfig());
+  const [webAppUrlInput, setWebAppUrlInput] = useState(() => getAppsScriptConfig().webAppUrl);
+  const [apiTokenInput, setApiTokenInput] = useState(() => getAppsScriptConfig().apiToken);
+  const [showToken, setShowToken] = useState(false);
+  const [syncUiState, setSyncUiState] = useState<SyncUiState>(() => getSyncUiState());
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [isRepairingSheet, setIsRepairingSheet] = useState(false);
+  const [systemCheckResult, setSystemCheckResult] = useState<SystemCheckResult | null>(null);
+  const [showCodePanel, setShowCodePanel] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
 
   // Kepala Sekolah Profile Form State
   const [ksName, setKsName] = useState(currentUser.name);
@@ -117,7 +100,13 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   );
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
 
-  // Form State Identitas Sekolah
+  // Ubah Password Kepala Sekolah State
+  const [ksPassword, setKsPassword] = useState('');
+  const [ksConfirmPassword, setKsConfirmPassword] = useState('');
+  const [showKsPassword, setShowKsPassword] = useState(false);
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+
+  // Form State Identitas Sekolah & Kebijakan Presensi
   const [schoolName, setSchoolName] = useState(settings.schoolName);
   const [schoolEmail, setSchoolEmail] = useState(settings.schoolEmail || currentUser.email || '');
   const [schoolAddress, setSchoolAddress] = useState(settings.schoolAddress);
@@ -127,199 +116,40 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   );
   const [requireStrictGps, setRequireStrictGps] = useState(settings.requireStrictGps);
   const [requireStrictFace, setRequireStrictFace] = useState(settings.requireStrictFaceVerification);
-  const [sheetIdInput, setSheetIdInput] = useState(settings.googleSheetSpreadsheetId || '');
-  const [driveIdInput, setDriveIdInput] = useState(settings.googleDriveFolderId || '');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Ubah Password Kepala Sekolah State
-  const [ksPassword, setKsPassword] = useState('');
-  const [ksConfirmPassword, setKsConfirmPassword] = useState('');
-  const [showKsPassword, setShowKsPassword] = useState(false);
-  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
-
-
-  // Google OAuth State
-  const [googleUserEmail, setGoogleUserEmail] = useState<string | null>(null);
-  const [isGoogleConnected, setIsGoogleConnected] = useState(false);
-  const [isSigningInGoogle, setIsSigningInGoogle] = useState(false);
-
-  // Database Execution & Progress State
-  const [isCreatingDb, setIsCreatingDb] = useState(false);
-  const [creationStepMsg, setCreationStepMsg] = useState<string | null>(null);
-  const [isSyncingData, setIsSyncingData] = useState(false);
-  const [isSyncingUsersOnly, setIsSyncingUsersOnly] = useState(false);
-  const [pendingWorkspaceSync, setPendingWorkspaceSync] = useState(() => hasPendingWorkspaceUserSync());
-  const [workspaceRuntime, setWorkspaceRuntime] = useState(() => getWorkspaceSyncRuntimeStatus());
-  const [workspaceConfirmModal, setWorkspaceConfirmModal] = useState<{
-    type: 'create_db' | 'sync_all_tabs' | 'sync_users_only';
-  } | null>(null);
-
-  // Database Connection Diagnostic State
-  const [isCheckingDb, setIsCheckingDb] = useState(false);
-  const [dbDiagnosticResult, setDbDiagnosticResult] = useState<{
-    checkedAt: string;
-    isHealthy: boolean;
-    tabs: TabHealthInfo[];
-    sheetUrl?: string;
-    driveUrl?: string;
-    sheetTitle?: string;
-    driveName?: string;
-    message: string;
-    liveApiVerified?: boolean;
-  } | null>(null);
-
-  // Cloud Multi-Device Sync State
-  const [cloudStatus, setCloudStatus] = useState(getCloudSyncStatus());
-  const [isTestingCloud, setIsTestingCloud] = useState(false);
-  const [cloudMessage, setCloudMessage] = useState<string | null>(null);
-
-  // Domain & Google Console Setup Copy State
-  const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [showConsoleGuide, setShowConsoleGuide] = useState(true);
-  const googleConsoleInfo = getGoogleConsoleSetupInfo();
-  const hasMountedTargetsRef = React.useRef(false);
-
-  const persistWorkspaceTargetIds = (rawSheet: string, rawDrive: string) => {
-    const cleanSheet = cleanGoogleId(rawSheet);
-    const cleanDrive = cleanGoogleId(rawDrive);
-    const currentSettings = getAppSettings();
-    const prevSheet = cleanGoogleId(currentSettings.googleSheetSpreadsheetId || '');
-    const prevDrive = cleanGoogleId(currentSettings.googleDriveFolderId || '');
-
-    if (cleanSheet === prevSheet && cleanDrive === prevDrive) return;
-
-    const hasTarget = Boolean(cleanSheet || cleanDrive);
-    updateAppSettings(
-      currentUser,
-      {
-        googleSheetSpreadsheetId: cleanSheet,
-        googleDriveFolderId: cleanDrive,
-        autoWorkspaceSyncEnabled: hasTarget ? true : currentSettings.autoWorkspaceSyncEnabled,
-        storageMode: hasTarget ? 'google_workspace_sync' : currentSettings.storageMode,
-      },
-      { skipWorkspaceAutoSync: !hasTarget }
-    );
-    setSettings(getAppSettings());
-    setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
-  };
-
-  const handleCopyConsoleValue = async (key: string, val: string) => {
-    try {
-      await navigator.clipboard.writeText(val);
-      setCopiedField(key);
-      setTimeout(() => {
-        setCopiedField((prev) => (prev === key ? null : prev));
-      }, 2200);
-    } catch {
-      setFeedback({
-        type: 'error',
-        message: `Salin manual nilai ini: ${val}`,
-      });
-    }
-  };
-
   useEffect(() => {
-    const data = getAppSettings();
-    setSettings(data);
-    setSchoolName(data.schoolName);
-    setSchoolEmail(data.schoolEmail || currentUser.email || '');
-    setSchoolAddress(data.schoolAddress);
-    setAppTitle(data.appTitle);
-    setMinFaceMatchThreshold(Math.round((data.minFaceMatchThreshold || 0.75) * 100));
-    setRequireStrictGps(data.requireStrictGps);
-    setRequireStrictFace(data.requireStrictFaceVerification);
-    setSheetIdInput(data.googleSheetSpreadsheetId || '');
-    setDriveIdInput(data.googleDriveFolderId || '');
-    hasMountedTargetsRef.current = true;
-
-    // Sinkronkan status profile terbaru
-    const session = getCurrentSession();
-    if (session) {
-      setKsName(session.name);
-      setKsUsername(session.username);
-      setKsNip(session.nip || '');
-      setKsEmail(session.email || '');
-      setKsPhone(session.phone || '');
-      if (session.assignedSessionIds && session.assignedSessionIds.length > 0) {
-        setKsAssignedSessions(session.assignedSessionIds);
-      }
-    }
-
-    // Periksa status akun Google yang sudah tersimpan
-    const savedGoogleEmail = getConnectedGoogleEmail() || data.googleAccountEmail;
-    if (savedGoogleEmail) {
-      setIsGoogleConnected(true);
-      setGoogleUserEmail(savedGoogleEmail);
-    }
-
-    // Listener Firebase Auth Google
-    const unsubscribe = initAuth(
-      (user) => {
-        setIsGoogleConnected(true);
-        setGoogleUserEmail(user.email || savedGoogleEmail || 'Akun Google Terhubung');
-        setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
-      },
-      () => {
-        const stillLinked = getConnectedGoogleEmail() || data.googleAccountEmail;
-        if (stillLinked) {
-          setIsGoogleConnected(true);
-          setGoogleUserEmail(stillLinked);
-        } else {
-          setIsGoogleConnected(false);
-          setGoogleUserEmail(null);
-        }
-        setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
-      }
-    );
-
-    // Initial check
-    if (data.googleSheetSpreadsheetId || data.googleDriveFolderId) {
-      runDatabaseCheck(data.googleSheetSpreadsheetId, data.googleDriveFolderId, false);
-    }
+    const unsubscribeSync = subscribeSyncUiState((next) => setSyncUiState(next));
 
     const handleSyncEvent = () => {
-      setCloudStatus(getCloudSyncStatus());
       const latestData = getAppSettings();
       setSettings(latestData);
+      setSchoolName(latestData.schoolName);
+      setSchoolAddress(latestData.schoolAddress);
+      setAppTitle(latestData.appTitle);
       setSchoolEmail(latestData.schoolEmail || getCurrentSession()?.email || '');
-      if (latestData.googleSheetSpreadsheetId) {
-        setSheetIdInput((prev) => prev || latestData.googleSheetSpreadsheetId || '');
-      }
-      if (latestData.googleDriveFolderId) {
-        setDriveIdInput((prev) => prev || latestData.googleDriveFolderId || '');
-      }
-      const syncedGoogleEmail = getConnectedGoogleEmail() || latestData.googleAccountEmail;
-      if (syncedGoogleEmail) {
-        setIsGoogleConnected(true);
-        setGoogleUserEmail(syncedGoogleEmail);
-      }
-      setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
-      setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
+      setMinFaceMatchThreshold(Math.round((latestData.minFaceMatchThreshold || 0.75) * 100));
+      setRequireStrictGps(latestData.requireStrictGps);
+      setRequireStrictFace(latestData.requireStrictFaceVerification);
       setSchedules(getAllSchedules());
     };
+
     window.addEventListener('kitarajin_cloud_sync', handleSyncEvent);
-    window.addEventListener('kitarajin_workspace_sync', handleSyncEvent);
     window.addEventListener('kitarajin_settings_updated', handleSyncEvent);
     window.addEventListener('storage', handleSyncEvent);
 
+    // Uji koneksi otomatis di latar belakang jika sudah terkonfigurasi
+    if (getAppsScriptConfig().webAppUrl && getAppsScriptConfig().apiToken) {
+      runSystemCheck().then((res) => setSystemCheckResult(res)).catch(() => {});
+    }
+
     return () => {
-      if (typeof unsubscribe === 'function') unsubscribe();
+      unsubscribeSync();
       window.removeEventListener('kitarajin_cloud_sync', handleSyncEvent);
-      window.removeEventListener('kitarajin_workspace_sync', handleSyncEvent);
       window.removeEventListener('kitarajin_settings_updated', handleSyncEvent);
       window.removeEventListener('storage', handleSyncEvent);
     };
   }, []);
-
-  // Auto-simpan ID Spreadsheet & Folder Drive setelah pengguna selesai menempel/mengetik
-  // agar tidak perlu mengetik ulang meskipun aplikasi di-refresh, ditutup & dibuka kembali
-  useEffect(() => {
-    if (!hasMountedTargetsRef.current) return;
-    const timer = setTimeout(() => {
-      persistWorkspaceTargetIds(sheetIdInput, driveIdInput);
-    }, 900);
-    return () => clearTimeout(timer);
-  }, [sheetIdInput, driveIdInput]);
 
   useEffect(() => {
     setKsName(currentUser.name);
@@ -334,329 +164,133 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     );
   }, [currentUser]);
 
-  const handleTestCloudConnection = async () => {
-    setIsTestingCloud(true);
-    setCloudMessage(null);
-    try {
-      const ok = await testFirestoreConnection();
-      setCloudStatus(getCloudSyncStatus());
-      if (ok) {
-        setCloudMessage('Koneksi Cloud Firestore aktif! Sinkronisasi antar-perangkat berjalan secara real-time.');
-      } else {
-        setCloudMessage('Koneksi ke Firestore cloud sedang offline/dibatasi.');
-      }
-    } catch {
-      setCloudMessage('Terjadi kendala saat memeriksa koneksi cloud.');
-    } finally {
-      setIsTestingCloud(false);
-    }
-  };
+  // Simpan & Kunci URL + Token Apps Script (cukup tempel 1x, bertahan saat refresh & Vercel)
+  const handleSaveAndLockAppsScript = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanUrl = webAppUrlInput.trim();
+    const cleanToken = apiTokenInput.trim();
 
-  // Hubungkan Akun Google / Email Kepala Sekolah (OAuth Riil)
-  const handleGoogleConnect = async (preferredEmail?: string, forceAccountSelect = false) => {
-    setIsSigningInGoogle(true);
-    setFeedback(null);
-    const targetEmail = (preferredEmail || ksEmail || currentUser.email || '').trim();
-
-    try {
-      const result = await signInWithGoogle(targetEmail, { forceAccountSelect });
-      if (result) {
-        setIsGoogleConnected(true);
-        const email = result.user.email || targetEmail || 'Akun Google';
-        setGoogleUserEmail(email);
-
-        const existingSheetId = cleanGoogleId(sheetIdInput) || settings.googleSheetSpreadsheetId || '';
-        const existingDriveId = cleanGoogleId(driveIdInput) || settings.googleDriveFolderId || '';
-        const hasTargetIds = Boolean(existingSheetId || existingDriveId);
-
-        updateAppSettings(
-          currentUser,
-          {
-            isGoogleConnected: true,
-            googleAccountEmail: email,
-            googleSheetSpreadsheetId: existingSheetId,
-            googleDriveFolderId: existingDriveId,
-            autoWorkspaceSyncEnabled: hasTargetIds ? true : settings.autoWorkspaceSyncEnabled,
-            storageMode: 'google_workspace_sync',
-          },
-          { skipWorkspaceAutoSync: true }
-        );
-
-        if (email) {
-          setKsEmail(email);
-          await updateUser(currentUser, currentUser.id, { email });
-          if (onUpdateCurrentUser) {
-            onUpdateCurrentUser({ ...currentUser, email });
-          }
-        }
-
-        const currentSettings = getAppSettings();
-        setSettings(currentSettings);
-        setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
-        setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
-
-        if (hasTargetIds) {
-          autoSyncAllDataToWorkspace('reconnect').catch(() => {});
-          setSettings(getAppSettings());
-          setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
-          setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
-          setFeedback({
-            type: 'success',
-            message: `Akun Google (${email}) aktif untuk sesi ini! ID Sheet & Drive tersimpan permanen — setiap tambah, edit, hapus, maupun presensi otomatis tersinkron ke Google Drive & Sheets di latar belakang.`,
-          });
-        } else {
-          setFeedback({
-            type: 'success',
-            message: `Akun Google (${email}) berhasil terhubung melalui popup Google! Silakan konfirmasi dialog untuk menautkan & mengaktifkan auto-sync 10 tab Google Drive & Sheets.`,
-          });
-
-          setWorkspaceConfirmModal({
-            type: 'create_db',
-          });
-        }
-      }
-    } catch (err: any) {
-      console.warn('Login Google error:', err);
-      const friendly = formatAuthErrorMessage(err);
+    if (!cleanUrl || !cleanUrl.startsWith('https://')) {
       setFeedback({
         type: 'error',
-        message: `${friendly} (Data akun & presensi tetap aman tersimpan di Cloud Firestore.)`,
+        message: 'URL Web App Apps Script harus berupa tautan https:// yang valid (akhiran /exec).',
       });
-    } finally {
-      setIsSigningInGoogle(false);
+      return;
     }
-  };
-
-  const handleGoogleDisconnect = async () => {
-    await signOutGoogle();
-    unlinkGoogleAccount();
-    updateAppSettings(currentUser, {
-      isGoogleConnected: false,
-      googleAccountEmail: undefined,
-    });
-    setSettings(getAppSettings());
-    setIsGoogleConnected(false);
-    setGoogleUserEmail(null);
-    setFeedback({
-      type: 'success',
-      message: 'Koneksi akun Google berhasil diputuskan. Anda dapat menghubungkan akun email lain kapan saja.',
-    });
-  };
-
-  // Inisialisasi Database 10 Tab Lokal Sekolah (Tanpa bergantung ke Google)
-  const handleCreateLocalVaultDatabase = () => {
-    updateAppSettings(currentUser, {
-      storageMode: 'local_secure_vault',
-      lastSyncTimestamp: new Date().toISOString(),
-    });
-    setSettings(getAppSettings());
-    runDatabaseCheck(undefined, undefined, false);
-    setFeedback({
-      type: 'success',
-      message: 'Database 10 Tab Lokal / Vault Sekolah berhasil diinisialisasi dan aktif! Semua data civitas sekolah (pengguna, jadwal, lokasi, wajah, presensi) siap digunakan.',
-    });
-  };
-
-  // ==============================================================
-  // EKSEKUSI PEMBUATAN & SINKRONISASI GOOGLE DRIVE & SHEETS (VIA KONFIRMASI MODAL)
-  // ==============================================================
-  const executeConfirmAutoCreateAndLinkDatabase = async () => {
-    setWorkspaceConfirmModal(null);
-    setIsCreatingDb(true);
-    setCreationStepMsg('Memulai proses inisialisasi database...');
-    setFeedback(null);
-
-    const cleanSheet = cleanGoogleId(sheetIdInput);
-    const cleanDrive = cleanGoogleId(driveIdInput);
-
-    try {
-      const result = await executeAutoCreateDatabase(
-        currentUser,
-        cleanSheet,
-        cleanDrive,
-        (step) => setCreationStepMsg(step)
-      );
-
-      setSheetIdInput(result.spreadsheetId || '');
-      setDriveIdInput(result.folderId || '');
-      const newSettings = getAppSettings();
-      setSettings(newSettings);
-      setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
-
+    if (!cleanToken || cleanToken.length < 6) {
       setFeedback({
-        type: 'success',
-        message: result.message,
+        type: 'error',
+        message: 'API Token Rahasia wajib diisi (minimal 6 karakter) dan harus sama dengan Script Properties.',
       });
+      return;
+    }
 
-      await runDatabaseCheck(result.spreadsheetId, result.folderId, true);
-    } catch (error: any) {
-      console.warn('Otomatisasi Google note:', error);
+    const saved = saveAppsScriptConfig({
+      webAppUrl: cleanUrl,
+      apiToken: cleanToken,
+      isLocked: true,
+    });
+    setGasConfig(saved);
+    setShowToken(false);
 
-      if (cleanSheet || cleanDrive) {
-        updateAppSettings(currentUser, {
-          googleSheetSpreadsheetId: cleanSheet || settings.googleSheetSpreadsheetId,
-          googleDriveFolderId: cleanDrive || settings.googleDriveFolderId,
-          storageMode: 'google_workspace_sync',
+    setIsTestingConnection(true);
+    setFeedback(null);
+    try {
+      const check = await runSystemCheck();
+      setSystemCheckResult(check);
+      if (check.authorized && check.sheetsConnected && check.driveConnected) {
+        setFeedback({
+          type: 'success',
+          message: `Konfigurasi Apps Script disimpan & DIKUNCI! Terhubung ke Google Sheets "${check.sheetName || 'Database'}" & folder Drive "${check.driveFolderName || 'Privat'}". Sinkronisasi otomatis 2-arah aktif.`,
         });
-        setSettings(getAppSettings());
+      } else {
+        setFeedback({
+          type: 'error',
+          message: check.error || 'Konfigurasi terkunci, namun koneksi ke Sheets/Drive belum sepenuhnya valid. Periksa menu Cek Sistem.',
+        });
       }
-
-      const friendlyMsg = formatAuthErrorMessage(error);
-      setFeedback({
-        type: 'error',
-        message: friendlyMsg,
-      });
-
-      runDatabaseCheck(cleanSheet, cleanDrive, false);
     } finally {
-      setIsCreatingDb(false);
-      setCreationStepMsg(null);
+      setIsTestingConnection(false);
     }
   };
 
-  // Sinkronisasi 10 tab & backup Drive lengkap (non-destruktif untuk Users)
-  const executeConfirmSyncDataToSheets = async () => {
-    setWorkspaceConfirmModal(null);
-    const cleanSheet = cleanGoogleId(sheetIdInput) || settings.googleSheetSpreadsheetId;
-    const cleanDrive = cleanGoogleId(driveIdInput) || settings.googleDriveFolderId;
+  const handleUnlockConfig = () => {
+    const next = setAppsScriptConfigLocked(false);
+    setGasConfig(next);
+  };
 
-    setIsSyncingData(true);
+  const handleTestAppsScriptConnection = async () => {
+    setIsTestingConnection(true);
     setFeedback(null);
     try {
-      let token = await getAccessToken();
-      if (!token) {
-        const signinRes = await signInWithGoogle(ksEmail || currentUser.email);
-        if (!signinRes) throw new Error('Silakan masuk dengan akun Google terlebih dahulu.');
-        token = signinRes.accessToken;
-        setIsGoogleConnected(true);
-        setGoogleUserEmail(signinRes.user.email || ksEmail || null);
+      const check = await runSystemCheck();
+      setSystemCheckResult(check);
+      if (check.authorized && check.sheetsConnected && check.driveConnected) {
+        setFeedback({
+          type: 'success',
+          message: `Koneksi Apps Script aktif (${check.latencyMs} ms)! Spreadsheet & folder Drive siap digunakan.`,
+        });
+      } else {
+        setFeedback({
+          type: 'error',
+          message: check.error || 'Koneksi gagal atau Script Properties masih ada yang kosong.',
+        });
       }
-
-      const syncResult = await syncAllAppDataToDriveAndSheet(currentUser, {
-        accessToken: token,
-        spreadsheetId: cleanSheet,
-        folderId: cleanDrive,
-      });
-
-      if (syncResult.spreadsheetId) setSheetIdInput(syncResult.spreadsheetId);
-      if (syncResult.folderId) setDriveIdInput(syncResult.folderId);
-      setSettings(getAppSettings());
-      setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
-
-      setFeedback({
-        type: 'success',
-        message: syncResult.message,
-      });
-      runDatabaseCheck(syncResult.spreadsheetId || cleanSheet, syncResult.folderId || cleanDrive, true);
-    } catch (err: any) {
-      setFeedback({
-        type: 'error',
-        message: formatAuthErrorMessage(err),
-      });
     } finally {
-      setIsSyncingData(false);
+      setIsTestingConnection(false);
     }
   };
 
-  // Sinkronisasi langsung khusus Username & Password ke Google Drive & Sheets
-  const executeConfirmSyncUsersOnly = async () => {
-    setWorkspaceConfirmModal(null);
-    setIsSyncingUsersOnly(true);
+  const handleRepairSheetFromSettings = async () => {
+    setIsRepairingSheet(true);
     setFeedback(null);
     try {
-      let token = await getAccessToken();
-      if (!token) {
-        const signinRes = await signInWithGoogle(ksEmail || currentUser.email);
-        if (!signinRes) throw new Error('Otorisasi Google diperlukan untuk menyinkronkan ke Drive & Sheets.');
-        token = signinRes.accessToken;
-        setIsGoogleConnected(true);
-        setGoogleUserEmail(signinRes.user.email || ksEmail || null);
+      const res = await repairSheetSync({
+        id: currentUser.id,
+        name: currentUser.name,
+        role: currentUser.role,
+      });
+      if (res.ok) {
+        const check = await runSystemCheck().catch(() => null);
+        if (check) setSystemCheckResult(check);
+        setFeedback({
+          type: 'success',
+          message: res.report?.summary || 'Perbaikan ketidaksinkronan Sheet berhasil dan data tersinkron.',
+        });
+      } else {
+        setFeedback({
+          type: 'error',
+          message: res.error || 'Gagal memperbaiki ketidaksinkronan Sheet.',
+        });
       }
+    } finally {
+      setIsRepairingSheet(false);
+    }
+  };
 
-      const res = await syncAllUsersToDriveAndSheet(token, {
-        spreadsheetId: cleanGoogleId(sheetIdInput) || settings.googleSheetSpreadsheetId,
-        folderId: cleanGoogleId(driveIdInput) || settings.googleDriveFolderId,
-      });
-      setSettings(getAppSettings());
-      setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
-      setFeedback({
-        type: 'success',
-        message: res.message,
-      });
-      if (res.spreadsheetId) {
-        runDatabaseCheck(res.spreadsheetId, undefined, true);
-      }
-    } catch (err: any) {
+  const handleCopyCodeGs = async () => {
+    try {
+      await navigator.clipboard.writeText(APPS_SCRIPT_CODE);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2500);
+    } catch {
       setFeedback({
         type: 'error',
-        message: formatAuthErrorMessage(err),
+        message: 'Browser menolak akses clipboard otomatis. Buka panel kode dan salin secara manual.',
       });
-    } finally {
-      setIsSyncingUsersOnly(false);
     }
   };
 
-  // Cek Status Database (Lokal + Live Google API)
-  const runDatabaseCheck = async (targetSheetId?: string, targetDriveId?: string, checkLive = false) => {
-    setIsCheckingDb(true);
-    setFeedback(null);
-
-    const sheetId = targetSheetId || cleanGoogleId(sheetIdInput) || settings.googleSheetSpreadsheetId;
-    const driveId = targetDriveId || cleanGoogleId(driveIdInput) || settings.googleDriveFolderId;
-
-    const users = getAllUsers();
-    const departments = getAllDepartments();
-    const schedules = getAllSchedules();
-    const locations = getAllLocations();
-    const faces = getAllFaceRegistry();
-    const attendance = getAllAttendanceRecords();
-    const leaves = getAllLeaveRequests();
-    const assignments = getAllAssignments();
-    const auditLogs = getAuditLogs();
-
-    const tabs: TabHealthInfo[] = [
-      { id: 1, name: 'Users', key: 'kitarajin_table_users', count: users.length, status: 'valid', description: 'Data akun KS, Admin & Karyawan' },
-      { id: 2, name: 'Departments', key: 'kitarajin_table_departments', count: departments.length, status: 'valid', description: 'Struktur divisi & unit kerja' },
-      { id: 3, name: 'Schedules', key: 'kitarajin_table_schedules', count: schedules.length, status: 'valid', description: 'Master sesi jam kerja & toleransi' },
-      { id: 4, name: 'Locations', key: 'kitarajin_table_locations', count: locations.length, status: 'valid', description: 'Koordinat GPS & radius meter' },
-      { id: 5, name: 'FaceRegistry', key: 'kitarajin_table_face_registry', count: faces.length, status: 'valid', description: 'Database vektor biometrik wajah' },
-      { id: 6, name: 'Attendance', key: 'kitarajin_table_attendance', count: attendance.length, status: 'valid', description: 'Transaksi presensi masuk & pulang' },
-      { id: 7, name: 'LeaveRequests', key: 'kitarajin_table_leave_requests', count: leaves.length, status: 'valid', description: 'Permohonan izin, sakit & dinas' },
-      { id: 8, name: 'Assignments', key: 'kitarajin_table_assignments', count: assignments.length, status: 'valid', description: 'Penugasan & dokumentasi geotag' },
-      { id: 9, name: 'AuditLogs', key: 'kitarajin_table_audit_logs', count: auditLogs.length, status: 'valid', description: 'Rekam jejak transparansi sistem' },
-      { id: 10, name: 'Settings', key: 'kitarajin_table_settings', count: 1, status: 'valid', description: 'Konfigurasi sekolah & parameter' },
-    ];
-
-    let liveInfo: any = null;
-    if (checkLive && sheetId) {
-      liveInfo = await checkRealGoogleDatabaseHealth(sheetId, driveId);
-    }
-
-    const sheetUrl = sheetId ? `https://docs.google.com/spreadsheets/d/${sheetId}` : undefined;
-    const driveUrl = driveId ? `https://drive.google.com/drive/folders/${driveId}` : undefined;
-
-    setDbDiagnosticResult({
-      checkedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' WIB',
-      isHealthy: true,
-      tabs,
-      sheetUrl,
-      driveUrl,
-      sheetTitle: liveInfo?.sheetTitle,
-      driveName: liveInfo?.driveFolderName,
-      liveApiVerified: liveInfo?.isOnline,
-      message: liveInfo?.isOnline
-        ? `Terverifikasi Google API! Spreadsheet "${liveInfo.sheetTitle}" dengan ${liveInfo.tabsFound?.length || 10} lembar kerja aktif.`
-        : sheetId
-        ? `10 dari 10 Tab Database siap dan terhubung ke Spreadsheet ID: ${sheetId}.`
-        : '10 dari 10 Tab Database aktif dan siap disinkronkan ke Spreadsheet.',
-    });
-
-    setIsCheckingDb(false);
-  };
-
-  // Update Profil Kepala Sekolah (Nama, NIP & Email)
+  // Update Profil Kepala Sekolah
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (currentUser.id === 'kepsek-console') {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Cek & Perbaikan Sheet sedang aktif. Klik "Login Akun Sheet" di kanan atas untuk masuk menggunakan akun Google Sheets sebelum mengubah profil pribadi.',
+      });
+      return;
+    }
     if (!ksName.trim()) {
       setFeedback({ type: 'error', message: 'Nama Kepala Sekolah tidak boleh kosong.' });
       return;
@@ -683,40 +317,21 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     });
 
     if (res.success) {
-      const cleanEmail = ksEmail.trim();
-      const cleanName = ksName.trim();
-      const cleanNip = ksNip.trim();
-      const cleanUsername = ksUsername.trim() || currentUser.username;
       const updatedUser = getCurrentSession() || {
         ...currentUser,
-        name: cleanName,
-        username: cleanUsername,
-        nip: cleanNip,
-        email: cleanEmail,
+        name: ksName.trim(),
+        username: ksUsername.trim() || currentUser.username,
+        nip: ksNip.trim(),
+        email: ksEmail.trim(),
         phone: ksPhone.trim(),
         assignedSessionIds: ksAssignedSessions,
       };
       if (onUpdateCurrentUser) {
         onUpdateCurrentUser(updatedUser);
       }
-
-      // Simpan email tertaut di profil aplikasi
-      linkGoogleAccount(cleanEmail, cleanName);
-      setIsGoogleConnected(true);
-      setGoogleUserEmail(cleanEmail);
-      updateAppSettings(currentUser, {
-        isGoogleConnected: true,
-        googleAccountEmail: cleanEmail,
-        storageMode: 'google_workspace_sync',
-      });
-      setSettings(getAppSettings());
-      setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
-
       setFeedback({
         type: 'success',
-        message: hasRealAccessToken()
-          ? `Profil Kepala Sekolah (${cleanEmail}) disimpan cepat dan otomatis tersinkron di latar belakang ke Cloud Firestore, Google Drive & Sheets!`
-          : `Profil Kepala Sekolah (${cleanEmail}) disimpan cepat ke Cloud Firestore! Hubungkan Google 1x di panel atas/bawah jika ingin langsung mengirim ke Google Drive & Sheets.`,
+        message: 'Profil Kepala Sekolah berhasil disimpan dan otomatis tersinkron ke Google Sheets.',
       });
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -724,48 +339,16 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     setIsUpdatingProfile(false);
   };
 
-  // Simpan Pengaturan Sekolah (Nama Sekolah, Email, Judul Aplikasi, Alamat Lengkap + ID Sheet/Drive)
-  const handleSaveSettings = (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-    setFeedback(null);
-
-    const cleanSheet = cleanGoogleId(sheetIdInput);
-    const cleanDrive = cleanGoogleId(driveIdInput);
-    const hasTarget = Boolean(cleanSheet || cleanDrive);
-
-    const res = updateAppSettings(currentUser, {
-      schoolName: schoolName.trim(),
-      schoolAddress: schoolAddress.trim(),
-      schoolEmail: schoolEmail.trim(),
-      appTitle: appTitle.trim(),
-      minFaceMatchThreshold: minFaceMatchThreshold / 100,
-      requireStrictGps,
-      requireStrictFaceVerification: requireStrictFace,
-      googleSheetSpreadsheetId: cleanSheet,
-      googleDriveFolderId: cleanDrive,
-      autoWorkspaceSyncEnabled: hasTarget ? true : settings.autoWorkspaceSyncEnabled,
-      storageMode: hasTarget ? 'google_workspace_sync' : settings.storageMode,
-    });
-
-    if (res.success) {
-      setSheetIdInput(cleanSheet);
-      setDriveIdInput(cleanDrive);
-      setFeedback({
-        type: 'success',
-        message: 'Pengaturan sekolah & tautan Drive/Sheets berhasil disimpan permanen dan disinkronkan ke database!',
-      });
-      setSettings(getAppSettings());
-      setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
-    } else {
-      setFeedback({ type: 'error', message: res.message });
-    }
-    setIsSubmitting(false);
-  };
-
   // Ubah Password Login Kepala Sekolah
   const handleUpdateKsPassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (currentUser.id === 'kepsek-console') {
+      setFeedback({
+        type: 'error',
+        message: 'Mode Cek & Perbaikan Sheet sedang aktif. Klik "Login Akun Sheet" di kanan atas untuk masuk menggunakan akun Google Sheets sebelum mengubah password.',
+      });
+      return;
+    }
     if (!ksPassword.trim()) {
       setFeedback({ type: 'error', message: 'Password baru tidak boleh kosong.' });
       return;
@@ -788,12 +371,9 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       });
 
       if (res.success) {
-        setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
         setFeedback({
           type: 'success',
-          message: hasRealAccessToken()
-            ? 'Password login Kepala Sekolah BERHASIL DIPERBARUI dan otomatis disinkronkan di latar belakang ke Cloud Firestore, Google Drive & Sheets!'
-            : 'Password login Kepala Sekolah BERHASIL DIPERBARUI di Cloud Firestore! Hubungkan Akun Google 1x agar perubahan tersalin otomatis ke Google Drive/Sheets.',
+          message: 'Password login Kepala Sekolah berhasil diperbarui ke Google Sheets.',
         });
         setKsPassword('');
         setKsConfirmPassword('');
@@ -807,6 +387,50 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     }
   };
 
+  // Simpan Identitas Sekolah & Kebijakan Presensi
+  const handleSaveSettings = (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    setFeedback(null);
+
+    const res = updateAppSettings(currentUser, {
+      schoolName: schoolName.trim(),
+      schoolAddress: schoolAddress.trim(),
+      schoolEmail: schoolEmail.trim(),
+      appTitle: appTitle.trim(),
+      minFaceMatchThreshold: minFaceMatchThreshold / 100,
+      requireStrictGps,
+      requireStrictFaceVerification: requireStrictFace,
+    });
+
+    if (res.success) {
+      setSettings(getAppSettings());
+      setFeedback({
+        type: 'success',
+        message: 'Pengaturan identitas sekolah & kebijakan presensi berhasil disimpan ke Google Sheets.',
+      });
+    } else {
+      setFeedback({ type: 'error', message: res.message });
+    }
+    setIsSubmitting(false);
+  };
+
+  const localCounts = {
+    Users: getAllUsers().length,
+    Departments: getAllDepartments().length,
+    Schedules: getAllSchedules().length,
+    Locations: getAllLocations().length,
+    FaceRegistry: getAllFaceRegistry().length,
+    Attendance: getAllAttendanceRecords().length,
+    LeaveRequests: getAllLeaveRequests().length,
+    Assignments: getAllAssignments().length,
+    Log: getAuditLogs().length,
+    Settings: 1,
+  };
+
+  const isScriptActive =
+    syncUiState.isConfigured &&
+    (systemCheckResult ? systemCheckResult.authorized && systemCheckResult.sheetsConnected : true);
 
   return (
     <div className="space-y-6">
@@ -815,14 +439,34 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         <div>
           <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-emerald-700">
             <Settings className="w-4 h-4" />
-            <span>Master Data &bull; Pengaturan &amp; Database</span>
+            <span>Master Data &bull; Pengaturan &amp; Sheets</span>
           </div>
           <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 mt-1">
-            Pengaturan Sistem, Profil &amp; Database Drive/Sheets
+            Pengaturan Sistem, Google Apps Script &amp; Profil Sekolah
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-            Kelola profil Kepala Sekolah (Nama &amp; Email), otomatisasi pembuatan 10 tab Google Sheets &amp; Drive, serta parameter sekolah.
+            Google Sheets &amp; Google Drive (via Google Apps Script Web App) adalah database tunggal real-time multi-pengguna.
           </p>
+        </div>
+
+        {/* NOTIFIKASI STATUS APPS SCRIPT AKTIF — HANYA DI MENU PENGATURAN & SHEETS */}
+        <div
+          className={`px-3.5 py-2 rounded-xl border text-xs font-bold flex items-center gap-2 shrink-0 ${
+            isScriptActive
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-amber-50 border-amber-200 text-amber-900'
+          }`}
+        >
+          <span
+            className={`w-2 h-2 rounded-full ${
+              isScriptActive ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
+            }`}
+          />
+          <span>
+            {isScriptActive
+              ? 'Apps Script Aktif • Sinkron Otomatis 2-Arah'
+              : 'Apps Script Belum Terhubung'}
+          </span>
         </div>
       </div>
 
@@ -845,7 +489,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           <button
             type="button"
             onClick={() => setFeedback(null)}
-            className="text-slate-400 hover:text-slate-600"
+            className="text-slate-400 hover:text-slate-600 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -853,7 +497,265 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       )}
 
       {/* ============================================================== */}
-      {/* KARTU 1: PROFIL KEPALA SEKOLAH (UBAH NAMA & EMAIL)             */}
+      {/* KARTU KONFIGURASI GOOGLE APPS SCRIPT WEB APP (TEMPEL 1X & KUNCI) */}
+      {/* ============================================================== */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2.5 text-slate-900 font-bold text-base">
+            <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0">
+              <FileSpreadsheet className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span>Backend Tunggal: Google Apps Script (Sheets &amp; Drive)</span>
+                {gasConfig.isLocked && syncUiState.isConfigured && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                    <Lock className="w-3 h-3" />
+                    URL &amp; TOKEN TERKUNCI
+                  </span>
+                )}
+              </div>
+              <p className="text-xs font-normal text-slate-500 mt-0.5">
+                Tempel URL Web App &amp; API Token 1x saja — tersimpan &amp; terkunci permanen saat refresh maupun dibuka di Vercel.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={handleRepairSheetFromSettings}
+              disabled={isRepairingSheet || !syncUiState.isConfigured}
+              className="px-3.5 py-2 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-950 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <Wrench className={`w-3.5 h-3.5 text-amber-700 ${isRepairingSheet ? 'animate-spin' : ''}`} />
+              <span>{isRepairingSheet ? 'Memperbaiki...' : 'Perbaiki Sheet'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleTestAppsScriptConnection}
+              disabled={isTestingConnection || !syncUiState.isConfigured}
+              className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <Activity className={`w-3.5 h-3.5 text-emerald-600 ${isTestingConnection ? 'animate-spin' : ''}`} />
+              <span>{isTestingConnection ? 'Menguji...' : 'Uji Koneksi Sheets & Drive'}</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Status Real-time Sinkron & Notif Apps Script */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+          <div className="p-3.5 rounded-xl bg-emerald-50/70 border border-emerald-200/80 space-y-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-800 block">
+              Status Apps Script Web App
+            </span>
+            <div className="font-bold text-slate-900 flex items-center gap-1.5">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  syncUiState.kind === 'error'
+                    ? 'bg-rose-500'
+                    : syncUiState.kind === 'offline'
+                    ? 'bg-amber-500'
+                    : isScriptActive
+                    ? 'bg-emerald-500 animate-pulse'
+                    : 'bg-slate-400'
+                }`}
+              />
+              <span>
+                {syncUiState.kind === 'saving'
+                  ? 'Menyimpan ke Sheet...'
+                  : syncUiState.kind === 'saved'
+                  ? 'Tersimpan ke Sheet'
+                  : syncUiState.kind === 'offline'
+                  ? syncUiState.message
+                  : syncUiState.kind === 'error'
+                  ? syncUiState.message
+                  : isScriptActive
+                  ? 'Aktif & Real-Time Multi-Pengguna'
+                  : 'Menunggu URL & Token'}
+              </span>
+            </div>
+            {syncUiState.lastSyncAt && (
+              <span className="text-[11px] text-emerald-700 block">
+                Update dua arah: {new Date(syncUiState.lastSyncAt).toLocaleTimeString('id-ID')}
+              </span>
+            )}
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+              Database Tunggal (Google Sheets)
+            </span>
+            <div className="font-bold text-slate-900 truncate">
+              {systemCheckResult?.sheetName || (isScriptActive ? '10 Tab Aktif Otomatis' : 'Belum terhubung')}
+            </div>
+            {systemCheckResult?.spreadsheetId && (
+              <span className="text-[10px] font-mono text-slate-600 block truncate" title={systemCheckResult.spreadsheetId}>
+                ID: {systemCheckResult.spreadsheetId}
+              </span>
+            )}
+            <span className="text-[11px] text-slate-500 block">
+              Users: {localCounts.Users} &bull; Presensi: {localCounts.Attendance} &bull; Wajah: {localCounts.FaceRegistry} &bull; Log: {localCounts.Log}
+            </span>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1">
+              <HardDrive className="w-3 h-3 text-emerald-600" />
+              Drive Privat Foto Wajah
+            </span>
+            <div className="font-bold text-slate-900 truncate">
+              {systemCheckResult?.driveFolderName || (isScriptActive ? 'Folder Privat via DriveApp' : 'Belum terhubung')}
+            </div>
+            <span className="text-[11px] text-slate-500 block">
+              Presensi tidak menyimpan foto (hanya nama, NIP &amp; skor wajah).
+            </span>
+          </div>
+        </div>
+
+        {/* Form Input URL Web App & API Token Rahasia */}
+        <form onSubmit={handleSaveAndLockAppsScript} className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                URL Web App Google Apps Script (<code className="lowercase font-mono">/exec</code>){' '}
+                <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="url"
+                required
+                disabled={gasConfig.isLocked && syncUiState.isConfigured}
+                value={webAppUrlInput}
+                onChange={(e) => setWebAppUrlInput(e.target.value)}
+                placeholder="https://script.google.com/macros/s/.../exec"
+                className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-600"
+              />
+              <span className="text-[10px] text-slate-400 mt-1 block">
+                Didapat setelah Deploy &rarr; Web app di script.google.com (atau via env <code>VITE_APPS_SCRIPT_URL</code>).
+              </span>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                API Token Rahasia (<code className="font-mono">API_TOKEN</code>){' '}
+                <span className="text-rose-500">*</span>
+              </label>
+              <div className="relative">
+                <input
+                  type={showToken && !(gasConfig.isLocked && syncUiState.isConfigured) ? 'text' : 'password'}
+                  required
+                  disabled={gasConfig.isLocked && syncUiState.isConfigured}
+                  value={apiTokenInput}
+                  onChange={(e) => setApiTokenInput(e.target.value)}
+                  placeholder="Harus sama dengan Script Property API_TOKEN"
+                  className="w-full pl-3 pr-10 py-2.5 rounded-xl border border-slate-300 text-xs font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-600"
+                />
+                {!(gasConfig.isLocked && syncUiState.isConfigured) && (
+                  <button
+                    type="button"
+                    onClick={() => setShowToken(!showToken)}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    tabIndex={-1}
+                  >
+                    {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                )}
+              </div>
+              <span className="text-[10px] text-slate-400 mt-1 block">
+                Setiap permintaan wajib membawa token ini dan ditolak jika tidak cocok.
+              </span>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <span className="text-[11px] text-slate-500">
+              {gasConfig.isLocked && syncUiState.isConfigured
+                ? 'Konfigurasi sedang dikunci agar tidak berubah saat refresh atau digunakan di Vercel.'
+                : 'Setelah disimpan, URL & Token langsung dikunci dan sinkronisasi otomatis aktif tanpa tombol manual.'}
+            </span>
+
+            {gasConfig.isLocked && syncUiState.isConfigured ? (
+              <button
+                type="button"
+                onClick={handleUnlockConfig}
+                className="px-4 py-2 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+              >
+                <Unlock className="w-3.5 h-3.5" />
+                <span>Buka Kunci untuk Ubah URL/Token</span>
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={isTestingConnection}
+                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                <Lock className="w-3.5 h-3.5" />
+                <span>{isTestingConnection ? 'Menghubungkan & Mengunci...' : 'Simpan & Kunci Konfigurasi'}</span>
+              </button>
+            )}
+          </div>
+        </form>
+
+        {/* Panel Kode Apps Script & Panduan Deploy (Copy-Paste) */}
+        <div className="border border-slate-200 rounded-2xl overflow-hidden bg-slate-50/70">
+          <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white border-b border-slate-200">
+            <div className="flex items-center gap-2">
+              <Code2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <div>
+                <h3 className="font-bold text-slate-900 text-xs sm:text-sm">
+                  Kode Backend <code className="font-mono">Code.gs</code> &amp; Petunjuk Deploy Web App
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Tanpa Service Account &amp; tanpa Google Cloud Console — cukup Script Properties &amp; Web App.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCopyCodeGs}
+                className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
+              >
+                {copiedCode ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedCode ? 'Kode Code.gs Disalin!' : 'Salin Kode Code.gs'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowCodePanel(!showCodePanel)}
+                className="px-3 py-1.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-1 cursor-pointer"
+              >
+                <span>{showCodePanel ? 'Tutup Panduan' : 'Lihat Panduan & Kode'}</span>
+                {showCodePanel ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          </div>
+
+          {showCodePanel && (
+            <div className="p-4 space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-2.5">
+                {APPS_SCRIPT_DEPLOY_STEPS.map((s, idx) => (
+                  <div key={`deploy-step-${s.step}-${idx}`} className="p-3 rounded-xl bg-white border border-slate-200 space-y-1">
+                    <div className="text-[10px] font-extrabold text-emerald-700 uppercase">
+                      Langkah {s.step}
+                    </div>
+                    <div className="font-bold text-slate-900 text-xs">{s.title}</div>
+                    <p className="text-[11px] text-slate-600 leading-relaxed">{s.desc}</p>
+                  </div>
+                ))}
+              </div>
+
+              <div className="rounded-xl bg-slate-900 text-slate-100 p-4 overflow-x-auto max-h-80 text-[11px] font-mono leading-relaxed">
+                <pre>{APPS_SCRIPT_CODE}</pre>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ============================================================== */}
+      {/* KARTU 1: PROFIL KEPALA SEKOLAH                                 */}
       {/* ============================================================== */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
         <div className="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -864,7 +766,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             <div>
               <span>Profil Akun Kepala Sekolah</span>
               <p className="text-xs font-normal text-slate-500">
-                Ubah Nama Lengkap dan Alamat Email Anda sebagai pimpinan sekolah.
+                Ubah Nama Lengkap, NIP, Username, Sesi Presensi, dan Email pimpinan sekolah.
               </p>
             </div>
           </div>
@@ -890,57 +792,12 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                   className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
-              <span className="text-[10px] text-slate-400 mt-1 block">
-                Nama yang ditampilkan pada header aplikasi, riwayat, dan laporan.
-              </span>
             </div>
 
             <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-xs font-bold text-slate-700 uppercase">
-                  Alamat Email Kepala Sekolah <span className="text-rose-500">*</span>
-                </label>
-                {isGoogleConnected ? (
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <span
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${
-                        workspaceRuntime.hasToken
-                          ? 'text-emerald-700 bg-emerald-100'
-                          : 'text-amber-800 bg-amber-100'
-                      }`}
-                    >
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full ${
-                          workspaceRuntime.hasToken ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
-                        }`}
-                      />
-                      {workspaceRuntime.hasToken ? 'Aktif:' : 'Tersimpan:'} {googleUserEmail}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => handleGoogleConnect(ksEmail)}
-                      disabled={isSigningInGoogle}
-                      className="text-[10px] font-bold text-slate-600 hover:text-emerald-700 underline cursor-pointer"
-                      title={
-                        workspaceRuntime.hasToken
-                          ? 'Sinkronkan ulang akun Google ini'
-                          : 'Klik 1x untuk mengaktifkan izin Drive/Sheets pada sesi browser ini'
-                      }
-                    >
-                      {workspaceRuntime.hasToken ? 'Sinkronkan Ulang' : 'Otorisasi Sesi'}
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => handleGoogleConnect(ksEmail)}
-                    disabled={isSigningInGoogle}
-                    className="text-[10px] font-bold text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1 cursor-pointer transition-colors"
-                  >
-                    <span>{isSigningInGoogle ? 'Menghubungkan...' : '🔗 Hubungkan Akun Google Ini'}</span>
-                  </button>
-                )}
-              </div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                Alamat Email Kepala Sekolah <span className="text-rose-500">*</span>
+              </label>
               <div className="relative">
                 <Mail className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
                 <input
@@ -948,13 +805,10 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                   required
                   value={ksEmail}
                   onChange={(e) => setKsEmail(e.target.value)}
-                  placeholder="Contoh: email.pimpinan@sekolah.sch.id"
+                  placeholder="Contoh: kepsek@sekolah.sch.id"
                   className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
-              <span className="text-[10px] text-slate-400 mt-1 block">
-                Digunakan untuk identitas, notifikasi, dan sinkronisasi database Google Sheets/Drive sekolah.
-              </span>
             </div>
 
             <div>
@@ -988,9 +842,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                   className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
-              <span className="text-[10px] text-slate-400 mt-1 block">
-                NIP resmi Kepala Sekolah untuk tanda tangan laporan & presensi.
-              </span>
             </div>
 
             <div>
@@ -1008,12 +859,9 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                   className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                 />
               </div>
-              <span className="text-[10px] text-slate-400 mt-1 block">
-                Username sistem login &bull; Peran: {currentUser.role}
-              </span>
             </div>
 
-            {/* Sesi Presensi yang Berlaku untuk Kepala Sekolah */}
+            {/* Sesi Presensi Kepala Sekolah */}
             <div className="md:col-span-2 p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-bold text-slate-800 uppercase flex items-center gap-1.5">
@@ -1024,15 +872,12 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                   Atur Sesi Mandiri
                 </span>
               </div>
-              <p className="text-[11px] text-slate-500">
-                Centang sesi yang dapat diambil oleh Kepala Sekolah saat melakukan presensi mandiri:
-              </p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
-                {schedules.map((sch) => {
+                {schedules.map((sch, idx) => {
                   const isChecked = ksAssignedSessions.includes(sch.id);
                   return (
                     <label
-                      key={sch.id}
+                      key={`ks-sch-${sch.id || 'item'}-${idx}`}
                       className={`flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition-all ${
                         isChecked
                           ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-bold'
@@ -1070,14 +915,14 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md transition-colors flex items-center gap-2 disabled:opacity-50 cursor-pointer"
             >
               <Save className="w-3.5 h-3.5" />
-              <span>{isUpdatingProfile ? 'Menyimpan & Menghubungkan...' : 'Perbarui Nama, NIP, Sesi, Email & Hubungkan Akun Google'}</span>
+              <span>{isUpdatingProfile ? 'Menyimpan...' : 'Simpan Profil Kepala Sekolah'}</span>
             </button>
           </div>
         </form>
       </div>
 
       {/* ============================================================== */}
-      {/* KARTU: UBAH PASSWORD LOGIN KEPALA SEKOLAH                      */}
+      {/* KARTU 2: UBAH PASSWORD LOGIN KEPALA SEKOLAH                    */}
       {/* ============================================================== */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
         <div className="flex items-center justify-between pb-3 border-b border-slate-100">
@@ -1088,7 +933,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             <div>
               <span>Ubah Password Login Kepala Sekolah</span>
               <p className="text-xs font-normal text-slate-500">
-                Ganti kata sandi login akun Kepala Sekolah (Super Admin) untuk keamanan akses.
+                Ganti kata sandi login akun Kepala Sekolah (Super Admin).
               </p>
             </div>
           </div>
@@ -1118,14 +963,10 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                   onClick={() => setShowKsPassword(!showKsPassword)}
                   className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
                   tabIndex={-1}
-                  title={showKsPassword ? 'Sembunyikan password' : 'Lihat password'}
                 >
                   {showKsPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
-              <span className="text-[10px] text-slate-400 mt-1 block">
-                Kata sandi baru untuk login akun Kepala Sekolah.
-              </span>
             </div>
 
             <div>
@@ -1143,9 +984,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                   className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-amber-500 focus:outline-none"
                 />
               </div>
-              <span className="text-[10px] text-slate-400 mt-1 block">
-                Pastikan sama persis dengan password baru di sebelah kiri.
-              </span>
             </div>
           </div>
 
@@ -1163,670 +1001,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       </div>
 
       {/* ============================================================== */}
-      {/* KARTU SINKRONISASI REAL-TIME MULTI-DEVICE (FIRESTORE CLOUD)     */}
-      {/* ============================================================== */}
-
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
-            <div className="w-8 h-8 rounded-lg bg-sky-100 text-sky-700 flex items-center justify-center font-bold">
-              <Cloud className="w-4 h-4" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span>Sinkronisasi Real-Time Multi-Device (Cloud Database)</span>
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  {cloudStatus.isSyncing
-                    ? 'MENYINKRONKAN OTOMATIS...'
-                    : cloudStatus.pendingCount > 0
-                    ? `ANTREAN OTOMATIS (${cloudStatus.pendingCount})`
-                    : 'OTOMATIS AKTIF'}
-                </span>
-              </div>
-              <p className="text-xs font-normal text-slate-500">
-                Setiap perubahan akun, presensi, perizinan, dan pengaturan langsung tersinkron otomatis ke Cloud Firestore tanpa perlu diklik.
-                {cloudStatus.lastSync && (
-                  <span className="ml-1 text-emerald-700 font-semibold">
-                    &bull; Terakhir: {new Date(cloudStatus.lastSync).toLocaleTimeString('id-ID')}
-                  </span>
-                )}
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              type="button"
-              onClick={handleTestCloudConnection}
-              disabled={isTestingCloud}
-              className="px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-            >
-              <Radio className={`w-3.5 h-3.5 ${isTestingCloud ? 'animate-spin' : 'text-sky-600'}`} />
-              <span>{isTestingCloud ? 'Memeriksa...' : 'Uji Koneksi Cloud'}</span>
-            </button>
-          </div>
-        </div>
-
-        {cloudMessage && (
-          <div className="p-3.5 rounded-xl bg-sky-50 border border-sky-200 text-sky-900 text-xs flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <CheckCircle className="w-4 h-4 text-sky-600 shrink-0" />
-              <span>{cloudMessage}</span>
-            </div>
-            <button
-              type="button"
-              onClick={() => setCloudMessage(null)}
-              className="text-slate-400 hover:text-slate-600 ml-2"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-
-        {/* Status Grid Multi-Device */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-              Database Cloud ID
-            </span>
-            <div className="mt-1 flex items-center gap-1.5">
-              <span className="font-mono text-xs font-semibold text-slate-800 truncate" title={cloudStatus.databaseId}>
-                {cloudStatus.databaseId || 'ai-studio-kitarajinsistemp-...'}
-              </span>
-            </div>
-            <span className="text-[10px] text-emerald-600 font-semibold mt-1 block">
-              &bull; Firestore Multi-Tenant Terpasang
-            </span>
-          </div>
-
-          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-              Dukungan Perangkat (Multi-Device)
-            </span>
-            <div className="mt-1 flex items-center gap-2 text-slate-800 text-xs font-bold">
-              <Smartphone className="w-4 h-4 text-emerald-600" />
-              <span>HP / Android / iOS</span>
-              <span className="text-slate-300">&bull;</span>
-              <Laptop className="w-4 h-4 text-sky-600" />
-              <span>PC / Laptop</span>
-            </div>
-            <span className="text-[10px] text-slate-500 mt-1 block">
-              Sinkron otomatis tanpa perlu refresh browser
-            </span>
-          </div>
-
-          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-              Kesiapan Deploy Vercel / Publik
-            </span>
-            <div className="mt-1 flex items-center gap-1.5 text-xs font-bold text-slate-800">
-              <span className="w-2 h-2 rounded-full bg-emerald-500" />
-              <span>
-                {settings.lastWorkspaceUserSyncAt && !pendingWorkspaceSync
-                  ? 'Sudah Tersinkron (Vercel Otomatis Ikut)'
-                  : 'Otomatis Sinkron via Cloud Firestore'}
-              </span>
-            </div>
-            <span className="text-[10px] text-slate-500 mt-1 block">
-              {settings.lastWorkspaceUserSyncAt && !pendingWorkspaceSync
-                ? `Drive/Sheets & akun terbarukan aktif (${new Date(settings.lastWorkspaceUserSyncAt).toLocaleDateString('id-ID')}) — tidak perlu sinkron ulang di Vercel.`
-                : 'Akun & perubahan demo langsung aktif di domain Vercel tanpa pengaturan ulang.'}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* ============================================================== */}
-      {/* KARTU 2: OTOMATISASI DATABASE GOOGLE DRIVE & SHEETS 10 TAB    */}
-      {/* ============================================================== */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
-          <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
-            <div className="w-8 h-8 rounded-lg bg-teal-100 text-teal-700 flex items-center justify-center font-bold">
-              <FileSpreadsheet className="w-4 h-4" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <span>Otomatisasi Database Google Drive &amp; Sheets (10 Tab)</span>
-                {workspaceRuntime.hasTargetConfigured && (
-                  <span
-                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[10px] font-extrabold border ${
-                      workspaceRuntime.hasToken
-                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                        : 'bg-amber-50 text-amber-800 border-amber-200'
-                    }`}
-                  >
-                    <span
-                      className={`w-1.5 h-1.5 rounded-full ${
-                        workspaceRuntime.hasToken ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
-                      }`}
-                    />
-                    {(workspaceRuntime.isSyncing || workspaceRuntime.isScheduled)
-                      ? 'MENYINKRONKAN OTOMATIS DI LATAR BELAKANG...'
-                      : workspaceRuntime.hasToken
-                      ? 'AUTO-SYNC DRIVE & SHEET AKTIF'
-                      : workspaceRuntime.hasPending
-                      ? 'MENUNGGU OTORISASI 1x UNTUK AUTO-SYNC'
-                      : 'TERTAUT (SIAP AUTO-SYNC)'}
-                  </span>
-                )}
-              </div>
-              <p className="text-xs font-normal text-slate-500">
-                {workspaceRuntime.hasToken && workspaceRuntime.hasTargetConfigured
-                  ? 'Auto-Sync aktif: setiap tambah, edit, hapus, maupun presensi otomatis tersinkron ke Cloud Firestore, Google Drive & Sheets tanpa perlu klik manual.'
-                  : workspaceRuntime.hasTargetConfigured
-                  ? 'ID Spreadsheet & Folder Drive tersimpan permanen (tidak perlu diketik ulang). Klik 1x "Aktifkan Auto-Sync Sesi" setelah refresh untuk melanjutkan auto-sync di sesi browser ini.'
-                  : 'Tempel ID/Link 1x saja (otomatis tersimpan permanen) lalu hubungkan akun Google; setiap tambah, edit, hapus, & presensi akan tersinkron di latar belakang ke Drive & Sheets.'}
-              </p>
-            </div>
-          </div>
-
-          {/* Status Akun Google */}
-          <div className="flex items-center gap-2">
-            {isGoogleConnected ? (
-              <div
-                className={`flex items-center gap-2 px-3 py-1.5 rounded-xl flex-wrap border ${
-                  workspaceRuntime.hasToken
-                    ? 'bg-emerald-50 border-emerald-200'
-                    : 'bg-amber-50 border-amber-200'
-                }`}
-              >
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    workspaceRuntime.hasToken ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'
-                  }`}
-                />
-                <span
-                  className={`text-xs font-bold ${
-                    workspaceRuntime.hasToken ? 'text-emerald-800' : 'text-amber-900'
-                  }`}
-                >
-                  {googleUserEmail || 'Akun Google Tersimpan'}
-                </span>
-                {!workspaceRuntime.hasToken && (
-                  <button
-                    type="button"
-                    onClick={() => handleGoogleConnect(googleUserEmail || ksEmail, false)}
-                    disabled={isSigningInGoogle}
-                    className="px-2 py-0.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold transition-colors cursor-pointer disabled:opacity-50"
-                    title="Otorisasi 1x di sesi browser baru agar auto-sync Drive/Sheet berjalan di latar belakang tanpa ketik ulang"
-                  >
-                    {isSigningInGoogle ? 'Menghubungkan...' : 'Aktifkan Auto-Sync Sesi'}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => handleGoogleConnect(undefined, true)}
-                  className="text-[10px] text-emerald-700 hover:text-emerald-900 font-semibold underline ml-1 cursor-pointer"
-                  title="Ganti ke akun email Google lain"
-                >
-                  Ganti Akun
-                </button>
-                <button
-                  type="button"
-                  onClick={handleGoogleDisconnect}
-                  className="text-[10px] text-slate-400 hover:text-rose-600 underline ml-1 cursor-pointer"
-                  title="Putuskan koneksi Google"
-                >
-                  Keluar
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => handleGoogleConnect(ksEmail)}
-                disabled={isSigningInGoogle}
-                className="px-3.5 py-1.5 rounded-xl bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 text-xs font-bold shadow-2xs flex items-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
-                title="Pilih akun email Google mana saja untuk membuat database"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24">
-                  <path
-                    fill="#4285F4"
-                    d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                  />
-                </svg>
-                <span>{isSigningInGoogle ? 'Menghubungkan...' : 'Hubungkan Akun Google Bebas'}</span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Input Tempel ID Spreadsheet & Folder Drive */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-xs font-bold text-slate-800 uppercase flex items-center gap-1.5">
-                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-                <span>ID / Tautan Google Spreadsheet</span>
-              </label>
-              {settings.googleSheetSpreadsheetId && (
-                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                  Tersimpan Permanen
-                </span>
-              )}
-            </div>
-            <input
-              type="text"
-              value={sheetIdInput}
-              onChange={(e) => setSheetIdInput(e.target.value)}
-              onBlur={() => {
-                const cleaned = cleanGoogleId(sheetIdInput);
-                if (cleaned && cleaned !== sheetIdInput) setSheetIdInput(cleaned);
-                persistWorkspaceTargetIds(cleaned, driveIdInput);
-              }}
-              placeholder="Tempel ID atau Link Spreadsheet (cth: 1BxiMVs...)"
-              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono bg-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-            />
-            <span className="text-[11px] text-slate-500 mt-1.5 block">
-              💡 Otomatis tersimpan ke Cloud — tidak perlu mengetik ulang meski aplikasi ditutup &amp; dibuka lagi.
-            </span>
-          </div>
-
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-xs font-bold text-slate-800 uppercase flex items-center gap-1.5">
-                <FolderOpen className="w-4 h-4 text-teal-600" />
-                <span>ID / Tautan Folder Google Drive</span>
-              </label>
-              {settings.googleDriveFolderId && (
-                <span className="text-[10px] font-bold text-teal-700 bg-teal-100 px-2 py-0.5 rounded-full">
-                  Tersimpan Permanen
-                </span>
-              )}
-            </div>
-            <input
-              type="text"
-              value={driveIdInput}
-              onChange={(e) => setDriveIdInput(e.target.value)}
-              onBlur={() => {
-                const cleaned = cleanGoogleId(driveIdInput);
-                if (cleaned && cleaned !== driveIdInput) setDriveIdInput(cleaned);
-                persistWorkspaceTargetIds(sheetIdInput, cleaned);
-              }}
-              placeholder="Tempel ID atau Link Folder Drive (cth: 1z3A_XYZ...)"
-              className="w-full px-3 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-mono bg-white focus:ring-2 focus:ring-teal-500 focus:outline-none"
-            />
-            <span className="text-[11px] text-slate-500 mt-1.5 block">
-              💡 Otomatis tersimpan ke Cloud — boleh kosong jika ingin dibuatkan Folder baru otomatis.
-            </span>
-          </div>
-        </div>
-
-        {/* Live Progress Bar saat pembuatan berlangsung */}
-        {isCreatingDb && (
-          <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-300 space-y-2 animate-pulse">
-            <div className="flex items-center justify-between text-xs font-bold text-emerald-900">
-              <span className="flex items-center gap-2">
-                <RefreshCw className="w-4 h-4 animate-spin text-emerald-600" />
-                <span>Sedang Memproses Database di Akun Google...</span>
-              </span>
-              <span className="text-[11px] font-mono">{creationStepMsg || 'Membuat berkas...'}</span>
-            </div>
-            <div className="w-full bg-emerald-200 h-2 rounded-full overflow-hidden">
-              <div className="bg-emerald-600 h-full w-3/4 rounded-full animate-progress" />
-            </div>
-            <p className="text-[10px] text-emerald-700">
-              Mohon tunggu, sistem sedang menyiapkan 10 tab lembar kerja &amp; folder foto langsung di Google Drive/Sheets Anda.
-            </p>
-          </div>
-        )}
-
-        {/* Panel Aksi Utama: Tombol Eksekusi Cepat */}
-        <div className="p-4 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 rounded-2xl text-white shadow-md flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <div className="text-sm font-extrabold flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-emerald-200" />
-              <span>Pilihan Eksekusi Pembuatan Database</span>
-            </div>
-            <p className="text-xs text-emerald-100 mt-0.5 leading-relaxed max-w-xl">
-              Buat database otomatis di Google Drive/Sheets menggunakan email pilihan Anda, atau aktifkan database 10 tab langsung secara instan.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap shrink-0">
-            {/* Tombol Utama 1: Buat Database Otomatis di Google */}
-            <button
-              type="button"
-              onClick={() => setWorkspaceConfirmModal({ type: 'create_db' })}
-              disabled={isCreatingDb}
-              className="px-4 py-2.5 rounded-xl bg-white hover:bg-emerald-50 text-emerald-900 font-extrabold text-xs shadow-lg transition-all flex items-center gap-2 active:scale-95 disabled:opacity-50 cursor-pointer"
-            >
-              <Database className="w-4 h-4 text-emerald-700" />
-              <span>{isCreatingDb ? 'Memproses di Google...' : 'Buat di Google Drive & Sheets'}</span>
-              <ArrowRight className="w-3.5 h-3.5 text-emerald-700" />
-            </button>
-
-            {/* Tombol Sinkronkan Khusus Username & Password */}
-            <button
-              type="button"
-              onClick={() => setWorkspaceConfirmModal({ type: 'sync_users_only' })}
-              disabled={isSyncingUsersOnly}
-              className="px-3.5 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-extrabold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
-              title="Gabungkan & sinkronkan semua Username dan Password ke Google Drive dan Google Sheets tanpa menghapus akun lama"
-            >
-              <Key className={`w-3.5 h-3.5 ${isSyncingUsersOnly ? 'animate-spin' : ''}`} />
-              <span>
-                {isSyncingUsersOnly
-                  ? 'Sinkron Akun...'
-                  : pendingWorkspaceSync
-                  ? 'Sinkron Username & Password*'
-                  : 'Sinkron Username & Password'}
-              </span>
-            </button>
-
-            {/* Tombol Utama 2: Inisialisasi Database 10 Tab Lokal */}
-            <button
-              type="button"
-              onClick={handleCreateLocalVaultDatabase}
-              className="px-3.5 py-2.5 rounded-xl bg-emerald-800/90 hover:bg-emerald-900 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
-              title="Aktifkan seluruh 10 tab database langsung secara instan"
-            >
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-300" />
-              <span>Inisialisasi Database 10 Tab</span>
-            </button>
-
-            {/* Tombol Sinkronkan Data 10 Tab Saat Ini */}
-            <button
-              type="button"
-              onClick={() => setWorkspaceConfirmModal({ type: 'sync_all_tabs' })}
-              disabled={isSyncingData}
-              className="px-3.5 py-2.5 rounded-xl bg-slate-900/60 hover:bg-slate-900 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-40 cursor-pointer"
-              title="Sinkronkan seluruh 10 tab data aplikasi ke Google Drive & Google Sheets"
-            >
-              <CloudUpload className={`w-3.5 h-3.5 ${isSyncingData ? 'animate-bounce' : ''}`} />
-              <span>{isSyncingData ? 'Menyinkronkan...' : 'Sinkron Data 10 Tab'}</span>
-            </button>
-
-            {/* Tombol Cek Real-time */}
-            <button
-              type="button"
-              onClick={() => runDatabaseCheck(undefined, undefined, true)}
-              disabled={isCheckingDb}
-              className="px-3.5 py-2.5 rounded-xl bg-emerald-800/80 hover:bg-emerald-800 text-white font-bold text-xs shadow-xs transition-colors flex items-center gap-1.5 disabled:opacity-40 cursor-pointer"
-              title="Periksa status live ke Google API"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isCheckingDb ? 'animate-spin' : ''}`} />
-              <span>{isCheckingDb ? 'Cek...' : 'Cek Status'}</span>
-            </button>
-          </div>
-        </div>
-
-        {/* Tautan Cepat Membuka Spreadsheet & Drive jika ID aktif */}
-        {(settings.googleSheetSpreadsheetId || settings.googleDriveFolderId) && (
-          <div className="flex flex-wrap items-center gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
-            <span className="text-xs font-bold text-slate-700">Akses Cepat Dokumen Google:</span>
-            {settings.googleSheetSpreadsheetId && (
-              <a
-                href={`https://docs.google.com/spreadsheets/d/${settings.googleSheetSpreadsheetId}`}
-                target="_blank"
-                rel="noreferrer"
-                className="px-3 py-1.5 rounded-lg bg-white border border-emerald-300 text-emerald-800 hover:bg-emerald-50 text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
-              >
-                <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Buka Google Sheets ({cleanGoogleId(settings.googleSheetSpreadsheetId).slice(0, 8)}...)</span>
-              </a>
-            )}
-            {settings.googleDriveFolderId && (
-              <a
-                href={`https://drive.google.com/drive/folders/${settings.googleDriveFolderId}`}
-                target="_blank"
-                rel="noreferrer"
-                className="px-3 py-1.5 rounded-lg bg-white border border-teal-300 text-teal-800 hover:bg-teal-50 text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
-              >
-                <FolderOpen className="w-3.5 h-3.5 text-teal-600" />
-                <span>Buka Google Drive ({cleanGoogleId(settings.googleDriveFolderId).slice(0, 8)}...)</span>
-              </a>
-            )}
-          </div>
-        )}
-
-        {/* Panel Registrasi Domain Vercel (kitarajin.vercel.app) & Google Console */}
-        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/90 space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
-                <Globe className="w-4 h-4" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <h4 className="font-extrabold text-slate-900 text-xs sm:text-sm">
-                    Registrasi Domain Vercel ({googleConsoleInfo.productionDomain}) &amp; Google Console
-                  </h4>
-                  <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
-                    {googleConsoleInfo.isProductionVercel
-                      ? 'Aktif di kitarajin.vercel.app'
-                      : `Origin Aktif: ${googleConsoleInfo.currentDomain}`}
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-500">
-                  Salin nilai berikut agar domain <strong>{googleConsoleInfo.productionDomain}</strong> diterima pada Google Cloud OAuth Origins &amp; Firebase Authorized Domains.
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowConsoleGuide((prev) => !prev)}
-              className="text-xs font-bold text-indigo-700 hover:text-indigo-900 underline self-start sm:self-center cursor-pointer"
-            >
-              {showConsoleGuide ? 'Sembunyikan Detail' : 'Tampilkan Detail'}
-            </button>
-          </div>
-
-          {showConsoleGuide && (
-            <div className="space-y-3 pt-1">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                {[
-                  {
-                    key: 'origin',
-                    label: 'Authorized JavaScript Origin (Google Cloud Console)',
-                    value: googleConsoleInfo.productionOrigin,
-                    note: 'Wajib pakai https:// tanpa garis miring di akhir',
-                  },
-                  {
-                    key: 'domain',
-                    label: 'Authorized Domain (Firebase Auth & OAuth Branding)',
-                    value: googleConsoleInfo.productionDomain,
-                    note: 'Khusus nama domain saja tanpa https://',
-                  },
-                  {
-                    key: 'redirect',
-                    label: 'Authorized Redirect URI (Google Cloud Console)',
-                    value: googleConsoleInfo.firebaseAuthHandlerUri,
-                    note: 'Endpoint handler autentikasi Firebase bawaan',
-                  },
-                  {
-                    key: 'client',
-                    label: 'OAuth 2.0 Client ID (Project Google Console)',
-                    value: googleConsoleInfo.oAuthClientId,
-                    note: `Project ID: ${googleConsoleInfo.projectId}`,
-                  },
-                ].map((item) => (
-                  <div
-                    key={item.key}
-                    className="p-3 bg-white rounded-xl border border-slate-200 flex items-center justify-between gap-2"
-                  >
-                    <div className="min-w-0">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-                        {item.label}
-                      </span>
-                      <code className="text-xs font-mono font-bold text-slate-900 block truncate mt-0.5" title={item.value}>
-                        {item.value}
-                      </code>
-                      <span className="text-[10px] text-slate-400 block mt-0.5">{item.note}</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => handleCopyConsoleValue(item.key, item.value)}
-                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0 border transition-colors cursor-pointer ${
-                        copiedField === item.key
-                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                          : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
-                      }`}
-                    >
-                      {copiedField === item.key ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>Tersalin</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy className="w-3.5 h-3.5 text-slate-500" />
-                          <span>Salin</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                ))}
-              </div>
-
-              {!googleConsoleInfo.isProductionVercel && googleConsoleInfo.currentOrigin && (
-                <div className="p-2.5 bg-white rounded-xl border border-amber-200 flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <span className="text-[10px] font-bold text-amber-800 uppercase block">
-                      Origin Preview Aktif Saat Ini (Opsional jika login dari browser ini)
-                    </span>
-                    <code className="text-xs font-mono text-slate-800 block truncate">
-                      {googleConsoleInfo.currentOrigin}
-                    </code>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleCopyConsoleValue('currentOrigin', googleConsoleInfo.currentOrigin)}
-                    className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold flex items-center gap-1 shrink-0 border transition-colors cursor-pointer ${
-                      copiedField === 'currentOrigin'
-                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                        : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200'
-                    }`}
-                  >
-                    {copiedField === 'currentOrigin' ? (
-                      <>
-                        <Check className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Tersalin</span>
-                      </>
-                    ) : (
-                      <>
-                        <Copy className="w-3.5 h-3.5 text-amber-700" />
-                        <span>Salin Origin</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              )}
-
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <a
-                  href={googleConsoleInfo.consoleLinks.oauthClient}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span>1. Buka OAuth Client (Authorized Origins)</span>
-                </a>
-                <a
-                  href={googleConsoleInfo.consoleLinks.firebaseAuthSettings}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span>2. Buka Firebase Authorized Domains</span>
-                </a>
-                <a
-                  href={googleConsoleInfo.consoleLinks.oauthAudience}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-[11px] font-bold flex items-center gap-1.5 transition-colors"
-                >
-                  <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
-                  <span>3. Cek Test Users / Publish OAuth</span>
-                </a>
-                <a
-                  href={googleConsoleInfo.consoleLinks.oauthBranding}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-3 py-1.5 rounded-lg bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-[11px] font-bold flex items-center gap-1.5 transition-colors"
-                >
-                  <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
-                  <span>4. OAuth Branding / Domain</span>
-                </a>
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Hasil Diagnostik Database 10 Tab */}
-        {dbDiagnosticResult && (
-          <div className="p-5 rounded-2xl bg-emerald-50/70 border border-emerald-300 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold text-xs">
-                  <Activity className="w-4 h-4" />
-                </div>
-                <div>
-                  <h4 className="font-extrabold text-emerald-950 text-sm flex items-center gap-2">
-                    <span>Hasil Pemeriksaan: 10/10 Tab Database Siap &amp; Terhubung</span>
-                    {dbDiagnosticResult.liveApiVerified && (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white">
-                        Live Google API &bull; Aktif
-                      </span>
-                    )}
-                  </h4>
-                  <p className="text-[11px] text-emerald-800">
-                    Waktu Pemeriksaan: <strong>{dbDiagnosticResult.checkedAt}</strong>
-                    {dbDiagnosticResult.sheetTitle && ` &bull; Judul: "${dbDiagnosticResult.sheetTitle}"`}
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Grid 10 Tab Status */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 pt-1">
-              {dbDiagnosticResult.tabs.map((tab) => (
-                <div
-                  key={tab.name}
-                  className="p-2.5 bg-white rounded-xl border border-emerald-200/80 shadow-2xs space-y-1"
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono font-bold text-xs text-slate-800">
-                      {tab.id}. {tab.name}
-                    </span>
-                    <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" title="Tab Siap" />
-                  </div>
-                  <div className="text-[10px] text-slate-500 font-medium truncate" title={tab.description}>
-                    {tab.description}
-                  </div>
-                  <div className="pt-1 border-t border-slate-100 flex items-center justify-between text-[10px]">
-                    <span className="text-slate-400">Data:</span>
-                    <span className="font-extrabold text-emerald-700 font-mono">{tab.count} baris</span>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="text-[11px] text-emerald-900 bg-white/70 p-2.5 rounded-xl border border-emerald-200 flex items-center gap-2">
-              <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>{dbDiagnosticResult.message}</span>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* ============================================================== */}
-      {/* KARTU 3: IDENTITAS LEMBAGA PENDIDIKAN & KEBIJAKAN PRESENSI    */}
+      {/* KARTU 3: IDENTITAS SEKOLAH & KEBIJAKAN PRESENSI                */}
       {/* ============================================================== */}
       <form onSubmit={handleSaveSettings} className="space-y-6">
         <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
@@ -1877,7 +1052,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
             </div>
           </div>
 
-
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
               Alamat Lengkap Sekolah
@@ -1895,7 +1069,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
         {/* Kebijakan Presensi & Validasi Biometrik */}
         <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
           <div className="pb-3 border-b border-slate-100 flex items-center gap-2 text-slate-900 font-bold text-base">
-            <ShieldCheck className="w-5 h-5 text-emerald-600" />
+            <Sparkles className="w-5 h-5 text-emerald-600" />
             <span>Kebijakan Presensi &amp; Validasi Biometrik</span>
           </div>
 
@@ -1919,124 +1093,52 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 className="w-full accent-emerald-600 cursor-pointer"
               />
               <p className="text-[11px] text-slate-500 leading-relaxed">
-                Toleransi kemiripan wajah aktif dengan database foto referensi (Direkomendasikan: 75%).
+                Toleransi kemiripan wajah langsung saat presensi dengan database wajah (Direkomendasikan: 75%).
               </p>
             </div>
 
-            <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 flex flex-col justify-between">
+            <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 flex flex-col justify-between gap-2">
               <div>
-                <span className="font-bold text-xs text-slate-800 block">Pemeriksaan Ketat GPS</span>
+                <span className="font-bold text-xs text-slate-800 block">Validasi Ketat GPS &amp; Wajah</span>
                 <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                  Menolak otomatis presensi jika berada di luar radius meter atau GPS tidak aktif.
+                  Presensi hanya mencatat nama, NIP, waktu server, skor kecocokan wajah, dan lokasi tanpa menyimpan foto presensi.
                 </p>
               </div>
-              <label className="flex items-center gap-2 mt-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={requireStrictGps}
-                  onChange={(e) => setRequireStrictGps(e.target.checked)}
-                  className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
-                />
-                <span className="text-xs font-semibold text-slate-700">Wajibkan Verifikasi Radius GPS</span>
-              </label>
+              <div className="space-y-1.5 pt-1">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={requireStrictGps}
+                    onChange={(e) => setRequireStrictGps(e.target.checked)}
+                    className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                  />
+                  <span className="text-xs font-semibold text-slate-700">Wajibkan Verifikasi Radius GPS</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={requireStrictFace}
+                    onChange={(e) => setRequireStrictFace(e.target.checked)}
+                    className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                  />
+                  <span className="text-xs font-semibold text-slate-700">Wajibkan Pencocokan Wajah Kamera</span>
+                </label>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* Submit Button Pengaturan Sekolah */}
         <div className="flex items-center justify-end">
           <button
             type="submit"
             disabled={isSubmitting}
-            className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md flex items-center gap-2 disabled:opacity-50"
+            className="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md flex items-center gap-2 disabled:opacity-50 cursor-pointer"
           >
             <Save className="w-4 h-4" />
             <span>{isSubmitting ? 'Menyimpan...' : 'Simpan Semua Pengaturan Sekolah'}</span>
           </button>
         </div>
       </form>
-
-      {/* ============================================================== */}
-      {/* MODAL KONFIRMASI SINKRONISASI GOOGLE DRIVE & SHEETS            */}
-      {/* ============================================================== */}
-      {workspaceConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-teal-100 text-teal-700 flex items-center justify-center shrink-0">
-                  <CloudUpload className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">
-                    {workspaceConfirmModal.type === 'create_db'
-                      ? 'Buat & Tautkan Database Google Drive & Sheets'
-                      : workspaceConfirmModal.type === 'sync_users_only'
-                      ? 'Sinkronkan Semua Username & Password'
-                      : 'Sinkronkan 10 Tab Database ke Google Sheets & Drive'}
-                  </h3>
-                  <p className="text-[11px] text-slate-500">
-                    Otorisasi &amp; penggabungan data aman ke Google Workspace
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setWorkspaceConfirmModal(null)}
-                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="p-3.5 rounded-2xl bg-emerald-50/80 border border-emerald-200 text-xs text-emerald-950 space-y-2 leading-relaxed">
-              {workspaceConfirmModal.type === 'create_db' && (
-                <p>
-                  Aplikasi akan menyiapkan folder <strong>Google Drive</strong> dan file <strong>Google Sheets (10 Tab)</strong> lalu menyalin &amp; menggabungkan seluruh akun username &amp; password ke dalamnya.
-                </p>
-              )}
-              {workspaceConfirmModal.type === 'sync_users_only' && (
-                <p>
-                  Aplikasi akan membaca file <strong>KITARAJIN_Users_Database.json</strong> di Google Drive dan tab <strong>Users</strong> di Google Sheets, menggabungkan semua akun yang sudah ada, lalu menyimpan hasilnya secara real-time.
-                </p>
-              )}
-              {workspaceConfirmModal.type === 'sync_all_tabs' && (
-                <p>
-                  Aplikasi akan menyinkronkan seluruh 10 tab (termasuk penggabungan non-destruktif tab <strong>Users</strong> dan backup Google Drive).
-                </p>
-              )}
-              <p className="font-bold text-emerald-800">
-                Username dan password yang sudah ditambahkan sebelumnya TIDAK AKAN DIHAPUS.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setWorkspaceConfirmModal(null)}
-                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold cursor-pointer"
-              >
-                Batal
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (workspaceConfirmModal.type === 'create_db') {
-                    executeConfirmAutoCreateAndLinkDatabase();
-                  } else if (workspaceConfirmModal.type === 'sync_users_only') {
-                    executeConfirmSyncUsersOnly();
-                  } else {
-                    executeConfirmSyncDataToSheets();
-                  }
-                }}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs cursor-pointer"
-              >
-                Ya, Lanjutkan &amp; Sinkronkan
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

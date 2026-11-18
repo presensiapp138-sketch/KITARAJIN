@@ -26,6 +26,7 @@ import {
   Download,
   FileSpreadsheet,
   FileDown,
+  Trash2,
 } from 'lucide-react';
 import { User, DailyAttendancePair, AttendanceRecord } from '../../types';
 import {
@@ -34,6 +35,7 @@ import {
   groupAttendanceByDateAndUser,
   getAllUsers,
   getLocalDateString,
+  deleteAttendanceRecord,
 } from '../../services/storage';
 import { exportAttendanceToExcel } from '../../services/excelReportService';
 import { generateAttendancePdfReport } from '../../services/pdfReportService';
@@ -52,9 +54,11 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
   const [scopeFilter, setScopeFilter] = useState<'my' | 'all'>(
     currentUser.role === 'karyawan' ? 'my' : 'all'
   );
-  const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'week' | 'month'>('month');
+  const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'complete' | 'waiting_pulang' | 'late'>('all');
+  const [deleteTargetRecord, setDeleteTargetRecord] = useState<AttendanceRecord | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Photo Preview Modal
   const [previewPhoto, setPreviewPhoto] = useState<{
@@ -195,6 +199,19 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
     printAttendanceDocument(records, getPeriodLabel(), targetUser);
   };
 
+  const handleConfirmDeleteAttendance = async () => {
+    if (!deleteTargetRecord) return;
+    const rec = deleteTargetRecord;
+    setDeleteTargetRecord(null);
+    const res = await deleteAttendanceRecord(currentUser, rec.id);
+    if (res.success) {
+      setActionFeedback({ type: 'success', message: res.message });
+      loadData();
+    } else {
+      setActionFeedback({ type: 'error', message: res.message });
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header Banner */}
@@ -249,6 +266,32 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
           </div>
         </div>
       </div>
+
+      {actionFeedback && (
+        <div
+          className={`p-4 rounded-xl border flex items-center justify-between text-xs sm:text-sm ${
+            actionFeedback.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              : 'bg-rose-50 border-rose-200 text-rose-900'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {actionFeedback.type === 'success' ? (
+              <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            )}
+            <span>{actionFeedback.message}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActionFeedback(null)}
+            className="text-slate-400 hover:text-slate-600 cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* Control Filter Bar */}
       <div className="bg-white rounded-2xl border border-slate-200/80 p-4 shadow-xs space-y-3">
@@ -502,16 +545,28 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                           1. Absen Masuk
                         </span>
                       </div>
-                      {hasMasuk && (
-                        <span
-                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                            pair.masukRecord?.status === 'tepat_waktu'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {pair.masukRecord?.status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}
-                        </span>
+                      {hasMasuk && pair.masukRecord && (
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              pair.masukRecord.status === 'tepat_waktu'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {pair.masukRecord.status === 'tepat_waktu' ? 'Tepat Waktu' : 'Terlambat'}
+                          </span>
+                          {currentUser.role === 'kepala_sekolah' && (
+                            <button
+                              type="button"
+                              onClick={() => setDeleteTargetRecord(pair.masukRecord!)}
+                              className="p-1 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="Hapus Presensi Masuk"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
                       )}
                     </div>
 
@@ -523,7 +578,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                             type="button"
                             onClick={() =>
                               setPreviewPhoto({
-                                url: pair.masukRecord!.photoRef,
+                                url: pair.masukRecord!.photoRef || '',
                                 title: `Foto Absen Masuk - ${pair.userName}`,
                                 subtitle: `${formatDateIndo(pair.date)} • Pukul ${new Date(
                                   pair.masukRecord!.timestamp
@@ -600,10 +655,22 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                           2. Absen Pulang
                         </span>
                       </div>
-                      {hasPulang ? (
-                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800">
-                          Pulang Sah
-                        </span>
+                      {hasPulang && pair.pulangRecord ? (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800">
+                            Pulang Sah
+                          </span>
+                          {currentUser.role === 'kepala_sekolah' && (
+                            <button
+                              type="button"
+                              onClick={() => setDeleteTargetRecord(pair.pulangRecord!)}
+                              className="p-1 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="Hapus Presensi Pulang"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
                       ) : (
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 text-slate-600">
                           Belum Pulang
@@ -619,7 +686,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                             type="button"
                             onClick={() =>
                               setPreviewPhoto({
-                                url: pair.pulangRecord!.photoRef,
+                                url: pair.pulangRecord!.photoRef || '',
                                 title: `Foto Absen Pulang - ${pair.userName}`,
                                 subtitle: `${formatDateIndo(pair.date)} • Pukul ${new Date(
                                   pair.pulangRecord!.timestamp
@@ -720,6 +787,60 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                 className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800"
               >
                 Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Catatan Presensi (Kepala Sekolah) */}
+      {deleteTargetRecord && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-rose-100 text-rose-700">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">
+                    Hapus Catatan Presensi?
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Baris akan ditandai dihapus &amp; otomatis tersinkron ke Google Sheets &amp; Drive
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeleteTargetRecord(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-rose-50/80 border border-rose-200 text-xs text-rose-950 leading-relaxed">
+              Yakin ingin menghapus catatan presensi{' '}
+              <strong className="uppercase">{deleteTargetRecord.type}</strong> milik{' '}
+              <strong>{deleteTargetRecord.userName}</strong> pada tanggal{' '}
+              <strong>{formatDateIndo(deleteTargetRecord.date)}</strong>?
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeleteTargetRecord(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-semibold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteAttendance}
+                className="px-4 py-2 rounded-xl text-white text-xs font-bold shadow-xs cursor-pointer bg-rose-600 hover:bg-rose-700"
+              >
+                Ya, Hapus Presensi
               </button>
             </div>
           </div>

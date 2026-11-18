@@ -33,8 +33,6 @@ import {
   Eye,
   EyeOff,
   FileDown,
-  CloudUpload,
-  Database,
 } from 'lucide-react';
 
 import { User, UserRole, Department, Schedule } from '../../types';
@@ -46,6 +44,7 @@ import {
   createUser,
   updateUser,
   toggleUserStatus,
+  deleteUser,
   createSchedule,
   updateSchedule,
   deleteSchedule,
@@ -55,15 +54,6 @@ import {
   getAuditLogs,
   getAttendanceForUser,
 } from '../../services/storage';
-import {
-  getAccessToken,
-  signInWithGoogle,
-  syncAllAppDataToDriveAndSheet,
-  hasPendingWorkspaceUserSync,
-  getConnectedGoogleEmail,
-  getWorkspaceSyncRuntimeStatus,
-  formatAuthErrorMessage,
-} from '../../services/workspaceService';
 import { generateAttendancePdfReport } from '../../services/pdfReportService';
 import { TimeInput24 } from '../common/TimeInput24';
 
@@ -140,17 +130,12 @@ export const UserManager: React.FC<UserManagerProps> = ({
   const [activeExpandedSessionRoster, setActiveExpandedSessionRoster] = useState<string | null>(null);
   const [sessionEmployeeSearch, setSessionEmployeeSearch] = useState('');
 
-  // Credential Visibility & Drive/Sheets Sync State
+  // Credential Visibility State
   const [visiblePasswordIds, setVisiblePasswordIds] = useState<Record<string, boolean>>({});
-  const [isSyncingWorkspaceUsers, setIsSyncingWorkspaceUsers] = useState(false);
-  const [pendingWorkspaceSync, setPendingWorkspaceSync] = useState(() => hasPendingWorkspaceUserSync());
-  const [workspaceRuntime, setWorkspaceRuntime] = useState(() => getWorkspaceSyncRuntimeStatus());
-  const [lastWorkspaceSyncAt, setLastWorkspaceSyncAt] = useState<string | undefined>(
-    () => getAppSettings().lastWorkspaceUserSyncAt
-  );
   const [confirmModal, setConfirmModal] = useState<{
-    type: 'workspace_sync' | 'delete_session';
+    type: 'delete_session' | 'delete_user';
     targetSchedule?: Schedule;
+    targetUser?: User;
   } | null>(null);
 
   // Load all data
@@ -159,9 +144,6 @@ export const UserManager: React.FC<UserManagerProps> = ({
     setDepartments(getAllDepartments());
     const schedList = getAllSchedules();
     setSchedules(schedList);
-    setPendingWorkspaceSync(hasPendingWorkspaceUserSync());
-    setWorkspaceRuntime(getWorkspaceSyncRuntimeStatus());
-    setLastWorkspaceSyncAt(getAppSettings().lastWorkspaceUserSyncAt);
 
     setSessionTimeInputs((prev) => {
       const next = { ...prev };
@@ -186,11 +168,11 @@ export const UserManager: React.FC<UserManagerProps> = ({
       loadData();
     };
     window.addEventListener('kitarajin_cloud_sync', handleSync);
-    window.addEventListener('kitarajin_workspace_sync', handleSync);
+    window.addEventListener('kitarajin_settings_updated', handleSync);
     window.addEventListener('storage', handleSync);
     return () => {
       window.removeEventListener('kitarajin_cloud_sync', handleSync);
-      window.removeEventListener('kitarajin_workspace_sync', handleSync);
+      window.removeEventListener('kitarajin_settings_updated', handleSync);
       window.removeEventListener('storage', handleSync);
     };
   }, []);
@@ -343,6 +325,21 @@ export const UserManager: React.FC<UserManagerProps> = ({
 
   const handleToggleUserStatus = (targetUser: User) => {
     const res = toggleUserStatus(currentUser, targetUser.id);
+    if (res.success) {
+      setFeedback({ type: 'success', message: res.message });
+      loadData();
+    } else {
+      setFeedback({ type: 'error', message: res.message });
+    }
+  };
+
+  const handleRequestDeleteUser = (targetUser: User) => {
+    setConfirmModal({ type: 'delete_user', targetUser });
+  };
+
+  const executeConfirmDeleteUser = async (targetUser: User) => {
+    setConfirmModal(null);
+    const res = await deleteUser(currentUser, targetUser.id);
     if (res.success) {
       setFeedback({ type: 'success', message: res.message });
       loadData();
@@ -566,37 +563,6 @@ export const UserManager: React.FC<UserManagerProps> = ({
     setConfirmModal(null);
   };
 
-  const executeWorkspaceUserSync = async () => {
-    setConfirmModal(null);
-    setIsSyncingWorkspaceUsers(true);
-    setFeedback(null);
-    try {
-      let token = await getAccessToken();
-      if (!token) {
-        const connectedEmail = getConnectedGoogleEmail() || currentUser.email || undefined;
-        const authRes = await signInWithGoogle(connectedEmail);
-        if (!authRes?.accessToken) {
-          throw new Error('Otorisasi akun Google diperlukan untuk menyinkronkan ke Google Drive & Sheets.');
-        }
-        token = authRes.accessToken;
-      }
-
-      const res = await syncAllAppDataToDriveAndSheet(currentUser, { accessToken: token });
-      loadData();
-      setFeedback({
-        type: 'success',
-        message: res.message,
-      });
-    } catch (err: any) {
-      setFeedback({
-        type: 'error',
-        message: formatAuthErrorMessage(err),
-      });
-    } finally {
-      setIsSyncingWorkspaceUsers(false);
-    }
-  };
-
   return (
     <div className="space-y-6">
       {/* Header Halaman */}
@@ -675,93 +641,6 @@ export const UserManager: React.FC<UserManagerProps> = ({
       {/* ============================================================== */}
       {activeTab === 'users' && (
         <div className="space-y-4">
-          {/* Banner Sinkronisasi Username & Password ke Google Drive & Sheets */}
-          <div
-            className={`rounded-2xl border p-4 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4 ${
-              workspaceRuntime.isSyncing || workspaceRuntime.isScheduled
-                ? 'bg-teal-50/90 border-teal-200'
-                : pendingWorkspaceSync && !workspaceRuntime.hasToken
-                ? 'bg-amber-50/90 border-amber-200'
-                : 'bg-emerald-50/70 border-emerald-200'
-            }`}
-          >
-            <div className="flex items-start gap-3">
-              <div
-                className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                  workspaceRuntime.isSyncing || workspaceRuntime.isScheduled
-                    ? 'bg-teal-100 text-teal-700'
-                    : pendingWorkspaceSync && !workspaceRuntime.hasToken
-                    ? 'bg-amber-100 text-amber-700'
-                    : 'bg-emerald-100 text-emerald-700'
-                }`}
-              >
-                <Database className="w-4 h-4" />
-              </div>
-              <div className="space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs sm:text-sm font-extrabold text-slate-900">
-                    Auto-Sync Database Username &amp; Password (Drive &amp; Sheets)
-                  </span>
-                  <span
-                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
-                      workspaceRuntime.isSyncing || workspaceRuntime.isScheduled
-                        ? 'bg-teal-100 text-teal-900 border-teal-300'
-                        : workspaceRuntime.hasToken
-                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                        : pendingWorkspaceSync
-                        ? 'bg-amber-100 text-amber-900 border-amber-300'
-                        : lastWorkspaceSyncAt
-                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                        : 'bg-sky-100 text-sky-800 border-sky-200'
-                    }`}
-                  >
-                    {workspaceRuntime.isSyncing || workspaceRuntime.isScheduled
-                      ? 'Menyinkronkan Otomatis di Latar Belakang...'
-                      : workspaceRuntime.hasToken
-                      ? 'Auto-Sync Drive & Sheets Aktif'
-                      : pendingWorkspaceSync
-                      ? 'Siap Auto-Sync (Hubungkan Google 1x)'
-                      : lastWorkspaceSyncAt
-                      ? 'Sudah Tersinkron (Cloud, Drive & Sheets)'
-                      : 'Tersimpan di Cloud Firestore'}
-                  </span>
-                </div>
-                <p className="text-[11px] sm:text-xs text-slate-600 leading-relaxed">
-                  Seluruh <strong>{users.length} akun</strong> otomatis tersinkron ke Cloud Firestore &amp; domain Vercel setiap tambah/edit, serta berjalan otomatis ke Drive &amp; Sheets di latar belakang tanpa klik tombol manual saat sesi Google aktif.
-                  {getConnectedGoogleEmail() && (
-                    <span className="ml-1 text-slate-700 font-semibold">
-                      &bull; Akun Google: {getConnectedGoogleEmail()}
-                    </span>
-                  )}
-                  {lastWorkspaceSyncAt && (
-                    <span className="ml-1 text-emerald-700 font-semibold">
-                      &bull; Tersinkron: {new Date(lastWorkspaceSyncAt).toLocaleString('id-ID')}
-                    </span>
-                  )}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                disabled={isSyncingWorkspaceUsers}
-                onClick={() => setConfirmModal({ type: 'workspace_sync' })}
-                className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-colors flex items-center gap-1.5 shadow-xs disabled:opacity-50 cursor-pointer"
-                title="Sinkronisasi sudah berjalan otomatis di latar belakang saat Google terhubung; tombol ini opsional untuk sinkron paksa"
-              >
-                <CloudUpload className={`w-3.5 h-3.5 ${isSyncingWorkspaceUsers || workspaceRuntime.isSyncing ? 'animate-bounce' : ''}`} />
-                <span>
-                  {isSyncingWorkspaceUsers
-                    ? 'Menyinkronkan...'
-                    : workspaceRuntime.hasToken
-                    ? 'Sinkron Paksa (Opsional)'
-                    : 'Aktifkan & Sinkron Drive/Sheet'}
-                </span>
-              </button>
-            </div>
-          </div>
-
           <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-2.5">
               <div className="relative min-w-[220px]">
@@ -836,7 +715,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
                       </td>
                     </tr>
                   ) : (
-                    filteredUsers.map((u) => {
+                    filteredUsers.map((u, idx) => {
                       const dept = departments.find((d) => d.id === u.departmentId);
                       const userSessions = u.assignedSessionIds && u.assignedSessionIds.length > 0
                         ? u.assignedSessionIds
@@ -847,7 +726,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
                       const isPasswordVisible = Boolean(visiblePasswordIds[u.id]);
 
                       return (
-                        <tr key={u.id} className="hover:bg-slate-50/60 transition-colors">
+                        <tr key={`usr-row-${u.id || 'item'}-${idx}`} className="hover:bg-slate-50/60 transition-colors">
                           <td className="py-3 px-4">
                             <div className="font-bold text-slate-900">{u.name}</div>
                             <div className="text-[11px] text-slate-500 font-mono">
@@ -905,11 +784,11 @@ export const UserManager: React.FC<UserManagerProps> = ({
                           </td>
                           <td className="py-3 px-4">
                             <div className="flex flex-wrap gap-1">
-                              {schedules.map((sch) => {
+                              {schedules.map((sch, schIdx) => {
                                 const isAssigned = userSessions.includes(sch.id);
                                 return (
                                   <span
-                                    key={sch.id}
+                                    key={`usr-sch-${u.id || idx}-${sch.id || 's'}-${schIdx}`}
                                     className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${
                                       isAssigned
                                         ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
@@ -980,18 +859,32 @@ export const UserManager: React.FC<UserManagerProps> = ({
                                 <Edit2 className="w-3.5 h-3.5" />
                               </button>
                               {u.role !== 'kepala_sekolah' && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleUserStatus(u)}
-                                  className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
-                                    u.isActive
-                                      ? 'border-amber-200 text-amber-700 hover:bg-amber-50'
-                                      : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
-                                  }`}
-                                  title={u.isActive ? 'Nonaktifkan Akun' : 'Aktifkan Akun'}
-                                >
-                                  <Power className="w-3.5 h-3.5" />
-                                </button>
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleUserStatus(u)}
+                                    className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
+                                      u.isActive
+                                        ? 'border-amber-200 text-amber-700 hover:bg-amber-50'
+                                        : 'border-emerald-200 text-emerald-700 hover:bg-emerald-50'
+                                    }`}
+                                    title={u.isActive ? 'Nonaktifkan Akun' : 'Aktifkan Akun'}
+                                  >
+                                    <Power className="w-3.5 h-3.5" />
+                                  </button>
+                                  {(currentUser.role === 'kepala_sekolah' ||
+                                    (currentUser.role === 'admin' && u.role === 'karyawan')) &&
+                                    u.id !== currentUser.id && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRequestDeleteUser(u)}
+                                        className="p-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                                        title={`Hapus Akun ${u.name}`}
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                </>
                               )}
                             </div>
                           </td>
@@ -1040,7 +933,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
 
           {/* BAGIAN 1: KARTU ATURAN JAM SESI 1, SESI 2, SESI 3 */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {schedules.map((sched) => {
+            {schedules.map((sched, schedIdx) => {
               const assignedCount = users.filter((u) => {
                 const s = u.assignedSessionIds && u.assignedSessionIds.length > 0
                   ? u.assignedSessionIds
@@ -1050,7 +943,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
 
               return (
                 <div
-                  key={sched.id}
+                  key={`sched-card-${sched.id || 's'}-${schedIdx}`}
                   className="bg-white rounded-2xl border-2 border-slate-200/80 p-5 shadow-xs space-y-4 flex flex-col justify-between hover:border-emerald-500/60 transition-colors"
                 >
                   <div className="space-y-3">
@@ -1177,9 +1070,9 @@ export const UserManager: React.FC<UserManagerProps> = ({
                             const s = u.assignedSessionIds && u.assignedSessionIds.length > 0 ? u.assignedSessionIds : ['sesi-1', 'sesi-2', 'sesi-3'];
                             return u.role === 'karyawan' && s.includes(sched.id);
                           })
-                          .map((u) => (
+                          .map((u, uIdx) => (
                             <span
-                              key={u.id}
+                              key={`chip-${sched.id}-${u.id || 'u'}-${uIdx}`}
                               className="inline-flex items-center gap-1 text-[10px] bg-white border border-slate-200 px-2 py-0.5 rounded-md font-medium text-slate-800 shadow-2xs"
                             >
                               <span>{u.name}</span>
@@ -1238,14 +1131,14 @@ export const UserManager: React.FC<UserManagerProps> = ({
                             {users
                               .filter((u) => currentUser.role === 'kepala_sekolah' ? true : u.role === 'karyawan')
                               .filter((u) => !sessionEmployeeSearch || u.name.toLowerCase().includes(sessionEmployeeSearch.toLowerCase()))
-                              .map((u) => {
+                              .map((u, pIdx) => {
                                 const userSessions = u.assignedSessionIds && u.assignedSessionIds.length > 0 ? u.assignedSessionIds : ['sesi-1', 'sesi-2', 'sesi-3'];
                                 const isAssigned = userSessions.includes(sched.id);
                                 const dept = departments.find((d) => d.id === u.departmentId);
 
                                 return (
                                   <label
-                                    key={u.id}
+                                    key={`roster-${sched.id}-${u.id || 'u'}-${pIdx}`}
                                     className="flex items-center justify-between p-1.5 hover:bg-emerald-50/60 rounded-lg cursor-pointer transition-colors"
                                   >
                                     <div className="flex items-center gap-2">
@@ -1332,8 +1225,8 @@ export const UserManager: React.FC<UserManagerProps> = ({
                   <tr className="bg-slate-50 border-b border-slate-200/80 text-slate-600 font-bold uppercase tracking-wider text-[10px]">
                     <th className="py-3 px-4">Nama Pegawai &amp; NIP</th>
                     <th className="py-3 px-4">Departemen</th>
-                    {schedules.map((s) => (
-                      <th key={s.id} className="py-3 px-4 text-center">
+                    {schedules.map((s, sIdx) => (
+                      <th key={`mtx-th-${s.id || 's'}-${sIdx}`} className="py-3 px-4 text-center">
                         <span className="bg-white px-2 py-0.5 rounded border border-slate-200 font-mono">
                           {s.sessionName || s.name}
                         </span>
@@ -1346,14 +1239,14 @@ export const UserManager: React.FC<UserManagerProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {users.map((u) => {
+                  {users.map((u, uRowIdx) => {
                     const dept = departments.find((d) => d.id === u.departmentId);
                     const userSessions = u.assignedSessionIds && u.assignedSessionIds.length > 0
                       ? u.assignedSessionIds
                       : ['sesi-1', 'sesi-2', 'sesi-3'];
 
                     return (
-                      <tr key={u.id} className="hover:bg-slate-50/60 transition-colors">
+                      <tr key={`mtx-row-${u.id || 'u'}-${uRowIdx}`} className="hover:bg-slate-50/60 transition-colors">
                         <td className="py-3 px-4">
                           <div className="font-bold text-slate-900">{u.name}</div>
                           <div className="text-[11px] text-slate-500 font-mono">
@@ -1365,10 +1258,10 @@ export const UserManager: React.FC<UserManagerProps> = ({
                             {u.departmentName || u.departmentId || '-'}
                           </span>
                         </td>
-                        {schedules.map((s) => {
+                        {schedules.map((s, sColIdx) => {
                           const isChecked = userSessions.includes(s.id);
                           return (
-                            <td key={s.id} className="py-3 px-4 text-center">
+                            <td key={`mtx-cell-${u.id || uRowIdx}-${s.id || 's'}-${sColIdx}`} className="py-3 px-4 text-center">
                               <label className="inline-flex items-center justify-center cursor-pointer p-1">
                                 <input
                                   type="checkbox"
@@ -1564,11 +1457,11 @@ export const UserManager: React.FC<UserManagerProps> = ({
                   Pilih sesi yang dapat diambil oleh karyawan ini saat presensi masuk &amp; pulang:
                 </p>
                 <div className="flex flex-wrap gap-2 pt-1">
-                  {schedules.map((sch) => {
+                  {schedules.map((sch, schFormIdx) => {
                     const isChecked = formAssignedSessionIds.includes(sch.id);
                     return (
                       <button
-                        key={sch.id}
+                        key={`form-sch-${sch.id || 's'}-${schFormIdx}`}
                         type="button"
                         onClick={() => toggleSessionInUserForm(sch.id)}
                         className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer border ${
@@ -1816,36 +1709,26 @@ export const UserManager: React.FC<UserManagerProps> = ({
         </div>
       )}
       {/* ============================================================== */}
-      {/* MODAL KONFIRMASI SINKRON DRIVE/SHEET ATAU HAPUS SESI           */}
+      {/* MODAL KONFIRMASI HAPUS SESI / PENGGUNA                         */}
       {/* ============================================================== */}
-      {confirmModal && (
+      {confirmModal && (confirmModal.targetSchedule || confirmModal.targetUser) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-100 space-y-4">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-2.5">
-                <div
-                  className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                    confirmModal.type === 'workspace_sync'
-                      ? 'bg-teal-100 text-teal-700'
-                      : 'bg-rose-100 text-rose-700'
-                  }`}
-                >
-                  {confirmModal.type === 'workspace_sync' ? (
-                    <CloudUpload className="w-5 h-5" />
-                  ) : (
-                    <Trash2 className="w-5 h-5" />
-                  )}
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-rose-100 text-rose-700">
+                  <Trash2 className="w-5 h-5" />
                 </div>
                 <div>
                   <h3 className="font-extrabold text-slate-900 text-sm sm:text-base">
-                    {confirmModal.type === 'workspace_sync'
-                      ? 'Konfirmasi Sinkronisasi ke Google Drive & Sheets'
+                    {confirmModal.type === 'delete_user'
+                      ? 'Konfirmasi Hapus Pegawai'
                       : 'Konfirmasi Hapus Sesi Presensi'}
                   </h3>
                   <p className="text-[11px] text-slate-500">
-                    {confirmModal.type === 'workspace_sync'
-                      ? 'Gabungkan & perbarui database username dan password'
-                      : 'Tindakan ini akan menghapus sesi jadwal presensi'}
+                    {confirmModal.type === 'delete_user'
+                      ? 'Akun akan ditandai dihapus dan otomatis tersinkron ke Google Sheets & Drive'
+                      : 'Tindakan ini akan menandai sesi jadwal presensi sebagai dihapus'}
                   </p>
                 </div>
               </div>
@@ -1858,21 +1741,19 @@ export const UserManager: React.FC<UserManagerProps> = ({
               </button>
             </div>
 
-            {confirmModal.type === 'workspace_sync' ? (
-              <div className="p-3.5 rounded-2xl bg-teal-50/80 border border-teal-200 text-xs text-teal-950 space-y-2 leading-relaxed">
-                <p>
-                  Sistem akan membaca data yang sudah ada di <strong>Google Drive</strong> (<code>KITARAJIN_Users_Database.json</code>) dan <strong>Google Sheets</strong> (tab <code>Users</code>), menggabungkannya dengan <strong>{users.length} akun</strong> lokal/Cloud Firestore, lalu menyinkronkan hasilnya.
-                </p>
-                <p className="font-bold text-emerald-800">
-                  Username dan password yang sudah ditambahkan sebelumnya TIDAK AKAN DIHAPUS.
-                </p>
-              </div>
-            ) : (
-              <div className="p-3.5 rounded-2xl bg-rose-50/80 border border-rose-200 text-xs text-rose-950 leading-relaxed">
-                Yakin ingin menghapus sesi{' '}
-                <strong>"{confirmModal.targetSchedule?.name}"</strong>?
-              </div>
-            )}
+            <div className="p-3.5 rounded-2xl bg-rose-50/80 border border-rose-200 text-xs text-rose-950 leading-relaxed">
+              {confirmModal.type === 'delete_user' && confirmModal.targetUser ? (
+                <>
+                  Yakin ingin menghapus akun pegawai{' '}
+                  <strong>"{confirmModal.targetUser.name}"</strong> (NIP: {confirmModal.targetUser.nip})?
+                </>
+              ) : (
+                <>
+                  Yakin ingin menghapus sesi{' '}
+                  <strong>"{confirmModal.targetSchedule?.name}"</strong>?
+                </>
+              )}
+            </div>
 
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
@@ -1885,21 +1766,15 @@ export const UserManager: React.FC<UserManagerProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (confirmModal.type === 'workspace_sync') {
-                    executeWorkspaceUserSync();
+                  if (confirmModal.type === 'delete_user' && confirmModal.targetUser) {
+                    executeConfirmDeleteUser(confirmModal.targetUser);
                   } else if (confirmModal.targetSchedule) {
                     executeConfirmDeleteSession(confirmModal.targetSchedule);
                   }
                 }}
-                className={`px-4 py-2 rounded-xl text-white text-xs font-bold shadow-xs cursor-pointer ${
-                  confirmModal.type === 'workspace_sync'
-                    ? 'bg-teal-600 hover:bg-teal-700'
-                    : 'bg-rose-600 hover:bg-rose-700'
-                }`}
+                className="px-4 py-2 rounded-xl text-white text-xs font-bold shadow-xs cursor-pointer bg-rose-600 hover:bg-rose-700"
               >
-                {confirmModal.type === 'workspace_sync'
-                  ? 'Ya, Sinkronkan Sekarang'
-                  : 'Ya, Hapus Sesi'}
+                {confirmModal.type === 'delete_user' ? 'Ya, Hapus Pegawai' : 'Ya, Hapus Sesi'}
               </button>
             </div>
           </div>

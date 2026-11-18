@@ -43,6 +43,7 @@ export const DepartmentManager: React.FC<DepartmentManagerProps> = ({ currentUse
   const [formDescription, setFormDescription] = useState('');
   const [formHeadName, setFormHeadName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   const loadData = () => {
     setDepartments(getAllDepartments());
@@ -51,6 +52,13 @@ export const DepartmentManager: React.FC<DepartmentManagerProps> = ({ currentUse
 
   useEffect(() => {
     loadData();
+    const handleSync = () => loadData();
+    window.addEventListener('kitarajin_cloud_sync', handleSync);
+    window.addEventListener('storage', handleSync);
+    return () => {
+      window.removeEventListener('kitarajin_cloud_sync', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
   }, []);
 
   const openCreateModal = () => {
@@ -117,15 +125,19 @@ export const DepartmentManager: React.FC<DepartmentManagerProps> = ({ currentUse
   };
 
   const handleDelete = (id: string, name: string) => {
-    if (confirm(`Apakah Anda yakin ingin menghapus departemen "${name}"?`)) {
-      const res = deleteDepartment(currentUser, id);
-      if (res.success) {
-        setFeedback({ type: 'success', message: res.message });
-        loadData();
-      } else {
-        setFeedback({ type: 'error', message: res.message });
-      }
+    setDeleteTarget({ id, name });
+  };
+
+  const confirmDelete = () => {
+    if (!deleteTarget) return;
+    const res = deleteDepartment(currentUser, deleteTarget.id);
+    if (res.success) {
+      setFeedback({ type: 'success', message: res.message });
+      loadData();
+    } else {
+      setFeedback({ type: 'error', message: res.message });
     }
+    setDeleteTarget(null);
   };
 
   const filteredDepts = departments.filter((d) => {
@@ -355,6 +367,33 @@ export const DepartmentManager: React.FC<DepartmentManagerProps> = ({ currentUse
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl border border-slate-100 space-y-4">
+            <h3 className="font-bold text-slate-900 text-sm">Konfirmasi Hapus Departemen</h3>
+            <p className="text-xs text-slate-600">
+              Apakah Anda yakin ingin menghapus departemen <strong>{deleteTarget.name}</strong>?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-semibold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={confirmDelete}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold cursor-pointer"
+              >
+                Hapus
+              </button>
+            </div>
           </div>
         </div>
       )}
