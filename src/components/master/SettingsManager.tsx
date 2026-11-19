@@ -49,6 +49,7 @@ import {
   getAuditLogs,
   updateUser,
   getCurrentSession,
+  updateSuperadminCachedPassword,
 } from '../../services/storage';
 import {
   getAppsScriptConfig,
@@ -106,9 +107,14 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [showKsPassword, setShowKsPassword] = useState(false);
   const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
 
+  // Ubah Password Superadmin (Cache Aplikasi, tidak disimpan ke Sheet)
+  const [saNewPassword, setSaNewPassword] = useState('');
+  const [saConfirmPassword, setSaConfirmPassword] = useState('');
+  const [showSaPassword, setShowSaPassword] = useState(false);
+
   // Form State Identitas Sekolah & Kebijakan Presensi
   const [schoolName, setSchoolName] = useState(settings.schoolName);
-  const [schoolEmail, setSchoolEmail] = useState(settings.schoolEmail || currentUser.email || '');
+  const [schoolEmail, setSchoolEmail] = useState(settings.schoolEmail || (currentUser.role !== 'superadmin' ? currentUser.email : '') || '');
   const [schoolAddress, setSchoolAddress] = useState(settings.schoolAddress);
   const [appTitle, setAppTitle] = useState(settings.appTitle);
   const [minFaceMatchThreshold, setMinFaceMatchThreshold] = useState(
@@ -284,13 +290,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   // Update Profil Kepala Sekolah
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (currentUser.id === 'kepsek-console') {
-      setFeedback({
-        type: 'error',
-        message: 'Mode Cek & Perbaikan Sheet sedang aktif. Klik "Login Akun Sheet" di kanan atas untuk masuk menggunakan akun Google Sheets sebelum mengubah profil pribadi.',
-      });
-      return;
-    }
     if (!ksName.trim()) {
       setFeedback({ type: 'error', message: 'Nama Kepala Sekolah tidak boleh kosong.' });
       return;
@@ -342,13 +341,6 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   // Ubah Password Login Kepala Sekolah
   const handleUpdateKsPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (currentUser.id === 'kepsek-console') {
-      setFeedback({
-        type: 'error',
-        message: 'Mode Cek & Perbaikan Sheet sedang aktif. Klik "Login Akun Sheet" di kanan atas untuk masuk menggunakan akun Google Sheets sebelum mengubah password.',
-      });
-      return;
-    }
     if (!ksPassword.trim()) {
       setFeedback({ type: 'error', message: 'Password baru tidak boleh kosong.' });
       return;
@@ -384,6 +376,31 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       setFeedback({ type: 'error', message: `Gagal memperbarui password: ${err?.message || 'Error'}` });
     } finally {
       setIsUpdatingPassword(false);
+    }
+  };
+
+  // Ubah Password Superadmin (Cache Aplikasi)
+  const handleUpdateSuperadminPassword = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!saNewPassword.trim()) {
+      setFeedback({ type: 'error', message: 'Password baru Superadmin tidak boleh kosong.' });
+      return;
+    }
+    if (saNewPassword.trim().length < 4) {
+      setFeedback({ type: 'error', message: 'Password Superadmin minimal 4 karakter.' });
+      return;
+    }
+    if (saNewPassword !== saConfirmPassword) {
+      setFeedback({ type: 'error', message: 'Konfirmasi password Superadmin tidak cocok.' });
+      return;
+    }
+    const res = updateSuperadminCachedPassword(saNewPassword);
+    if (res.success) {
+      setFeedback({ type: 'success', message: res.message });
+      setSaNewPassword('');
+      setSaConfirmPassword('');
+    } else {
+      setFeedback({ type: 'error', message: res.message });
     }
   };
 
@@ -755,8 +772,91 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       </div>
 
       {/* ============================================================== */}
-      {/* KARTU 1: PROFIL KEPALA SEKOLAH                                 */}
+      {/* KARTU KEAMANAN PASSWORD SUPERADMIN (KHUSUS CACHE APLIKASI)     */}
       {/* ============================================================== */}
+      {currentUser.role === 'superadmin' && (
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
+              <div className="w-8 h-8 rounded-lg bg-slate-900 text-emerald-400 flex items-center justify-center font-bold">
+                <Key className="w-4 h-4" />
+              </div>
+              <div>
+                <span>Password Superadmin (Cache Aplikasi)</span>
+                <p className="text-xs font-normal text-slate-500">
+                  Disimpan lokal di cache aplikasi (default: <code className="font-mono font-bold">superadmin</code>) dan tidak ditulis ke Google Sheet.
+                </p>
+              </div>
+            </div>
+            <span className="px-2.5 py-1 text-xs font-bold rounded-full bg-slate-900 text-emerald-300">
+              Cache Lokal
+            </span>
+          </div>
+
+          <form onSubmit={handleUpdateSuperadminPassword} className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Password Baru Superadmin
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                  <input
+                    type={showSaPassword ? 'text' : 'password'}
+                    required
+                    value={saNewPassword}
+                    onChange={(e) => setSaNewPassword(e.target.value)}
+                    placeholder="Minimal 4 karakter"
+                    className="w-full pl-9 pr-10 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSaPassword(!showSaPassword)}
+                    className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                    tabIndex={-1}
+                  >
+                    {showSaPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Konfirmasi Password Baru
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                  <input
+                    type={showSaPassword ? 'text' : 'password'}
+                    required
+                    value={saConfirmPassword}
+                    onChange={(e) => setSaConfirmPassword(e.target.value)}
+                    placeholder="Ketik ulang password baru"
+                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-1">
+              <button
+                type="submit"
+                disabled={!saNewPassword.trim()}
+                className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs shadow-md transition-colors flex items-center gap-2 disabled:opacity-50 cursor-pointer"
+              >
+                <Key className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Simpan Password Superadmin (Cache)</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ============================================================== */}
+      {/* KARTU 1: PROFIL KEPALA SEKOLAH (KHUSUS AKUN SHEET KS)          */}
+      {/* ============================================================== */}
+      {currentUser.role === 'kepala_sekolah' && (
+      <>
       <div className="bg-white rounded-2xl border border-slate-200/80 p-6 shadow-xs space-y-4">
         <div className="flex items-center justify-between pb-3 border-b border-slate-100">
           <div className="flex items-center gap-2 text-slate-900 font-bold text-base">
@@ -999,6 +1099,8 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           </div>
         </form>
       </div>
+      </>
+      )}
 
       {/* ============================================================== */}
       {/* KARTU 3: IDENTITAS SEKOLAH & KEBIJAKAN PRESENSI                */}

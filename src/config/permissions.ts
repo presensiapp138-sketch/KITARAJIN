@@ -153,7 +153,7 @@ export const PERMISSION_MATRIX: PermissionDefinition[] = [
     category: 'Pengaturan Sistem',
     label: 'Pengaturan Penyimpanan & Sekolah',
     description: 'Konfigurasi integrasi Google Sheets, nama sekolah, dan toleransi keamanan.',
-    allowedRoles: ['kepala_sekolah'],
+    allowedRoles: ['superadmin'],
   },
 ];
 

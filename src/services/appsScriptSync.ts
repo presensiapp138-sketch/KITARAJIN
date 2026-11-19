@@ -1179,34 +1179,34 @@ export function startAppsScriptRealtimeSync(onDataUpdated?: (col?: string) => vo
   let stopped = false;
   let pollCount = 0;
 
-  const scheduleNextPoll = (delayMs = 1200) => {
+  const scheduleNextPoll = (delayMs = 900) => {
     if (stopped) return;
     if (realtimeLoopTimer) clearTimeout(realtimeLoopTimer);
     realtimeLoopTimer = setTimeout(async () => {
       if (stopped) return;
       if (document.visibilityState !== 'hidden' && isAppsScriptConfigured() && navigator.onLine) {
         pollCount++;
-        // Poll ringan tiap ~1.2s (via CacheService <150ms), dan deep check tiap ~10s untuk edit manual langsung di Google Sheets
-        await pullChangesFromAppsScript(false, pollCount % 8 === 0).catch(() => {});
+        // Poll super cepat tiap ~0.9s (via CacheService <100ms), dan deep check tiap ~11s untuk edit manual langsung di Google Sheets
+        await pullChangesFromAppsScript(false, pollCount % 12 === 0).catch(() => {});
       }
-      scheduleNextPoll(1200);
+      scheduleNextPoll(900);
     }, delayMs);
   };
 
-  // Sinkron penuh saat aplikasi dibuka agar data lama di Sheets & Drive langsung muncul
+  // Sinkron penuh super cepat saat aplikasi dibuka (menggunakan CacheService jika segar)
   if (isAppsScriptConfigured()) {
     setSyncUiState({ isPolling: true });
-    pullChangesFromAppsScript(true, true).catch(() => {});
+    pullChangesFromAppsScript(true, false).catch(() => {});
     flushAttendanceBatch().catch(() => {});
   }
-  scheduleNextPoll(1200);
+  scheduleNextPoll(900);
 
   const handleResumeAndPull = () => {
     if (stopped) return;
     if (document.visibilityState === 'hidden') return;
     if (isAppsScriptConfigured() && navigator.onLine) {
       flushAttendanceBatch().catch(() => {});
-      pullChangesFromAppsScript(false, true).catch(() => {});
+      pullChangesFromAppsScript(false, false).catch(() => {});
     }
   };
 
@@ -1214,7 +1214,7 @@ export function startAppsScriptRealtimeSync(onDataUpdated?: (col?: string) => vo
     if (stopped) return;
     if (isAppsScriptConfigured()) {
       flushAttendanceBatch().catch(() => {});
-      pullChangesFromAppsScript(true, true).catch(() => {});
+      pullChangesFromAppsScript(true, false).catch(() => {});
     }
   };
 

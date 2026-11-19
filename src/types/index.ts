@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-export type UserRole = 'kepala_sekolah' | 'admin' | 'karyawan';
+export type UserRole = 'superadmin' | 'kepala_sekolah' | 'admin' | 'karyawan';
 
 export type AttendanceType = 'masuk' | 'pulang';
 export type AttendanceStatus = 'tepat_waktu' | 'terlambat' | 'izin' | 'sakit' | 'dinas' | 'alpa';

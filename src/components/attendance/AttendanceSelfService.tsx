@@ -254,35 +254,35 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
         return {
           allowed: false,
           statusType: 'early_in',
-          badge: `Belum Dibuka (Buka: ${userSchedule.checkInStart} WIB)`,
+          badge: `${userSchedule.sessionName || userSchedule.name} • Belum Dibuka`,
           color: 'rose',
-          reason: `Presensi MASUK ${userSchedule.sessionName || 'Sesi'} belum dibuka. Jam masuk dimulai pukul ${userSchedule.checkInStart} WIB. Waktu sekarang: ${curTime} WIB.`,
+          reason: `Presensi MASUK ${userSchedule.sessionName || userSchedule.name} belum dibuka.`,
         };
       }
       if (curTime >= userSchedule.checkOutStart) {
         return {
           allowed: false,
           statusType: 'closed_in',
-          badge: `Sesi Masuk Berakhir (Pukul ${userSchedule.checkOutStart})`,
+          badge: `${userSchedule.sessionName || userSchedule.name} • Masuk Berakhir`,
           color: 'rose',
-          reason: `Waktu presensi MASUK ${userSchedule.sessionName || 'Sesi'} sudah ditutup. Saat ini sudah memasuki jam kepulangan sesi (mulai pukul ${userSchedule.checkOutStart} WIB).`,
+          reason: `Waktu presensi MASUK ${userSchedule.sessionName || userSchedule.name} sudah ditutup dan beralih ke sesi pulang.`,
         };
       }
       if (curTime <= userSchedule.checkInDeadline) {
         return {
           allowed: true,
           statusType: 'on_time',
-          badge: `Sesi Masuk Tepat Waktu (s/d ${userSchedule.checkInDeadline} WIB)`,
+          badge: `${userSchedule.sessionName || userSchedule.name} • Masuk Tepat Waktu`,
           color: 'emerald',
-          reason: `Presensi masuk memenuhi kriteria tepat waktu (batas pukul ${userSchedule.checkInDeadline} WIB).`,
+          reason: `Presensi masuk ${userSchedule.sessionName || userSchedule.name} berstatus tepat waktu.`,
         };
       }
       return {
         allowed: true,
         statusType: 'late',
-        badge: `Sesi Masuk: Terlambat (Batas: ${userSchedule.checkInDeadline} WIB)`,
+        badge: `${userSchedule.sessionName || userSchedule.name} • Masuk Terlambat`,
         color: 'amber',
-        reason: `Presensi masuk melebihi batas waktu (${userSchedule.checkInDeadline} WIB). Kehadiran dicatat sebagai TERLAMBAT.`,
+        reason: `Presensi masuk ${userSchedule.sessionName || userSchedule.name} dicatat sebagai TERLAMBAT.`,
       };
     } else {
       // Presensi Pulang
@@ -290,26 +290,26 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
         return {
           allowed: false,
           statusType: 'early_out',
-          badge: `Belum Dibuka (Buka: ${userSchedule.checkOutStart} WIB)`,
+          badge: `${userSchedule.sessionName || userSchedule.name} • Pulang Belum Dibuka`,
           color: 'rose',
-          reason: `Presensi PULANG ${userSchedule.sessionName || 'Sesi'} belum dibuka. Jam kepulangan dimulai pukul ${userSchedule.checkOutStart} WIB. Waktu sekarang: ${curTime} WIB.`,
+          reason: `Presensi PULANG ${userSchedule.sessionName || userSchedule.name} belum dibuka.`,
         };
       }
       if (userSchedule.checkOutEnd && curTime > userSchedule.checkOutEnd) {
         return {
           allowed: false,
           statusType: 'closed_out',
-          badge: `Sesi Pulang Berakhir (${userSchedule.checkOutEnd} WIB)`,
+          badge: `${userSchedule.sessionName || userSchedule.name} • Sesi Pulang Berakhir`,
           color: 'rose',
-          reason: `Batas akhir waktu presensi PULANG ${userSchedule.sessionName || 'Sesi'} telah berakhir pada pukul ${userSchedule.checkOutEnd} WIB. Waktu saat ini: ${curTime} WIB.`,
+          reason: `Waktu presensi PULANG ${userSchedule.sessionName || userSchedule.name} telah berakhir.`,
         };
       }
       return {
         allowed: true,
         statusType: 'open_out',
-        badge: `Sesi Pulang Aktif (s/d ${userSchedule.checkOutEnd || '18:00'} WIB)`,
+        badge: `${userSchedule.sessionName || userSchedule.name} • Sesi Pulang Aktif`,
         color: 'indigo',
-        reason: `Presensi pulang sah dan dapat diajukan sekarang.`,
+        reason: `Presensi pulang ${userSchedule.sessionName || userSchedule.name} sah dan dapat diajukan sekarang.`,
       };
     }
   };
@@ -965,7 +965,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                           }`}
                         >
                           <div>
-                            <div className="flex items-center justify-between pb-1.5 mb-1.5 border-b border-white/20">
+                            <div className={`flex items-center justify-between pb-1.5 mb-1 border-b ${isSelected ? 'border-white/20' : 'border-slate-100'}`}>
                               <span className="font-extrabold text-xs">
                                 {sch.sessionName || sch.name}
                               </span>
@@ -982,11 +982,6 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                                   Pilih
                                 </span>
                               )}
-                            </div>
-
-                            <div className={`text-[10px] space-y-0.5 ${isSelected ? 'text-emerald-100' : 'text-slate-500'}`}>
-                              <div>Masuk: <span className="font-mono font-bold">{sch.checkInStart}–{sch.checkInDeadline}</span></div>
-                              <div>Pulang: <span className="font-mono font-bold">{sch.checkOutStart}–{sch.checkOutEnd || '18:00'}</span></div>
                             </div>
                           </div>
 

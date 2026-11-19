@@ -40,7 +40,6 @@ import {
 import { User, UserRole, AppSettings } from '../../types';
 import { getNavItemsForRole } from '../../config/navigation';
 import { updateUser, getAppSettings, getCurrentSession } from '../../services/storage';
-import { getSyncUiState, subscribeSyncUiState, SyncUiState } from '../../services/appsScriptSync';
 import { PWAInstallButton } from '../pwa/PWAInstallButton';
 
 interface ShellProps {
@@ -90,10 +89,8 @@ export const Shell: React.FC<ShellProps> = ({
   const [profileMsg, setProfileMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [settings, setSettings] = useState<AppSettings>(() => getAppSettings());
-  const [syncUiState, setSyncUiState] = useState<SyncUiState>(() => getSyncUiState());
 
   React.useEffect(() => {
-    const unsubscribeSync = subscribeSyncUiState((next) => setSyncUiState(next));
     const handleSettingsUpdate = () => {
       setSettings(getAppSettings());
     };
@@ -101,7 +98,6 @@ export const Shell: React.FC<ShellProps> = ({
     window.addEventListener('kitarajin_cloud_sync', handleSettingsUpdate);
     window.addEventListener('storage', handleSettingsUpdate);
     return () => {
-      unsubscribeSync();
       window.removeEventListener('kitarajin_settings_updated', handleSettingsUpdate);
       window.removeEventListener('kitarajin_cloud_sync', handleSettingsUpdate);
       window.removeEventListener('storage', handleSettingsUpdate);
@@ -116,17 +112,8 @@ export const Shell: React.FC<ShellProps> = ({
     setEditPassword('');
   }, [currentUser]);
 
-  const isConsoleInspector = currentUser.id === 'kepsek-console';
-
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isConsoleInspector) {
-      setProfileMsg({
-        type: 'error',
-        text: 'Mode cek & perbaikan Sheet aktif. Klik "Login Akun Sheet" di kanan atas untuk masuk menggunakan akun Google Sheets Anda sebelum mengubah profil pribadi.',
-      });
-      return;
-    }
     if (!editName.trim()) {
       setProfileMsg({ type: 'error', text: 'Nama tidak boleh kosong.' });
       return;
@@ -181,10 +168,15 @@ export const Shell: React.FC<ShellProps> = ({
   const navItems = getNavItemsForRole(currentUser.role);
 
   const roleMeta: Record<UserRole, { badge: string; color: string; desc: string }> = {
+    superadmin: {
+      badge: 'Superadmin',
+      color: 'bg-slate-900 text-emerald-300',
+      desc: 'Pengelola Pengaturan Sistem & Sheets',
+    },
     kepala_sekolah: {
       badge: 'Kepala Sekolah',
       color: 'bg-emerald-600 text-white',
-      desc: 'Super Admin - Otoritas Penuh & Database Wajah',
+      desc: 'Pimpinan Sekolah & Otoritas Operasional',
     },
     admin: {
       badge: 'Admin Operasional',
@@ -220,7 +212,7 @@ export const Shell: React.FC<ShellProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  onSelectMenu('dashboard');
+                  onSelectMenu(currentUser.role === 'superadmin' ? 'pengaturan' : 'dashboard');
                 }}
                 className="flex items-center gap-2.5 text-left"
               >
@@ -240,37 +232,8 @@ export const Shell: React.FC<ShellProps> = ({
               </button>
             </div>
 
-            {/* Right Controls: Save/Write Status Indicator, PWA Install Button & Current User Info */}
+            {/* Right Controls: PWA Install Button & Current User Info */}
             <div className="flex items-center gap-2 sm:gap-3">
-              {/* Tampilan status penulisan & antrean: Menyimpan..., Tersimpan, Offline, atau Error */}
-              {syncUiState.kind !== 'idle' && (
-                <div
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px] font-bold transition-colors max-w-[210px] sm:max-w-[280px] ${
-                    syncUiState.kind === 'saving'
-                      ? 'bg-sky-50 border-sky-200 text-sky-800'
-                      : syncUiState.kind === 'saved'
-                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                      : syncUiState.kind === 'offline'
-                      ? 'bg-amber-50 border-amber-200 text-amber-800'
-                      : 'bg-rose-50 border-rose-200 text-rose-800'
-                  }`}
-                  title={syncUiState.message}
-                >
-                  <span
-                    className={`w-2 h-2 rounded-full shrink-0 ${
-                      syncUiState.kind === 'saving'
-                        ? 'bg-sky-500 animate-ping'
-                        : syncUiState.kind === 'saved'
-                        ? 'bg-emerald-500'
-                        : syncUiState.kind === 'offline'
-                        ? 'bg-amber-500 animate-pulse'
-                        : 'bg-rose-500'
-                    }`}
-                  />
-                  <span className="truncate">{syncUiState.message}</span>
-                </div>
-              )}
-
               <PWAInstallButton variant="header" />
 
               {/* User Profile Summary - Clickable to edit Name & Email */}
@@ -278,6 +241,10 @@ export const Shell: React.FC<ShellProps> = ({
                 <button
                   type="button"
                   onClick={() => {
+                    if (currentUser.role === 'superadmin') {
+                      onSelectMenu('pengaturan');
+                      return;
+                    }
                     setEditName(currentUser.name);
                     setEditNip(currentUser.nip || '');
                     setEditEmail(currentUser.email || '');
@@ -287,12 +254,14 @@ export const Shell: React.FC<ShellProps> = ({
                     setProfileModalOpen(true);
                   }}
                   className="flex items-center gap-2.5 text-right hover:opacity-85 transition-opacity cursor-pointer group"
-                  title="Klik untuk ubah nama & email profil Anda"
+                  title={currentUser.role === 'superadmin' ? 'Kelola Pengaturan & Sheets' : 'Klik untuk ubah nama & email profil Anda'}
                 >
                   <div className="text-right hidden sm:block">
                     <div className="text-xs sm:text-sm font-bold text-slate-900 leading-tight group-hover:text-emerald-700 transition-colors flex items-center justify-end gap-1">
                       <span>{currentUser.name}</span>
-                      <Edit3 className="w-3 h-3 text-slate-400 group-hover:text-emerald-600" />
+                      {currentUser.role !== 'superadmin' && (
+                        <Edit3 className="w-3 h-3 text-slate-400 group-hover:text-emerald-600" />
+                      )}
                     </div>
                     <div className="flex items-center justify-end gap-1.5 mt-0.5">
                       <span
@@ -307,7 +276,9 @@ export const Shell: React.FC<ShellProps> = ({
                     className="w-9 h-9 rounded-full bg-emerald-100 border-2 border-emerald-500 text-emerald-800 flex items-center justify-center font-bold text-xs shadow-2xs group-hover:ring-2 group-hover:ring-emerald-400 transition-all"
                     title={`${currentUser.name} (${currentUser.role})`}
                   >
-                    {currentUser.role === 'kepala_sekolah'
+                    {currentUser.role === 'superadmin'
+                      ? 'SA'
+                      : currentUser.role === 'kepala_sekolah'
                       ? 'KS'
                       : currentUser.role === 'admin'
                       ? 'AD'
@@ -315,26 +286,14 @@ export const Shell: React.FC<ShellProps> = ({
                   </div>
                 </button>
 
-                {isConsoleInspector ? (
-                  <button
-                    type="button"
-                    onClick={onLogout}
-                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
-                    title="Masuk menggunakan akun yang terdaftar di Google Sheets"
-                  >
-                    <Lock className="w-3.5 h-3.5" />
-                    <span>Login Akun Sheet</span>
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={onLogout}
-                    className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
-                    title="Keluar (Logout)"
-                  >
-                    <LogOut className="w-4 h-4" />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={onLogout}
+                  className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+                  title="Keluar (Logout)"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
               </div>
             </div>
           </div>
@@ -392,16 +351,17 @@ export const Shell: React.FC<ShellProps> = ({
               </nav>
             </div>
 
-            {/* Attendance Rule Card */}
+            {/* Sidebar Info Card */}
             <div className="mt-5 pt-2">
               <div className="p-3.5 bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-transparent rounded-xl border border-emerald-500/20">
                 <div className="flex items-center gap-2 text-emerald-800 font-semibold text-xs">
                   <Sparkles className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                  <span>Aturan Semua Pengguna</span>
+                  <span>{currentUser.role === 'superadmin' ? 'Mode Superadmin (Cache)' : 'Aturan Semua Pengguna'}</span>
                 </div>
                 <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
-                  Kepala Sekolah, Admin, dan Karyawan <strong>semuanya wajib</strong> melakukan
-                  presensi dengan verifikasi wajah & lokasi GPS.
+                  {currentUser.role === 'superadmin'
+                    ? 'Akun Superadmin tersimpan di cache aplikasi untuk mengelola URL/Token, perbaikan Sheet, dan pengaturan global sekolah.'
+                    : <>Kepala Sekolah, Admin, dan Karyawan <strong>semuanya wajib</strong> melakukan presensi dengan verifikasi wajah &amp; lokasi GPS.</>}
                 </p>
               </div>
             </div>
@@ -453,7 +413,9 @@ export const Shell: React.FC<ShellProps> = ({
               <div className="mt-3 py-2 px-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between gap-2">
                 <div className="min-w-0">
                   <div className="text-xs font-bold text-slate-800 truncate">{currentUser.name}</div>
-                  <div className="text-[10px] text-slate-500 font-mono">NIP: {currentUser.nip}</div>
+                  <div className="text-[10px] text-slate-500 font-mono">
+                    {currentUser.role === 'superadmin' ? 'Cache Aplikasi' : `NIP: ${currentUser.nip}`}
+                  </div>
                 </div>
                 <span className={`inline-block shrink-0 px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${meta.color}`}>
                   {meta.badge}
@@ -506,14 +468,10 @@ export const Shell: React.FC<ShellProps> = ({
                   setMobileDrawerOpen(false);
                   onLogout();
                 }}
-                className={`w-full py-2.5 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors active:scale-[0.98] ${
-                  isConsoleInspector
-                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                    : 'bg-rose-50 hover:bg-rose-100 text-rose-700'
-                }`}
+                className="w-full py-2.5 px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-colors active:scale-[0.98] bg-rose-50 hover:bg-rose-100 text-rose-700"
               >
-                {isConsoleInspector ? <Lock className="w-4 h-4" /> : <LogOut className="w-4 h-4" />}
-                <span>{isConsoleInspector ? 'Login Akun Sheet' : 'Keluar dari Akun'}</span>
+                <LogOut className="w-4 h-4" />
+                <span>Keluar dari Akun</span>
               </button>
             </div>
           </div>
@@ -657,18 +615,7 @@ export const Shell: React.FC<ShellProps> = ({
 
 
               <div className="flex items-center justify-between pt-2">
-                {currentUser.role === 'kepala_sekolah' ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setProfileModalOpen(false);
-                      onSelectMenu('pengaturan');
-                    }}
-                    className="text-[11px] text-emerald-700 hover:underline font-semibold"
-                  >
-                    Buka Pengaturan Lengkap
-                  </button>
-                ) : <span />}
+                <span />
 
                 <div className="flex items-center gap-2">
                   <button

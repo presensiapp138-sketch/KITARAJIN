@@ -87,7 +87,71 @@ export const STORAGE_KEYS = {
   LEAVE_REQUESTS: 'kitarajin_table_leave_requests',
   ASSIGNMENTS: 'kitarajin_table_assignments',
   CURRENT_USER_SESSION: 'kitarajin_session_user',
+  SUPERADMIN_PASSWORD_CACHE: 'kitarajin_superadmin_password_cache',
 };
+
+const DEFAULT_SUPERADMIN_PASSWORD = 'superadmin';
+
+export function getSuperadminCachedPassword(): string {
+  try {
+    const existing = localStorage.getItem(STORAGE_KEYS.SUPERADMIN_PASSWORD_CACHE);
+    if (existing && existing.length > 0) {
+      return existing;
+    }
+    localStorage.setItem(STORAGE_KEYS.SUPERADMIN_PASSWORD_CACHE, DEFAULT_SUPERADMIN_PASSWORD);
+    return DEFAULT_SUPERADMIN_PASSWORD;
+  } catch {
+    return DEFAULT_SUPERADMIN_PASSWORD;
+  }
+}
+
+export function updateSuperadminCachedPassword(
+  newPassword: string
+): { success: boolean; message: string } {
+  const clean = String(newPassword || '').trim();
+  if (clean.length < 4) {
+    return { success: false, message: 'Password Superadmin minimal 4 karakter.' };
+  }
+  try {
+    localStorage.setItem(STORAGE_KEYS.SUPERADMIN_PASSWORD_CACHE, clean);
+    return {
+      success: true,
+      message: 'Password Superadmin berhasil diperbarui di cache aplikasi (tidak disimpan ke Google Sheet).',
+    };
+  } catch {
+    return { success: false, message: 'Gagal menyimpan password Superadmin ke cache browser.' };
+  }
+}
+
+export function authenticateSuperadmin(
+  rawPassword: string
+): { success: boolean; user?: User; message: string } {
+  const expected = getSuperadminCachedPassword();
+  if (rawPassword !== expected && rawPassword.trim() !== expected) {
+    return {
+      success: false,
+      message: 'Password Superadmin tidak sesuai.',
+    };
+  }
+  const saUser: User = {
+    id: 'superadmin-local',
+    nip: '-',
+    name: 'Superadmin',
+    username: 'superadmin',
+    passwordHash: '',
+    role: 'superadmin',
+    position: 'Pengelola Pengaturan & Sheets',
+    isActive: true,
+    createdAt: '',
+    updatedAt: '',
+  };
+  saveSession(saUser);
+  return {
+    success: true,
+    user: saUser,
+    message: 'Berhasil masuk sebagai Superadmin.',
+  };
+}
 
 // Sesi Jadwal Kerja Default (Sesi 1, Sesi 2, Sesi 3) - Struktur dasar sistem
 const DEFAULT_SCHEDULES: Schedule[] = [
@@ -276,6 +340,10 @@ export function refreshCurrentSessionFromUsers(): User | null {
     if (!sessionUser?.id || isDemoAccount(sessionUser)) {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_SESSION);
       return null;
+    }
+    // Akun Superadmin disimpan di cache aplikasi saja (tidak di Google Sheet)
+    if (sessionUser.role === 'superadmin' || sessionUser.id === 'superadmin-local') {
+      return sessionUser;
     }
     const allUsers = getAllUsers();
     const latest = allUsers.find((u) => u.id === sessionUser.id);
@@ -490,12 +558,14 @@ export async function authenticateUser(
   }
 
   const users = getAllUsers();
-  const user = users.find(
-    (u) =>
-      (u.username || '').trim().toLowerCase() === cleanId ||
-      (u.email && u.email.trim().toLowerCase() === cleanId) ||
-      (u.nip || '').trim().toLowerCase() === cleanId
-  );
+  // Prioritaskan pencocokan baris username dari Google Sheets, dengan fallback Email/NIP
+  const user =
+    users.find((u) => String(u.username || '').trim().toLowerCase() === cleanId) ||
+    users.find(
+      (u) =>
+        (u.email && String(u.email).trim().toLowerCase() === cleanId) ||
+        String(u.nip || '').trim().toLowerCase() === cleanId
+    );
 
   if (!user) {
     return {
@@ -503,7 +573,7 @@ export async function authenticateUser(
       message:
         users.length === 0
           ? 'Data pengguna pada Google Sheet yang terhubung masih kosong (0 baris).'
-          : 'Username, Email, atau NIP tidak ditemukan di database Google Sheet yang terhubung.',
+          : 'Username atau Password tidak ditemukan pada database Google Sheet.',
     };
   }
 
@@ -623,6 +693,9 @@ export function getCurrentSession(): User | null {
     if (!safeUser?.id || isDemoAccount(safeUser)) {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_SESSION);
       return null;
+    }
+    if (safeUser.role === 'superadmin' || safeUser.id === 'superadmin-local') {
+      return safeUser;
     }
     const allUsers = getAllUsers();
     const fullUser = allUsers.find((u) => u.id === safeUser.id);
@@ -1329,17 +1402,42 @@ export function deleteSchedule(actor: User, id: string): { success: boolean; mes
 
   const schedules = getAllSchedules();
   if (schedules.length <= 1) {
-    return { success: false, message: 'Harus ada minimal 1 jadwal kerja aktif di sistem.' };
+    return { success: false, message: 'Harus ada minimal 1 jadwal sesi aktif di sistem.' };
   }
 
   const target = schedules.find((s) => s.id === id);
   const filtered = schedules.filter((s) => s.id !== id);
   localStorage.setItem(STORAGE_KEYS.SCHEDULES, JSON.stringify(filtered));
-  syncSoftDeleteRow('Schedules', id, target?.diubah_pada, toActor(actor), `Menghapus jadwal ${target?.name || id}`).catch(() => {});
-  logAuditAction(actor, 'DELETE_SCHEDULE', 'Schedules', id, 'Menghapus jadwal kerja.');
+  syncSoftDeleteRow('Schedules', id, target?.diubah_pada, toActor(actor), `Menghapus jadwal sesi ${target?.name || id}`).catch(() => {});
+
+  // Bersihkan ID sesi yang dihapus dari assignedSessionIds pegawai agar tetap selaras
+  const remainingFallback = filtered.map((s) => s.id);
+  const users = getAllUsers();
+  let usersChanged = false;
+  users.forEach((u) => {
+    if (Array.isArray(u.assignedSessionIds) && u.assignedSessionIds.includes(id)) {
+      const nextIds = u.assignedSessionIds.filter((sid) => sid !== id);
+      u.assignedSessionIds = nextIds.length > 0 ? nextIds : remainingFallback.slice(0, 1);
+      syncUpdateRow(
+        'Users',
+        u.id,
+        { assignedSessionIds: u.assignedSessionIds },
+        u.diubah_pada,
+        toActor(actor),
+        `Sinkron penghapusan sesi ${target?.name || id}`
+      ).catch(() => {});
+      usersChanged = true;
+    }
+  });
+  if (usersChanged) {
+    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
+    refreshCurrentSessionFromUsers();
+  }
+
+  logAuditAction(actor, 'DELETE_SCHEDULE', 'Schedules', id, `Menghapus jadwal sesi ${target?.name || id}.`);
   notifyLocalChange('schedules');
 
-  return { success: true, message: 'Jadwal kerja berhasil dihapus.' };
+  return { success: true, message: `Jadwal sesi "${target?.name || id}" berhasil dihapus dan disinkronkan.` };
 }
 
 /**
@@ -1490,8 +1588,8 @@ export function updateAppSettings(
   actor: User,
   updates: Partial<AppSettings>
 ): { success: boolean; message: string } {
-  if (actor.role !== 'kepala_sekolah') {
-    return { success: false, message: 'Hanya Kepala Sekolah yang berwenang mengubah pengaturan global sekolah.' };
+  if (actor.role !== 'superadmin' && actor.role !== 'kepala_sekolah') {
+    return { success: false, message: 'Hanya Superadmin yang berwenang mengubah pengaturan global sistem.' };
   }
 
   const current = getAppSettings();

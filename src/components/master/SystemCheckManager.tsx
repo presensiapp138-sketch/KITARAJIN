@@ -60,7 +60,7 @@ export const SystemCheckManager: React.FC<SystemCheckManagerProps> = ({
     performCheck();
   }, []);
 
-  if (currentUser.role !== 'kepala_sekolah') {
+  if (currentUser.role !== 'superadmin' && currentUser.role !== 'kepala_sekolah') {
     return null;
   }
 

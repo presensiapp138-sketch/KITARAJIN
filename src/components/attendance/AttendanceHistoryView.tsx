@@ -55,6 +55,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
     currentUser.role === 'karyawan' ? 'my' : 'all'
   );
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'week' | 'month'>('all');
+  const [roleFilter, setRoleFilter] = useState<'all' | 'kepala_sekolah' | 'admin' | 'karyawan'>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'complete' | 'waiting_pulang' | 'late'>('all');
   const [deleteTargetRecord, setDeleteTargetRecord] = useState<AttendanceRecord | null>(null);
@@ -109,7 +110,12 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
       if (!item.date.startsWith(currentMonth)) return false;
     }
 
-    // 2. Search Query (Name/NIP)
+    // 2. Role filter
+    if (currentUser.role !== 'karyawan' && scopeFilter === 'all' && roleFilter !== 'all') {
+      if (item.role !== roleFilter) return false;
+    }
+
+    // 3. Search Query (Name/NIP)
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchName = item.userName.toLowerCase().includes(q);
@@ -117,7 +123,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
       if (!matchName && !matchNip) return false;
     }
 
-    // 3. Status filter
+    // 4. Status filter
     if (statusFilter === 'complete') {
       if (!item.masukRecord || !item.pulangRecord) return false;
     } else if (statusFilter === 'waiting_pulang') {
@@ -128,6 +134,79 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
 
     return true;
   });
+
+  // Format skor kecocokan wajah agar valid baik tersimpan 0..1 maupun 0..100
+  const formatFaceScorePct = (score?: number): number => {
+    const num = Number(score ?? 0);
+    if (!Number.isFinite(num) || num <= 0) return 0;
+    const pct = num <= 1 ? Math.round(num * 100) : Math.round(num);
+    return Math.min(100, Math.max(0, pct));
+  };
+
+  const getRoleBadge = (role: string) => {
+    if (role === 'kepala_sekolah') {
+      return { label: 'Kepala Sekolah', cls: 'bg-purple-100 text-purple-800 border-purple-200' };
+    }
+    if (role === 'admin') {
+      return { label: 'Admin', cls: 'bg-indigo-100 text-indigo-800 border-indigo-200' };
+    }
+    return { label: 'Karyawan / Guru', cls: 'bg-emerald-100 text-emerald-800 border-emerald-200' };
+  };
+
+  // Ringkasan riwayat presensi & kecocokan wajah per masing-masing staff (termasuk KS & Admin)
+  const allUsersForSummary = getAllUsers();
+  const perStaffSummaries = (() => {
+    const targetUsers =
+      currentUser.role === 'karyawan' || scopeFilter === 'my'
+        ? [currentUser]
+        : allUsersForSummary.filter((u) => {
+            if (roleFilter !== 'all' && u.role !== roleFilter) return false;
+            if (searchQuery.trim()) {
+              const q = searchQuery.toLowerCase();
+              return u.name.toLowerCase().includes(q) || (u.nip || '').toLowerCase().includes(q);
+            }
+            return true;
+          });
+
+    return targetUsers
+      .map((u) => {
+        const staffPairs = filteredPairs.filter((p) => p.userId === u.id);
+        const faceScores: Array<{ date: string; type: 'Masuk' | 'Pulang'; score: number }> = [];
+        staffPairs.forEach((p) => {
+          if (p.masukRecord) {
+            faceScores.push({
+              date: p.date,
+              type: 'Masuk',
+              score: formatFaceScorePct(p.masukRecord.faceSimilarityScore),
+            });
+          }
+          if (p.pulangRecord) {
+            faceScores.push({
+              date: p.date,
+              type: 'Pulang',
+              score: formatFaceScorePct(p.pulangRecord.faceSimilarityScore),
+            });
+          }
+        });
+        const avgFaceScore =
+          faceScores.length > 0
+            ? Math.round(faceScores.reduce((acc, s) => acc + s.score, 0) / faceScores.length)
+            : null;
+        return {
+          user: u,
+          totalHadirHari: staffPairs.length,
+          faceScores: faceScores.slice(0, 4),
+          totalScanWajah: faceScores.length,
+          avgFaceScore,
+        };
+      })
+      .sort((a, b) => {
+        const rank: Record<string, number> = { kepala_sekolah: 0, admin: 1, karyawan: 2 };
+        const diffRank = (rank[a.user.role] ?? 3) - (rank[b.user.role] ?? 3);
+        if (diffRank !== 0) return diffRank;
+        return b.totalHadirHari - a.totalHadirHari;
+      });
+  })();
 
   // Calculate stats
   const totalDays = filteredPairs.length;
@@ -222,11 +301,94 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
               <CalendarCheck className="w-3.5 h-3.5" />
               <span>Histori Kehadiran &bull; Absen Masuk &amp; Pulang</span>
             </div>
+
+      {/* Ringkasan Nama, NIP & Riwayat Kecocokan Wajah Per Pegawai (Termasuk KS & Admin) */}
+      {perStaffSummaries.length > 0 && (
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-extrabold text-slate-900">
+                Riwayat Kecocokan Wajah Per Staf (Kepala Sekolah, Admin &amp; Karyawan)
+              </h2>
+              <p className="text-[11px] text-slate-500">
+                Menampilkan Nama, NIP, peran, jumlah hari hadir, dan skor kecocokan wajah tiap individu pada periode terpilih.
+              </p>
+            </div>
+            <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full self-start sm:self-auto">
+              {perStaffSummaries.length} Pegawai Terdaftar
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-y border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                  <th className="py-2.5 px-3">Nama &amp; NIP</th>
+                  <th className="py-2.5 px-3">Peran</th>
+                  <th className="py-2.5 px-3">Total Presensi</th>
+                  <th className="py-2.5 px-3">Rata-Rata Wajah</th>
+                  <th className="py-2.5 px-3">Riwayat Kecocokan Wajah Terbaru</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {perStaffSummaries.map((item, sIdx) => {
+                  const roleMeta = getRoleBadge(item.user.role);
+                  return (
+                    <tr key={`staff-sum-${item.user.id}-${sIdx}`} className="hover:bg-slate-50/70">
+                      <td className="py-2.5 px-3">
+                        <div className="font-bold text-slate-900">{item.user.name}</div>
+                        <div className="text-[11px] font-mono text-slate-500">
+                          NIP: {item.user.nip || '-'}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border ${roleMeta.cls}`}>
+                          {roleMeta.label}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 font-semibold text-slate-800">
+                        {item.totalHadirHari} Hari ({item.totalScanWajah} Scan)
+                      </td>
+                      <td className="py-2.5 px-3">
+                        {item.avgFaceScore !== null ? (
+                          <span className="font-mono font-extrabold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                            {item.avgFaceScore}%
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 italic">Belum ada scan</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        {item.faceScores.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {item.faceScores.map((sc, scIdx) => (
+                              <span
+                                key={`sc-${item.user.id}-${scIdx}`}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-[10px] font-mono text-slate-700"
+                              >
+                                <span>{sc.date.slice(5)}</span>
+                                <span className="font-sans font-semibold">{sc.type}:</span>
+                                <strong className="text-emerald-700">{sc.score}%</strong>
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-400">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
               Riwayat Presensi Masuk &amp; Pulang
             </h1>
             <p className="text-emerald-100/80 text-xs sm:text-sm mt-1 max-w-xl leading-relaxed">
-              Daftar rekapitulasi kehadiran harian yang memuat data terperinci baik saat **Absen Masuk** maupun **Absen Pulang**, termasuk foto biometrik wajah dan validasi radius GPS.
+              Daftar rekapitulasi kehadiran harian yang memuat <strong>Nama</strong>, <strong>NIP</strong>, dan riwayat <strong>Kecocokan Wajah</strong> saat <strong>Absen Masuk</strong> maupun <strong>Absen Pulang</strong> untuk seluruh staf, Admin, dan Kepala Sekolah.
             </p>
           </div>
 
@@ -378,8 +540,8 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
           </div>
         </div>
 
-        {/* Search & Status Filter Row */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 pt-3 border-t border-slate-100">
+        {/* Search, Role & Status Filter Row */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 pt-3 border-t border-slate-100">
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-3" />
             <input
@@ -390,6 +552,19 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
               className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-emerald-500 focus:outline-none"
             />
           </div>
+
+          {currentUser.role !== 'karyawan' && scopeFilter === 'all' && (
+            <select
+              value={roleFilter}
+              onChange={(e) => setRoleFilter(e.target.value as any)}
+              className="px-3 py-2 rounded-xl border border-slate-200 text-xs text-slate-700 bg-white font-medium"
+            >
+              <option value="all">Semua Peran (KS, Admin & Staf)</option>
+              <option value="kepala_sekolah">Kepala Sekolah</option>
+              <option value="admin">Admin Operasional</option>
+              <option value="karyawan">Karyawan / Guru</option>
+            </select>
+          )}
 
           <select
             value={statusFilter}
@@ -495,8 +670,14 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                           </span>
                         )}
                       </div>
-                      <div className="text-xs text-slate-500 font-mono mt-0.5">
-                        <span className="font-semibold text-slate-700">{pair.userName}</span> &bull; NIP: {pair.nip} &bull; <span className="capitalize">{pair.role.replace('_', ' ')}</span>
+                      <div className="text-xs text-slate-600 mt-1 flex flex-wrap items-center gap-1.5">
+                        <span className="font-extrabold text-slate-800">{pair.userName}</span>
+                        <span>&bull;</span>
+                        <span className="font-mono font-semibold text-slate-700">NIP: {pair.nip || '-'}</span>
+                        <span>&bull;</span>
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${getRoleBadge(pair.role).cls}`}>
+                          {getRoleBadge(pair.role).label}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -626,7 +807,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                             <span>
                               Kecocokan Wajah:{' '}
                               <strong className="text-emerald-700">
-                                {Math.round((pair.masukRecord.faceSimilarityScore ?? 0) * 100)}%
+                                {formatFaceScorePct(pair.masukRecord.faceSimilarityScore)}%
                               </strong>
                             </span>
                           </div>
@@ -734,7 +915,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                             <span>
                               Kecocokan Wajah:{' '}
                               <strong className="text-indigo-700">
-                                {Math.round((pair.pulangRecord.faceSimilarityScore ?? 0) * 100)}%
+                                {formatFaceScorePct(pair.pulangRecord.faceSimilarityScore)}%
                               </strong>
                             </span>
                           </div>

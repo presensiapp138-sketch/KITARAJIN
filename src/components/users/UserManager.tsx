@@ -208,7 +208,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
     setFormDepartmentId('');
     setFormDepartmentName('');
     setFormScheduleId(schedules[0]?.id || '');
-    setFormAssignedSessionIds(['sesi-1', 'sesi-2', 'sesi-3']);
+    setFormAssignedSessionIds(schedules.length > 0 ? schedules.map((s) => s.id) : ['sesi-1', 'sesi-2', 'sesi-3']);
     setFormPosition('');
     setFormEmail('');
     setFormPhone('');
@@ -235,7 +235,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
     setFormAssignedSessionIds(
       user.assignedSessionIds && user.assignedSessionIds.length > 0
         ? user.assignedSessionIds
-        : ['sesi-1', 'sesi-2', 'sesi-3']
+        : schedules.map((s) => s.id)
     );
     setFormPosition(user.position);
     setFormEmail(user.email || '');
@@ -719,7 +719,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
                       const dept = departments.find((d) => d.id === u.departmentId);
                       const userSessions = u.assignedSessionIds && u.assignedSessionIds.length > 0
                         ? u.assignedSessionIds
-                        : ['sesi-1', 'sesi-2', 'sesi-3'];
+                        : schedules.map((s) => s.id);
                       const canViewPassword =
                         currentUser.role === 'kepala_sekolah' ||
                         (currentUser.role === 'admin' && u.role !== 'kepala_sekolah');
@@ -937,7 +937,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
               const assignedCount = users.filter((u) => {
                 const s = u.assignedSessionIds && u.assignedSessionIds.length > 0
                   ? u.assignedSessionIds
-                  : ['sesi-1', 'sesi-2', 'sesi-3'];
+                  : schedules.map((sc) => sc.id);
                 return s.includes(sched.id);
               }).length;
 
@@ -947,13 +947,32 @@ export const UserManager: React.FC<UserManagerProps> = ({
                   className="bg-white rounded-2xl border-2 border-slate-200/80 p-5 shadow-xs space-y-4 flex flex-col justify-between hover:border-emerald-500/60 transition-colors"
                 >
                   <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="px-2.5 py-1 rounded-lg text-xs font-extrabold bg-emerald-600 text-white shadow-2xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="px-2.5 py-1 rounded-lg text-xs font-extrabold bg-emerald-600 text-white shadow-2xs truncate max-w-[140px]">
                         {sched.sessionName || sched.name}
                       </span>
-                      <span className="text-[11px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">
-                        {assignedCount} Pegawai Aktif
-                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="text-[11px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-full">
+                          {assignedCount} Pegawai
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => openEditSessionModal(sched)}
+                          className="p-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                          title={`Edit ${sched.name}`}
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSession(sched)}
+                          disabled={schedules.length <= 1}
+                          className="p-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                          title={schedules.length <= 1 ? 'Minimal 1 jadwal sesi harus aktif' : `Hapus ${sched.name}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
 
                     <div>
@@ -1067,7 +1086,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
                       <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto p-1.5 bg-slate-50 rounded-xl border border-slate-200/60">
                         {users
                           .filter((u) => {
-                            const s = u.assignedSessionIds && u.assignedSessionIds.length > 0 ? u.assignedSessionIds : ['sesi-1', 'sesi-2', 'sesi-3'];
+                            const s = u.assignedSessionIds && u.assignedSessionIds.length > 0 ? u.assignedSessionIds : schedules.map((sc) => sc.id);
                             return u.role === 'karyawan' && s.includes(sched.id);
                           })
                           .map((u, uIdx) => (
@@ -1132,7 +1151,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
                               .filter((u) => currentUser.role === 'kepala_sekolah' ? true : u.role === 'karyawan')
                               .filter((u) => !sessionEmployeeSearch || u.name.toLowerCase().includes(sessionEmployeeSearch.toLowerCase()))
                               .map((u, pIdx) => {
-                                const userSessions = u.assignedSessionIds && u.assignedSessionIds.length > 0 ? u.assignedSessionIds : ['sesi-1', 'sesi-2', 'sesi-3'];
+                                const userSessions = u.assignedSessionIds && u.assignedSessionIds.length > 0 ? u.assignedSessionIds : schedules.map((sc) => sc.id);
                                 const isAssigned = userSessions.includes(sched.id);
                                 const dept = departments.find((d) => d.id === u.departmentId);
 
@@ -1178,15 +1197,25 @@ export const UserManager: React.FC<UserManagerProps> = ({
                     </div>
                   </div>
 
-                  {/* Tombol Simpan Jam Sesi */}
+                  {/* Tombol Simpan & Hapus Jam Sesi */}
                   <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={() => openEditSessionModal(sched)}
-                      className="text-xs text-slate-500 hover:text-slate-800 underline font-semibold cursor-pointer"
-                    >
-                      Atur Lengkap
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => openEditSessionModal(sched)}
+                        className="text-xs text-slate-500 hover:text-slate-800 underline font-semibold cursor-pointer"
+                      >
+                        Atur Lengkap
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteSession(sched)}
+                        disabled={schedules.length <= 1}
+                        className="text-xs text-rose-600 hover:text-rose-800 font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        Hapus Sesi
+                      </button>
+                    </div>
                     <button
                       type="button"
                       disabled={savingSessionId === sched.id}
@@ -1243,7 +1272,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
                     const dept = departments.find((d) => d.id === u.departmentId);
                     const userSessions = u.assignedSessionIds && u.assignedSessionIds.length > 0
                       ? u.assignedSessionIds
-                      : ['sesi-1', 'sesi-2', 'sesi-3'];
+                      : schedules.map((sc) => sc.id);
 
                     return (
                       <tr key={`mtx-row-${u.id || 'u'}-${uRowIdx}`} className="hover:bg-slate-50/60 transition-colors">

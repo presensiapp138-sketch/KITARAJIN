@@ -601,11 +601,135 @@ function getSheetsMap_(ss) {
   return map;
 }
 
+function findExistingSheetInsensitive_(ss, sheetsMap, targetName) {
+  if (sheetsMap && sheetsMap[targetName]) return sheetsMap[targetName];
+  var direct = ss.getSheetByName(targetName);
+  if (direct) return direct;
+  var lowerTarget = String(targetName || '').toLowerCase().trim();
+  var allSheets = ss.getSheets();
+  for (var i = 0; i < allSheets.length; i++) {
+    if (String(allSheets[i].getName() || '').toLowerCase().trim() === lowerTarget) {
+      return allSheets[i];
+    }
+  }
+  return null;
+}
+
+function getColumnWidthPreset_(colName) {
+  var widthMap = {
+    id: 165,
+    userId: 165,
+    scheduleId: 140,
+    departmentId: 140,
+    registeredPhotoFileId: 170,
+    actorUserId: 160,
+    targetId: 165,
+    assignedToUserId: 165,
+    assignedByUserId: 165,
+    name: 190,
+    userName: 190,
+    departmentName: 170,
+    headName: 170,
+    assignedToName: 185,
+    assignedByName: 185,
+    actorName: 185,
+    sessionName: 145,
+    title: 200,
+    schoolName: 210,
+    appTitle: 195,
+    email: 205,
+    schoolEmail: 205,
+    schoolAddress: 230,
+    address: 220,
+    deviceInfo: 185,
+    details: 260,
+    notes: 230,
+    reason: 230,
+    description: 240,
+    ruleNotes: 240,
+    feedback: 220,
+    documentationNotes: 220,
+    faceEmbedding: 140,
+    passwordHash: 135,
+    documentationPhotoRef: 145,
+    documentRef: 145,
+    avatarUrl: 140,
+    documentationLocation: 155,
+    nip: 135,
+    phone: 130,
+    username: 135,
+    savedPassword: 125,
+    date: 115,
+    startDate: 115,
+    endDate: 115,
+    dueDate: 115,
+    timestamp: 165,
+    createdAt: 165,
+    updatedAt: 165,
+    diubah_pada: 165,
+    lastSyncTimestamp: 165
+  };
+  return widthMap[colName] || 115;
+}
+
+function formatSheetTidy_(sheet, tableName, headers) {
+  if (!sheet || !headers || headers.length === 0) return;
+  try {
+    var colCount = headers.length;
+    sheet.setFrozenRows(1);
+
+    // Rapikan header baris 1
+    var headerRange = sheet.getRange(1, 1, 1, colCount);
+    headerRange
+      .setFontWeight('bold')
+      .setBackground('#ecfdf5')
+      .setFontColor('#064e3b')
+      .setVerticalAlignment('middle')
+      .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+    sheet.setRowHeight(1, 28);
+
+    // Atur lebar kolom agar tidak tumpang tindih atau terlalu sempit/lebar
+    for (var c = 0; c < colCount; c++) {
+      sheet.setColumnWidth(c + 1, getColumnWidthPreset_(headers[c]));
+    }
+
+    var lastRow = sheet.getLastRow();
+    if (lastRow >= 2) {
+      var dataRowCount = lastRow - 1;
+      var dataRange = sheet.getRange(2, 1, dataRowCount, colCount);
+      dataRange
+        .setVerticalAlignment('middle')
+        .setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+
+      for (var tc = 0; tc < colCount; tc++) {
+        if (TEXT_COLUMNS[headers[tc]]) {
+          sheet.getRange(2, tc + 1, dataRowCount, 1).setNumberFormat('@');
+        }
+      }
+
+      if (dataRowCount <= 500) {
+        sheet.setRowHeights(2, dataRowCount, 24);
+      }
+    }
+  } catch (e) {
+    // Abaikan error formatting non-kritis
+  }
+}
+
+function formatSingleRowTidy_(sheet, rowIdx, headers) {
+  if (!sheet || rowIdx < 2 || !headers || headers.length === 0) return;
+  try {
+    var rowRange = sheet.getRange(rowIdx, 1, 1, headers.length);
+    rowRange.setVerticalAlignment('middle').setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+    sheet.setRowHeight(rowIdx, 24);
+  } catch (e) {}
+}
+
 function ensureAllSheets_(ss, sheetsMap) {
   var map = sheetsMap || getSheetsMap_(ss);
   var names = Object.keys(SCHEMAS);
   var sp = PropertiesService.getScriptProperties();
-  var schemaKey = ss.getId() + ':v3';
+  var schemaKey = ss.getId() + ':v4';
   var schemaCached = sp.getProperty('SCHEMA_INIT_KEY') === schemaKey;
 
   var allExist = true;
@@ -631,18 +755,55 @@ function ensureSheet_(ss, tableName, sheetsMap) {
   if (!headers) {
     throw new Error('Nama tabel tidak dikenal: ' + tableName);
   }
-  var sheet = (sheetsMap && sheetsMap[tableName]) ? sheetsMap[tableName] : ss.getSheetByName(tableName);
+  var sheet = findExistingSheetInsensitive_(ss, sheetsMap, tableName);
+  var didModifyStructure = false;
+
+  // Jika tab kanonik belum ada, cek tab lama/alias yang sudah ada dan ubah nama in-place (tanpa membuat sheet baru dobel)
+  if (!sheet && LEGACY_TAB_ALIASES[tableName]) {
+    var aliases = LEGACY_TAB_ALIASES[tableName];
+    for (var ai = 0; ai < aliases.length; ai++) {
+      var candidate = findExistingSheetInsensitive_(ss, sheetsMap, aliases[ai]);
+      if (candidate) {
+        try {
+          if (candidate.getName() !== tableName) {
+            if (sheetsMap && sheetsMap[candidate.getName()]) {
+              delete sheetsMap[candidate.getName()];
+            }
+            candidate.setName(tableName);
+          }
+          sheet = candidate;
+          if (sheetsMap) sheetsMap[tableName] = sheet;
+          didModifyStructure = true;
+          break;
+        } catch (renameErr) {
+          sheet = candidate;
+          break;
+        }
+      }
+    }
+  }
+
+  // Pastikan casing nama tab kanonik konsisten
+  if (sheet && sheet.getName() !== tableName) {
+    try {
+      if (sheetsMap && sheetsMap[sheet.getName()]) {
+        delete sheetsMap[sheet.getName()];
+      }
+      sheet.setName(tableName);
+      didModifyStructure = true;
+    } catch (ignoreRename) {}
+  }
+
   if (!sheet) {
     sheet = ss.insertSheet(tableName);
-    if (sheetsMap) sheetsMap[tableName] = sheet;
+    didModifyStructure = true;
   }
+  if (sheetsMap) sheetsMap[tableName] = sheet;
+
   var lastRow = sheet.getLastRow();
   if (lastRow === 0) {
     sheet.appendRow(headers);
-    sheet.setFrozenRows(1);
-    var headerRange = sheet.getRange(1, 1, 1, headers.length);
-    headerRange.setFontWeight('bold');
-    headerRange.setBackground('#ecfdf5');
+    formatSheetTidy_(sheet, tableName, headers);
   } else {
     var existingLastCol = sheet.getLastColumn();
     var currentHeaders = existingLastCol > 0
@@ -653,7 +814,11 @@ function ensureSheet_(ss, tableName, sheetsMap) {
         var newColIdx = currentHeaders.length + 1;
         sheet.getRange(1, newColIdx).setValue(headers[c]).setFontWeight('bold').setBackground('#ecfdf5');
         currentHeaders.push(headers[c]);
+        didModifyStructure = true;
       }
+    }
+    if (didModifyStructure) {
+      formatSheetTidy_(sheet, tableName, currentHeaders);
     }
   }
   return sheet;
@@ -870,6 +1035,9 @@ function mapSheetRowToFrontendRecord_(tableName, headers, rowValues) {
     }
     raw.rowStatus = 'aktif';
     raw.status = (attSt === 'terlambat') ? 'terlambat' : 'tepat_waktu';
+    if (raw.faceSimilarityScore !== undefined && Number(raw.faceSimilarityScore) > 1) {
+      raw.faceSimilarityScore = Number(raw.faceSimilarityScore) / 100;
+    }
     raw.photoRef = '';
     delete raw.attendanceStatus;
   } else if (tableName === 'LeaveRequests') {
@@ -1006,7 +1174,9 @@ function hydrateLegacyDataIfNeeded_(ss, props, sheetsMap, forceDriveScan) {
             appendVals.push(serializeCellValue_(targetHeaders[hc], mappedAlias[targetHeaders[hc]]));
           }
           targetSheet.appendRow(appendVals);
-          applyTextFormatting_(targetSheet, targetSheet.getLastRow(), targetHeaders);
+          var appendedIdx = targetSheet.getLastRow();
+          applyTextFormatting_(targetSheet, appendedIdx, targetHeaders);
+          formatSingleRowTidy_(targetSheet, appendedIdx, targetHeaders);
           importedAny = true;
         }
       }
@@ -1350,12 +1520,68 @@ function syncDatabaseSnapshotToDrive_(ss, props, sheetsMap) {
 // READ & TWO-WAY POLLING (CEPAT, ANTI-TIMEOUT, DETEKSI SHEET & DRIVE)
 // ============================================================================
 
+function getPayloadCachePrefix_(sheetId, version) {
+  return 'PAYLD_' + String(sheetId || 'none').slice(-8) + '_' + String(version || '1');
+}
+
+function readCachedPayload_(sheetId, version) {
+  try {
+    var cache = CacheService.getScriptCache();
+    var prefix = getPayloadCachePrefix_(sheetId, version);
+    var metaRaw = cache.get(prefix + '_M');
+    if (!metaRaw) return null;
+    var meta = JSON.parse(metaRaw);
+    if (!meta || !meta.chunks || !meta.version) return null;
+    var keys = [];
+    for (var i = 0; i < meta.chunks; i++) {
+      keys.push(prefix + '_' + i);
+    }
+    var partsMap = cache.getAll(keys);
+    var fullStr = '';
+    for (var k = 0; k < keys.length; k++) {
+      var piece = partsMap[keys[k]];
+      if (piece === null || piece === undefined) return null;
+      fullStr += piece;
+    }
+    var parsed = JSON.parse(fullStr);
+    return {
+      version: meta.version,
+      tables: parsed.tables,
+      sheetTotalRows: parsed.sheetTotalRows
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeCachedPayload_(sheetId, dataVersion, effectiveVersion, tables, sheetTotalRows) {
+  try {
+    var payloadStr = JSON.stringify({
+      tables: tables,
+      sheetTotalRows: sheetTotalRows
+    });
+    var chunkSize = 85000;
+    var totalChunks = Math.ceil(payloadStr.length / chunkSize);
+    if (totalChunks > 18) return; // Batasi maksimal ~1.5MB di ScriptCache
+    var cache = CacheService.getScriptCache();
+    var prefix = getPayloadCachePrefix_(sheetId, dataVersion);
+    var toPut = {};
+    toPut[prefix + '_M'] = JSON.stringify({ version: effectiveVersion, chunks: totalChunks });
+    for (var i = 0; i < totalChunks; i++) {
+      toPut[prefix + '_' + i] = payloadStr.slice(i * chunkSize, (i + 1) * chunkSize);
+    }
+    cache.putAll(toPut, 21600);
+  } catch (e) {
+    // Non-blocking cache error
+  }
+}
+
 function handleGetChanges_(sinceVersion, deepCheck, forceDriveScan) {
   var currentDataVer = getDataVersion_();
   var serverTime = new Date().toISOString();
   var sinceDataVer = sinceVersion ? String(sinceVersion).split('.')[0] : '';
 
-  // Jalur cepat (<100ms via CacheService) saat poll reguler & tidak ada deep check
+  // Jalur super cepat (<50ms via CacheService) saat poll reguler & tidak ada perubahan
   if (!deepCheck && sinceVersion && sinceDataVer === currentDataVer) {
     return {
       ok: true,
@@ -1372,6 +1598,29 @@ function handleGetChanges_(sinceVersion, deepCheck, forceDriveScan) {
       code: 500,
       error: 'Script Property SPREADSHEET_ID belum diisi di Apps Script.'
     };
+  }
+
+  // Jalur cache penuh (<120ms tanpa membuka Spreadsheet) saat cache masih segar
+  if (!deepCheck && !forceDriveScan) {
+    var cached = readCachedPayload_(props.SPREADSHEET_ID, currentDataVer);
+    if (cached) {
+      if (sinceVersion && sinceVersion === cached.version) {
+        return {
+          ok: true,
+          unchanged: true,
+          version: cached.version,
+          serverTime: serverTime
+        };
+      }
+      return {
+        ok: true,
+        unchanged: false,
+        version: cached.version,
+        serverTime: serverTime,
+        tables: cached.tables,
+        sheetTotalRows: cached.sheetTotalRows
+      };
+    }
   }
 
   var ss = SpreadsheetApp.openById(props.SPREADSHEET_ID);
@@ -1446,6 +1695,8 @@ function handleGetChanges_(sinceVersion, deepCheck, forceDriveScan) {
   var sig = Utilities.base64EncodeWebSafe(digestBytes).slice(0, 16);
   var effectiveVersion = currentDataVer + '.' + sig;
 
+  writeCachedPayload_(props.SPREADSHEET_ID, currentDataVer, effectiveVersion, tables, sheetTotalRows);
+
   if (sinceVersion && sinceVersion === effectiveVersion) {
     return {
       ok: true,
@@ -1494,6 +1745,7 @@ function appendLogEntry_(ss, actor, action, targetEntity, targetId, details) {
   sheet.appendRow(row);
   var newRowIdx = sheet.getLastRow();
   applyTextFormatting_(sheet, newRowIdx, headers);
+  formatSingleRowTidy_(sheet, newRowIdx, headers);
 }
 
 function handleAppendLogOnly_(ss, payload) {
@@ -1539,6 +1791,7 @@ function handleCreateRow_(ss, payload) {
   sheet.appendRow(rowValues);
   var insertedRow = sheet.getLastRow();
   applyTextFormatting_(sheet, insertedRow, headers);
+  formatSingleRowTidy_(sheet, insertedRow, headers);
 
   appendLogEntry_(
     ss,
@@ -1708,6 +1961,30 @@ function handleUpsertSettings_(ss, payload) {
 // FACE REGISTRY + GOOGLE DRIVE STORAGE (FOLDER PRIVAT VIA DRIVEAPP)
 // ============================================================================
 
+function lookupUserIdentityForFace_(ss, userId, fallbackName, fallbackNip) {
+  var outName = String(fallbackName || '').trim();
+  var outNip = String(fallbackNip || '').trim();
+  if (outName && outNip) return { name: outName, nip: outNip };
+  try {
+    var uSheet = ss.getSheetByName('Users');
+    if (uSheet && uSheet.getLastRow() >= 2) {
+      var uHeaders = getHeadersForSheet_(uSheet, 'Users');
+      var cId = uHeaders.indexOf('id');
+      var cName = uHeaders.indexOf('name');
+      var cNip = uHeaders.indexOf('nip');
+      var uVals = uSheet.getRange(2, 1, uSheet.getLastRow() - 1, uHeaders.length).getValues();
+      for (var i = 0; i < uVals.length; i++) {
+        if (String(uVals[i][cId !== -1 ? cId : 0] || '').trim() === String(userId).trim()) {
+          if (!outName && cName !== -1) outName = String(uVals[i][cName] || '').trim();
+          if (!outNip && cNip !== -1) outNip = String(uVals[i][cNip] || '').trim();
+          break;
+        }
+      }
+    }
+  } catch (ignoreErr) {}
+  return { name: outName, nip: outNip };
+}
+
 function handleSaveFace_(ss, props, payload) {
   if (!props.DRIVE_FOLDER_ID) {
     return {
@@ -1722,32 +1999,18 @@ function handleSaveFace_(ss, props, payload) {
     return { ok: false, code: 400, error: 'Data userId dan faceEmbedding wajib dikirim.' };
   }
 
-  var photoBase64 = String(payload.photoBase64 || '');
-  var fileId = String(item.registeredPhotoFileId || '');
-
-  if (photoBase64 && photoBase64.indexOf('data:image/') === 0) {
-    var mime = 'image/jpeg';
-    var rawBase64 = photoBase64;
-    var match = photoBase64.match(/^data:(image\\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
-    if (match) {
-      mime = match[1];
-      rawBase64 = match[2];
-    }
-    var bytes = Utilities.base64Decode(rawBase64);
-    var safeNip = String(item.nip || item.userId).replace(/[^a-zA-Z0-9_-]/g, '_');
-    var fileName = 'FACE_' + safeNip + '_' + Date.now() + '.jpg';
-    var blob = Utilities.newBlob(bytes, mime, fileName);
-    var folder = DriveApp.getFolderById(props.DRIVE_FOLDER_ID);
-    var driveFile = folder.createFile(blob);
-    fileId = driveFile.getId();
-  }
+  var identity = lookupUserIdentityForFace_(ss, item.userId, item.userName, item.nip);
+  var resolvedName = identity.name || String(item.userName || item.userId);
+  var resolvedNip = identity.nip || String(item.nip || '');
 
   var sheet = ensureSheet_(ss, 'FaceRegistry');
   var headers = getHeadersForSheet_(sheet, 'FaceRegistry');
   var lastRow = sheet.getLastRow();
   var colUserId = headers.indexOf('userId');
+  var colPhotoFileId = headers.indexOf('registeredPhotoFileId');
   var existingRowIdx = -1;
   var existingId = item.id || ('face-' + Date.now() + '-' + Math.floor(Math.random() * 1000));
+  var previousFileId = String(item.registeredPhotoFileId || '').trim();
 
   if (lastRow >= 2 && colUserId !== -1) {
     var rows = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
@@ -1758,16 +2021,63 @@ function handleSaveFace_(ss, props, payload) {
       if (String(rows[i][colUserId]) === String(item.userId)) {
         existingRowIdx = i + 2;
         existingId = String(rows[i][0]);
+        if (colPhotoFileId !== -1 && rows[i][colPhotoFileId]) {
+          previousFileId = String(rows[i][colPhotoFileId]).trim();
+        }
         break;
       }
     }
   }
 
+  var photoBase64 = String(payload.photoBase64 || '');
+  var fileId = previousFileId;
+
+  if (photoBase64 && photoBase64.indexOf('data:image/') === 0) {
+    var mime = 'image/jpeg';
+    var rawBase64 = photoBase64;
+    var match = photoBase64.match(new RegExp('^data:(image/[a-zA-Z0-9.+-]+);base64,(.+)$'));
+    if (match) {
+      mime = match[1];
+      rawBase64 = match[2];
+    }
+    var bytes = Utilities.base64Decode(rawBase64);
+    var safeName = resolvedName.replace(new RegExp('[^a-zA-Z0-9]+', 'g'), '_').replace(new RegExp('^_+|_+$', 'g'), '').slice(0, 48) || 'Pegawai';
+    var safeNip = resolvedNip.replace(new RegExp('[^a-zA-Z0-9-]+', 'g'), '_').replace(new RegExp('^_+|_+$', 'g'), '');
+    var fileName = 'WAJAH_' + safeName + (safeNip ? '_NIP_' + safeNip : '') + '.jpg';
+    var blob = Utilities.newBlob(bytes, mime, fileName);
+    var folder = DriveApp.getFolderById(props.DRIVE_FOLDER_ID);
+    var driveFile = folder.createFile(blob);
+    fileId = driveFile.getId();
+
+    // Rapikan Drive: pindahkan foto wajah lama milik user yang sama ke Trash agar 1 orang = 1 foto wajah terbaru & rapi
+    if (previousFileId && previousFileId !== fileId) {
+      try {
+        var oldFile = DriveApp.getFileById(previousFileId);
+        if (oldFile && !oldFile.isTrashed() && isFileUnderFolderTree_(oldFile, props.DRIVE_FOLDER_ID, 3)) {
+          oldFile.setTrashed(true);
+        }
+      } catch (trashErr) {}
+    }
+  } else if (previousFileId) {
+    // Pastikan nama file yang sudah ada tetap rapi sesuai Nama & NIP
+    try {
+      var existingDriveFile = DriveApp.getFileById(previousFileId);
+      if (existingDriveFile && !existingDriveFile.isTrashed()) {
+        var sName2 = resolvedName.replace(new RegExp('[^a-zA-Z0-9]+', 'g'), '_').replace(new RegExp('^_+|_+$', 'g'), '').slice(0, 48) || 'Pegawai';
+        var sNip2 = resolvedNip.replace(new RegExp('[^a-zA-Z0-9-]+', 'g'), '_').replace(new RegExp('^_+|_+$', 'g'), '');
+        var cleanTargetName = 'WAJAH_' + sName2 + (sNip2 ? '_NIP_' + sNip2 : '') + '.jpg';
+        if (existingDriveFile.getName() !== cleanTargetName) {
+          existingDriveFile.setName(cleanTargetName);
+        }
+      }
+    } catch (renamePhotoErr) {}
+  }
+
   var recordPayload = {
     id: existingId,
     userId: item.userId,
-    nip: item.nip || '',
-    userName: item.userName || '',
+    nip: resolvedNip,
+    userName: resolvedName,
     role: item.role || 'karyawan',
     faceEmbedding: item.faceEmbedding,
     registeredPhotoFileId: fileId,
@@ -1785,14 +2095,14 @@ function handleSaveFace_(ss, props, payload) {
       updates: recordPayload,
       expectedUpdatedAt: payload.expectedUpdatedAt,
       actor: payload.actor,
-      logDetails: 'Memperbarui database wajah & file Drive (ID: ' + fileId + ') untuk ' + recordPayload.userName + ' (NIP: ' + recordPayload.nip + ')'
+      logDetails: 'Memperbarui foto wajah Drive (' + resolvedName + ', ID: ' + fileId + ')'
     });
   } else {
     return handleCreateRow_(ss, {
       table: 'FaceRegistry',
       record: recordPayload,
       actor: payload.actor,
-      logDetails: 'Mendaftarkan wajah baru & menyimpan file Drive (ID: ' + fileId + ') untuk ' + recordPayload.userName + ' (NIP: ' + recordPayload.nip + ')'
+      logDetails: 'Menyimpan foto wajah baru di Drive (' + resolvedName + ', ID: ' + fileId + ')'
     });
   }
 }
@@ -1968,7 +2278,9 @@ function handleRecordAttendanceBatch_(ss, payload) {
     }
 
     sheet.appendRow(rowVals);
-    applyTextFormatting_(sheet, sheet.getLastRow(), headers);
+    var appendedAttRow = sheet.getLastRow();
+    applyTextFormatting_(sheet, appendedAttRow, headers);
+    formatSingleRowTidy_(sheet, appendedAttRow, headers);
 
     appendLogEntry_(
       ss,
@@ -2153,12 +2465,13 @@ function handleRepairSheetSync_(ss, props, sheetsMap, payload) {
   var map = sheetsMap || getSheetsMap_(ss);
   var tableNames = Object.keys(SCHEMAS);
 
-  // 1. Pastikan 10 tab & seluruh header kolom sesuai skema
+  // 1. Rapikan & perbaiki tab yang sudah ada secara in-place (rename tab alias ke nama kanonik tanpa menambah sheet dobel)
   for (var t = 0; t < tableNames.length; t++) {
     var tName = tableNames[t];
     var expected = SCHEMAS[tName];
-    var existed = Boolean(map[tName] || ss.getSheetByName(tName));
-    var beforeHeaders = existed ? getHeadersForSheet_(map[tName] || ss.getSheetByName(tName), tName) : [];
+    var existedSheet = findExistingSheetInsensitive_(ss, map, tName);
+    var existed = Boolean(existedSheet);
+    var beforeHeaders = existed ? getHeadersForSheet_(existedSheet, tName) : [];
     var missingCols = [];
     if (existed) {
       for (var hc = 0; hc < expected.length; hc++) {
@@ -2167,14 +2480,20 @@ function handleRepairSheetSync_(ss, props, sheetsMap, payload) {
         }
       }
     }
-    ensureSheet_(ss, tName, map);
-    if (!existed) {
+    var ensuredSh = ensureSheet_(ss, tName, map);
+    formatSheetTidy_(ensuredSh, tName, getHeadersForSheet_(ensuredSh, tName));
+    if (!existed && !findExistingSheetInsensitive_(ss, null, tName)) {
       report.tabsCreated.push(tName);
+    } else if (!existed) {
+      // Tab baru terdeteksi atau direname dari tab alias
+      if (ensuredSh.getLastRow() <= 1) {
+        report.tabsCreated.push(tName);
+      }
     } else if (missingCols.length > 0) {
       report.headersAdded.push({ table: tName, columns: missingCols });
     }
   }
-  sp.setProperty('SCHEMA_INIT_KEY', ss.getId() + ':v3');
+  sp.setProperty('SCHEMA_INIT_KEY', ss.getId() + ':v4');
   map = getSheetsMap_(ss);
 
   // 2. Hitung total baris sebelum impor legacy + foto wajah kosong sebelum scan Drive
@@ -2198,7 +2517,43 @@ function handleRepairSheetSync_(ss, props, sheetsMap, payload) {
   var afterMissingPhotos = countMissingFacePhotos_(ss, map);
   report.photosLinked = Math.max(0, beforeMissingPhotos - afterMissingPhotos);
 
-  // 3. Normalisasi baris, bersihkan akun/data demo, perbaiki ID & relasi NIP/Nama
+  // Rapikan ulang foto wajah di Drive jika masih menggunakan nama lama agar rapi berdasar Nama & NIP
+  if (props.DRIVE_FOLDER_ID) {
+    try {
+      var frSheet = map['FaceRegistry'] || ss.getSheetByName('FaceRegistry');
+      if (frSheet && frSheet.getLastRow() >= 2) {
+        var frHeaders = getHeadersForSheet_(frSheet, 'FaceRegistry');
+        var fColFid = frHeaders.indexOf('registeredPhotoFileId');
+        var fColName = frHeaders.indexOf('userName');
+        var fColNip = frHeaders.indexOf('nip');
+        var fColSt = frHeaders.indexOf('status');
+        if (fColFid !== -1) {
+          var frVals = frSheet.getRange(2, 1, frSheet.getLastRow() - 1, frHeaders.length).getValues();
+          for (var fi = 0; fi < frVals.length; fi++) {
+            if (fColSt !== -1 && String(frVals[fi][fColSt] || '').toLowerCase().trim() === 'dihapus') continue;
+            var fidVal = String(frVals[fi][fColFid] || '').trim();
+            if (!fidVal) continue;
+            var fNameVal = fColName !== -1 ? String(frVals[fi][fColName] || '').trim() : '';
+            var fNipVal = fColNip !== -1 ? String(frVals[fi][fColNip] || '').trim() : '';
+            if (!fNameVal && !fNipVal) continue;
+            try {
+              var drvFile = DriveApp.getFileById(fidVal);
+              if (drvFile && !drvFile.isTrashed()) {
+                var cleanNm = (fNameVal || 'Pegawai').replace(new RegExp('[^a-zA-Z0-9]+', 'g'), '_').replace(new RegExp('^_+|_+$', 'g'), '').slice(0, 48) || 'Pegawai';
+                var cleanNp = fNipVal.replace(new RegExp('[^a-zA-Z0-9-]+', 'g'), '_').replace(new RegExp('^_+|_+$', 'g'), '');
+                var desiredNm = 'WAJAH_' + cleanNm + (cleanNp ? '_NIP_' + cleanNp : '') + '.jpg';
+                if (drvFile.getName() !== desiredNm) {
+                  drvFile.setName(desiredNm);
+                }
+              }
+            } catch (eRename) {}
+          }
+        }
+      }
+    } catch (eDriveTidy) {}
+  }
+
+  // 3. Normalisasi baris, bersihkan akun/data demo, perbaiki ID & relasi NIP/Nama, lalu rapikan seluruh format sheet
   var usersById = {};
   var usersByNip = {};
   var usersByNameLower = {};
@@ -2207,9 +2562,13 @@ function handleRepairSheetSync_(ss, props, sheetsMap, payload) {
     var tbl = tableNames[ti];
     if (tbl === 'Log') continue;
     var sheet = map[tbl] || ss.getSheetByName(tbl);
-    if (!sheet || sheet.getLastRow() < 2) continue;
-
+    if (!sheet) continue;
     var headers = getHeadersForSheet_(sheet, tbl);
+    if (sheet.getLastRow() < 2) {
+      formatSheetTidy_(sheet, tbl, headers);
+      continue;
+    }
+
     var lastRow = sheet.getLastRow();
     var values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
     var sheetDirty = false;
@@ -2394,7 +2753,6 @@ function handleRepairSheetSync_(ss, props, sheetsMap, payload) {
     }
 
     if (sheetDirty) {
-      // Pastikan kolom teks tidak terformat tanggal/angka oleh Google Sheets sebelum batch setValues
       for (var tc = 0; tc < headers.length; tc++) {
         if (TEXT_COLUMNS[headers[tc]]) {
           sheet.getRange(2, tc + 1, lastRow - 1, 1).setNumberFormat('@');
@@ -2402,10 +2760,18 @@ function handleRepairSheetSync_(ss, props, sheetsMap, payload) {
       }
       sheet.getRange(2, 1, values.length, headers.length).setValues(values);
     }
+
+    // Rapikan tampilan seluruh isi sheet (CLIP wrap, lebar kolom presisi, tinggi baris seragam)
+    formatSheetTidy_(sheet, tbl, headers);
+  }
+
+  var logSh = map['Log'] || ss.getSheetByName('Log');
+  if (logSh) {
+    formatSheetTidy_(logSh, 'Log', getHeadersForSheet_(logSh, 'Log'));
   }
 
   var parts = [];
-  if (report.tabsCreated.length > 0) parts.push(report.tabsCreated.length + ' tab dibuat');
+  if (report.tabsCreated.length > 0) parts.push(report.tabsCreated.length + ' tab dirapikan');
   if (report.headersAdded.length > 0) parts.push(report.headersAdded.length + ' tab dilengkapi kolom');
   if (report.legacyRowsImported > 0) parts.push(report.legacyRowsImported + ' baris lama diimpor');
   if (report.idsRepaired > 0) parts.push(report.idsRepaired + ' ID unik dibuat');
@@ -2415,8 +2781,8 @@ function handleRepairSheetSync_(ss, props, sheetsMap, payload) {
   if (report.crossRefsRepaired > 0) parts.push(report.crossRefsRepaired + ' relasi Nama/NIP diselaraskan');
 
   report.summary = parts.length > 0
-    ? 'Perbaikan selesai: ' + parts.join(', ') + '.'
-    : 'Semua struktur tab, kolom, ID unik, dan relasi data di Spreadsheet sudah sehat dan sinkron.';
+    ? 'Perbaikan & perapihan selesai: ' + parts.join(', ') + '.'
+    : 'Semua struktur tab, kolom, tampilan sel, foto Drive, ID unik, dan relasi data di Spreadsheet sudah rapi & sinkron.';
 
   appendLogEntry_(
     ss,

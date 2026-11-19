@@ -66,22 +66,6 @@ const AuditLogManager = lazy(() =>
   import('./components/audit/AuditLogManager').then((m) => ({ default: m.AuditLogManager }))
 );
 
-const KEPSEK_REQUIRE_LOGIN_KEY = 'kitarajin_require_login';
-
-const KEPSEK_CONSOLE_USER: User = {
-  id: 'kepsek-console',
-  nip: '-',
-  name: 'Kepala Sekolah (Cek & Perbaikan Sheet)',
-  username: 'kepsek-console',
-  passwordHash: '',
-  role: 'kepala_sekolah',
-  position: 'Kepala Sekolah',
-  assignedSessionIds: ['sesi-1', 'sesi-2', 'sesi-3'],
-  isActive: true,
-  createdAt: '',
-  updatedAt: '',
-};
-
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [activeMenuId, setActiveMenuId] = useState<string>('dashboard');
@@ -101,18 +85,11 @@ export default function App() {
         if (isMounted) {
           setSyncVersion((v) => v + 1);
         }
-      }, 60);
+      }, 40);
     };
 
-    const resolveInitialOrFallbackUser = (): { user: User | null; defaultMenu?: string } => {
-      const session = refreshCurrentSessionFromUsers() || getCurrentSession();
-      if (session) {
-        return { user: session };
-      }
-      if (localStorage.getItem(KEPSEK_REQUIRE_LOGIN_KEY) !== '1') {
-        return { user: KEPSEK_CONSOLE_USER, defaultMenu: 'cek_sistem' };
-      }
-      return { user: null };
+    const resolveAuthenticatedSession = (): User | null => {
+      return refreshCurrentSessionFromUsers() || getCurrentSession() || null;
     };
 
     async function init() {
@@ -121,28 +98,28 @@ export default function App() {
 
       if (hasRealLocalUsers) {
         if (!isMounted) return;
-        const resolved = resolveInitialOrFallbackUser();
-        setCurrentUser(resolved.user);
-        if (resolved.defaultMenu) {
-          setActiveMenuId(resolved.defaultMenu);
+        const resolvedUser = resolveAuthenticatedSession();
+        setCurrentUser(resolvedUser);
+        if (resolvedUser?.role === 'superadmin') {
+          setActiveMenuId('pengaturan');
         }
         setIsInitializing(false);
 
         if (isAppsScriptConfigured()) {
-          pullChangesFromAppsScript(true, true).catch(() => false);
+          pullChangesFromAppsScript(true, false).catch(() => false);
         }
       } else {
         if (isAppsScriptConfigured()) {
           await Promise.race([
-            pullChangesFromAppsScript(true, true).catch(() => false),
-            new Promise((resolve) => setTimeout(resolve, 15000)),
+            pullChangesFromAppsScript(true, false).catch(() => false),
+            new Promise((resolve) => setTimeout(resolve, 6000)),
           ]);
         }
         if (!isMounted) return;
-        const resolved = resolveInitialOrFallbackUser();
-        setCurrentUser(resolved.user);
-        if (resolved.defaultMenu) {
-          setActiveMenuId(resolved.defaultMenu);
+        const resolvedUser = resolveAuthenticatedSession();
+        setCurrentUser(resolvedUser);
+        if (resolvedUser?.role === 'superadmin') {
+          setActiveMenuId('pengaturan');
         }
         setIsInitializing(false);
       }
@@ -157,19 +134,16 @@ export default function App() {
         collectionName === 'auto'
       ) {
         reconcileUserReferences(undefined, false);
-        const session = refreshCurrentSessionFromUsers() || getCurrentSession();
-        if (session) {
-          setCurrentUser(session);
-        } else if (localStorage.getItem(KEPSEK_REQUIRE_LOGIN_KEY) !== '1') {
-          setCurrentUser((prev) => (prev?.id === 'kepsek-console' ? prev : KEPSEK_CONSOLE_USER));
-        } else {
-          setCurrentUser(null);
+        const resolvedUser = resolveAuthenticatedSession();
+        setCurrentUser(resolvedUser);
+        if (resolvedUser?.role === 'superadmin') {
+          setActiveMenuId((prev) => (prev === 'cek_sistem' || prev === 'pengaturan' ? prev : 'pengaturan'));
         }
       }
       scheduleSyncRender();
     };
 
-    // Sinkronisasi dua arah & auto-reload tiap ~1.2s + saat tab aktif / online kembali
+    // Sinkronisasi dua arah otomatis super cepat di latar belakang
     const stopRealtimeSync = startAppsScriptRealtimeSync((collectionName) => {
       syncSessionAndReferences(collectionName);
     });
@@ -193,9 +167,8 @@ export default function App() {
   }, []);
 
   const handleLoginSuccess = (user: User) => {
-    localStorage.removeItem(KEPSEK_REQUIRE_LOGIN_KEY);
     setCurrentUser(user);
-    setActiveMenuId('dashboard');
+    setActiveMenuId(user.role === 'superadmin' ? 'pengaturan' : 'dashboard');
     if (isAppsScriptConfigured()) {
       pullChangesFromAppsScript(false).catch(() => {});
       flushAttendanceBatch().catch(() => {});
@@ -203,10 +176,9 @@ export default function App() {
   };
 
   const handleLogout = () => {
-    if (currentUser && currentUser.id !== 'kepsek-console') {
+    if (currentUser) {
       clearSession(currentUser);
     }
-    localStorage.setItem(KEPSEK_REQUIRE_LOGIN_KEY, '1');
     setCurrentUser(null);
     setActiveMenuId('dashboard');
   };
@@ -318,12 +290,12 @@ export default function App() {
         return <AuditLogManager currentUser={currentUser} />;
 
       case 'pengaturan':
-        if (currentUser.role !== 'kepala_sekolah') {
+        if (currentUser.role !== 'superadmin') {
           return (
             <div className="p-8 bg-rose-50 rounded-2xl border border-rose-200 text-rose-800 text-center max-w-md mx-auto my-8">
               <AlertCircle className="w-8 h-8 text-rose-600 mx-auto mb-2" />
               <h3 className="font-bold text-base">Akses Ditolak</h3>
-              <p className="text-xs mt-1">Hanya Kepala Sekolah yang memiliki wewenang mengubah pengaturan sistem.</p>
+              <p className="text-xs mt-1">Hanya Superadmin yang memiliki wewenang mengelola Pengaturan &amp; Sheets.</p>
             </div>
           );
         }
@@ -335,12 +307,12 @@ export default function App() {
         );
 
       case 'cek_sistem':
-        if (currentUser.role !== 'kepala_sekolah') {
+        if (currentUser.role !== 'superadmin') {
           return (
             <div className="p-8 bg-rose-50 rounded-2xl border border-rose-200 text-rose-800 text-center max-w-md mx-auto my-8">
               <AlertCircle className="w-8 h-8 text-rose-600 mx-auto mb-2" />
               <h3 className="font-bold text-base">Akses Ditolak</h3>
-              <p className="text-xs mt-1">Menu Cek Sistem hanya dapat diakses oleh Kepala Sekolah.</p>
+              <p className="text-xs mt-1">Menu Cek &amp; Perbaikan Sheet hanya dapat diakses oleh Superadmin.</p>
             </div>
           );
         }
@@ -352,6 +324,14 @@ export default function App() {
         );
 
       default:
+        if (currentUser.role === 'superadmin') {
+          return (
+            <SettingsManager
+              currentUser={currentUser}
+              onUpdateCurrentUser={(updated) => setCurrentUser(updated)}
+            />
+          );
+        }
         return (
           <OverviewDashboard
             currentUser={currentUser}
