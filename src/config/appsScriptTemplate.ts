@@ -162,9 +162,14 @@ function doGet(e) {
       return jsonResponse_(handleGetPhoto_(fileId));
     }
 
+    if (action === 'getUsersQuick') {
+      var deepUsers = String(params.deep || '') === '1';
+      return jsonResponse_(handleGetUsersQuick_(deepUsers));
+    }
+
     if (action === 'getAll' || action === 'getChanges') {
       var sinceVersion = String(params.sinceVersion || '').trim();
-      var deepCheck = (action === 'getAll') || String(params.deep || '') === '1';
+      var deepCheck = String(params.deep || '') === '1';
       var scanDriveFlag = String(params.scanDrive || '') === '1';
       return jsonResponse_(handleGetChanges_(sinceVersion, deepCheck, scanDriveFlag));
     }
@@ -197,8 +202,11 @@ function doPost(e) {
     if (action === 'checkSystem') {
       return jsonResponse_(handleCheckSystem_());
     }
+    if (action === 'getUsersQuick') {
+      return jsonResponse_(handleGetUsersQuick_(Boolean(payload.deep)));
+    }
     if (action === 'getAll' || action === 'getChanges') {
-      var deepPost = (action === 'getAll') || Boolean(payload.deep);
+      var deepPost = Boolean(payload.deep);
       return jsonResponse_(handleGetChanges_(String(payload.sinceVersion || ''), deepPost, Boolean(payload.scanDrive)));
     }
     if (action === 'getPhoto') {
@@ -207,7 +215,7 @@ function doPost(e) {
 
     // Semua operasi penulisan dibungkus LockService agar aman multi-pengguna
     var lock = LockService.getScriptLock();
-    var locked = lock.tryLock(15000);
+    var locked = lock.tryLock(25000);
     if (!locked) {
       return jsonResponse_({
         ok: false,
@@ -264,7 +272,8 @@ function doPost(e) {
         didMutate = Boolean(result && result.ok);
       } else if (action === 'appendLog') {
         result = handleAppendLogOnly_(ss, payload);
-        didMutate = Boolean(result && result.ok);
+        // Log login/logout tidak mengubah tabel data, sehingga tidak memicu invalidasi cache massal
+        didMutate = false;
       } else if (action === 'repairSheetSync') {
         result = handleRepairSheetSync_(ss, props, sheetsMap, payload);
         didMutate = Boolean(result && result.ok);
@@ -1735,6 +1744,104 @@ function handleGetChanges_(sinceVersion, deepCheck, forceDriveScan) {
   };
 }
 
+function handleGetUsersQuick_(deepCheck) {
+  var props = getProps_();
+  var serverTime = new Date().toISOString();
+  if (!props.SPREADSHEET_ID) {
+    return {
+      ok: false,
+      code: 500,
+      error: 'Script Property SPREADSHEET_ID belum diisi di Apps Script.'
+    };
+  }
+
+  var currentDataVer = getDataVersion_();
+  var quickKey = 'USERS_Q_' + props.SPREADSHEET_ID.slice(-8) + '_' + currentDataVer;
+  var cache = CacheService.getScriptCache();
+
+  if (!deepCheck) {
+    try {
+      var fullCached = readCachedPayload_(props.SPREADSHEET_ID, currentDataVer);
+      if (fullCached && fullCached.tables && Array.isArray(fullCached.tables.Users)) {
+        return {
+          ok: true,
+          users: fullCached.tables.Users,
+          version: fullCached.version || currentDataVer,
+          serverTime: serverTime,
+          cached: true
+        };
+      }
+      var quickRaw = cache.get(quickKey);
+      if (quickRaw) {
+        var parsedQuick = JSON.parse(quickRaw);
+        if (Array.isArray(parsedQuick)) {
+          return {
+            ok: true,
+            users: parsedQuick,
+            version: currentDataVer,
+            serverTime: serverTime,
+            cached: true
+          };
+        }
+      }
+    } catch (eCache) {}
+  }
+
+  var ss = SpreadsheetApp.openById(props.SPREADSHEET_ID);
+  var sheetsMap = getSheetsMap_(ss);
+  var sheet = ensureSheet_(ss, 'Users', sheetsMap);
+  var headers = getHeadersForSheet_(sheet, 'Users');
+  var lastRow = sheet.getLastRow();
+  var list = [];
+  var nowIso = new Date().toISOString();
+
+  if (lastRow >= 2 && headers.length > 0) {
+    var values = sheet.getRange(2, 1, lastRow - 1, headers.length).getValues();
+    var colId = headers.indexOf('id');
+    var colDiubah = headers.indexOf('diubah_pada');
+    var colStatus = headers.indexOf('status');
+
+    for (var r = 0; r < values.length; r++) {
+      if (!rowHasAnyValue_(values[r])) continue;
+      var idIdx = colId !== -1 ? colId : 0;
+      if (!values[r][idIdx]) {
+        var actualSheetRow = 2 + r;
+        var newId = makeRecordId_('Users', r);
+        values[r][idIdx] = newId;
+        sheet.getRange(actualSheetRow, idIdx + 1).setNumberFormat('@').setValue(newId);
+        if (colDiubah !== -1 && !values[r][colDiubah]) {
+          values[r][colDiubah] = nowIso;
+          sheet.getRange(actualSheetRow, colDiubah + 1).setNumberFormat('@').setValue(nowIso);
+        }
+        if (colStatus !== -1 && !values[r][colStatus]) {
+          values[r][colStatus] = 'aktif';
+          sheet.getRange(actualSheetRow, colStatus + 1).setValue('aktif');
+        }
+      }
+      var mapped = mapSheetRowToFrontendRecord_('Users', headers, values[r]);
+      if (mapped) {
+        if (!mapped.id) mapped.id = makeRecordId_('Users', r);
+        list.push(mapped);
+      }
+    }
+  }
+
+  try {
+    var serialized = JSON.stringify(list);
+    if (serialized.length < 95000) {
+      cache.put(quickKey, serialized, 21600);
+    }
+  } catch (ePut) {}
+
+  return {
+    ok: true,
+    users: list,
+    version: currentDataVer,
+    serverTime: serverTime,
+    cached: false
+  };
+}
+
 // ============================================================================
 // CRUD WITH LOCKSERVICE, APPENDROW, DIFF-CELL UPDATE, CONFLICT CHECK & LOG
 // ============================================================================
@@ -2851,4 +2958,3 @@ export const APPS_SCRIPT_DEPLOY_STEPS = [
     desc: 'Salin URL Web App (/exec) dan API_TOKEN ke form Pengaturan & Sheets di atas, lalu klik Simpan & Uji Koneksi.',
   },
 ];
-

@@ -23,6 +23,7 @@ import {
   enqueueAttendanceScan,
   isAppsScriptConfigured,
   pullChangesFromAppsScript,
+  pullUsersForLogin,
   syncAppendLogOnly,
   syncCreateRow,
   syncSaveFace,
@@ -641,14 +642,14 @@ export async function authenticateUser(
   const isOnline = typeof navigator === 'undefined' || navigator.onLine;
   const gasConfigured = isAppsScriptConfigured();
 
-  // Sinkronkan data dari Apps Script (jalur cepat terlebih dahulu)
+  // Jalur login ultra-cepat (<150ms) melalui CacheService tab Users tanpa memblokir pengguna lain
   if (gasConfigured && isOnline) {
-    const synced = await pullChangesFromAppsScript(true, false).catch(() => false);
+    const synced = await pullUsersForLogin(false).catch(() => false);
     if (!synced) {
       return {
         success: false,
         message:
-          'Gagal membaca database dari Google Sheets yang terhubung. Periksa URL Web App, Token Rahasia, dan SPREADSHEET_ID.',
+          'Gagal membaca database yang terhubung. Periksa koneksi internet atau konfigurasi Pengaturan & Sheets.',
       };
     }
   }
@@ -657,9 +658,9 @@ export async function authenticateUser(
   let user = findMatchingUserByIdentifier(users, cleanId);
   let isMatch = user ? await doesPasswordMatchUser(user, rawPassword) : false;
 
-  // Jika pengguna baru ditambahkan/diubah manual langsung di Google Sheets dan belum masuk CacheService, lakukan deep sync langsung ke Sheet
+  // Fallback langsung ke sheet Users bila pengguna baru saja ditambahkan/diedit manual di Spreadsheet
   if (gasConfigured && isOnline && (!user || !isMatch)) {
-    const deepSynced = await pullChangesFromAppsScript(true, true).catch(() => false);
+    const deepSynced = await pullUsersForLogin(true).catch(() => false);
     if (deepSynced) {
       users = getAllUsers();
       user = findMatchingUserByIdentifier(users, cleanId);
@@ -672,8 +673,8 @@ export async function authenticateUser(
       success: false,
       message:
         users.length === 0
-          ? 'Data pengguna pada Google Sheet yang terhubung masih kosong (0 baris).'
-          : 'Username atau Password tidak ditemukan pada database Google Sheet.',
+          ? 'Data pengguna pada database masih kosong (0 baris).'
+          : 'Username atau Password tidak ditemukan.',
     };
   }
 
@@ -687,7 +688,7 @@ export async function authenticateUser(
   if (!isMatch) {
     return {
       success: false,
-      message: 'Password tidak sesuai dengan data pada database Google Sheet.',
+      message: 'Password tidak sesuai dengan data pada database.',
     };
   }
 

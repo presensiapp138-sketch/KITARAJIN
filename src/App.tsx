@@ -23,6 +23,7 @@ import {
   pullChangesFromAppsScript,
   isAppsScriptConfigured,
   flushAttendanceBatch,
+  parseAndApplyAutoConnectUrlParams,
 } from './services/appsScriptSync';
 
 const UserManager = lazy(() =>
@@ -94,35 +95,20 @@ export default function App() {
     };
 
     async function init() {
+      parseAndApplyAutoConnectUrlParams();
       await initializeDatabase();
-      const hasRealLocalUsers = getAllUsers().length > 0;
+      if (!isMounted) return;
 
-      if (hasRealLocalUsers) {
-        if (!isMounted) return;
-        const resolvedUser = resolveAuthenticatedSession();
-        setCurrentUser(resolvedUser);
-        if (resolvedUser?.role === 'superadmin') {
-          setActiveMenuId('pengaturan');
-        }
-        setIsInitializing(false);
+      const resolvedUser = resolveAuthenticatedSession();
+      setCurrentUser(resolvedUser);
+      if (resolvedUser?.role === 'superadmin') {
+        setActiveMenuId('pengaturan');
+      }
+      setIsInitializing(false);
 
-        if (isAppsScriptConfigured()) {
-          pullChangesFromAppsScript(true, false).catch(() => false);
-        }
-      } else {
-        if (isAppsScriptConfigured()) {
-          await Promise.race([
-            pullChangesFromAppsScript(true, false).catch(() => false),
-            new Promise((resolve) => setTimeout(resolve, 6000)),
-          ]);
-        }
-        if (!isMounted) return;
-        const resolvedUser = resolveAuthenticatedSession();
-        setCurrentUser(resolvedUser);
-        if (resolvedUser?.role === 'superadmin') {
-          setActiveMenuId('pengaturan');
-        }
-        setIsInitializing(false);
+      // Tarik data lengkap secara non-blocking agar layar login tampil instan
+      if (isAppsScriptConfigured()) {
+        pullChangesFromAppsScript(true, false).catch(() => false);
       }
     }
     init();

@@ -218,6 +218,71 @@ export function isAppsScriptConfigured(): boolean {
   return Boolean(cfg.webAppUrl && cfg.apiToken);
 }
 
+/**
+ * Baca parameter koneksi otomatis dari tautan berbagi Vercel/Web (?gas=... atau ?gasUrl=...&gasToken=...)
+ * lalu simpan permanen di browser/PWA dan bersihkan URL address bar.
+ */
+export function parseAndApplyAutoConnectUrlParams(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    const url = new URL(window.location.href);
+    const hashParams = new URLSearchParams(url.hash.startsWith('#') ? url.hash.slice(1) : url.hash);
+    const encoded = url.searchParams.get('gas') || hashParams.get('gas');
+    let nextUrl = url.searchParams.get('gasUrl') || hashParams.get('gasUrl') || '';
+    let nextToken = url.searchParams.get('gasToken') || hashParams.get('gasToken') || '';
+
+    if (encoded) {
+      try {
+        const normalizedB64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+        const decoded = JSON.parse(atob(normalizedB64));
+        if (decoded?.u) nextUrl = String(decoded.u);
+        if (decoded?.t) nextToken = String(decoded.t);
+      } catch {
+        // ignore invalid base64 payload
+      }
+    }
+
+    const cleanUrl = nextUrl.trim();
+    const cleanToken = nextToken.trim();
+    if (!cleanUrl || !cleanUrl.startsWith('https://') || !cleanToken) {
+      return false;
+    }
+
+    const cur = getAppsScriptConfig();
+    if (cur.webAppUrl !== cleanUrl || cur.apiToken !== cleanToken) {
+      saveAppsScriptConfig({
+        webAppUrl: cleanUrl,
+        apiToken: cleanToken,
+        isLocked: true,
+      });
+    }
+
+    ['gas', 'gasUrl', 'gasToken'].forEach((k) => {
+      url.searchParams.delete(k);
+      hashParams.delete(k);
+    });
+    const nextHash = hashParams.toString();
+    url.hash = nextHash ? `#${nextHash}` : '';
+    window.history.replaceState({}, document.title, url.toString());
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function buildConnectedShareUrl(): string {
+  if (typeof window === 'undefined') return '';
+  const cfg = getAppsScriptConfig();
+  if (!cfg.webAppUrl || !cfg.apiToken) return window.location.origin;
+  try {
+    const payload = JSON.stringify({ u: cfg.webAppUrl, t: cfg.apiToken });
+    const b64 = btoa(payload).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    return `${window.location.origin}/?gas=${b64}`;
+  } catch {
+    return window.location.origin;
+  }
+}
+
 export function saveAppsScriptConfig(params: {
   webAppUrl: string;
   apiToken: string;
@@ -1111,6 +1176,41 @@ function mergeDownloadedTablesToLocalStorage(
   });
 }
 
+/**
+ * Endpoint login super cepat & aman multi-pengguna serentak (hanya membaca tab Users + CacheService)
+ */
+export async function pullUsersForLogin(deep = false): Promise<boolean> {
+  if (!isAppsScriptConfigured()) return false;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
+
+  const params: Record<string, string> = { action: 'getUsersQuick' };
+  if (deep) params.deep = '1';
+
+  let res = await getFromAppsScript<{ users?: any[]; version?: string }>(params, deep ? 15000 : 10000, 1);
+
+  // Kompatibilitas mundur jika Web App Apps Script belum di-update ke versi yang memiliki getUsersQuick
+  if (!res.ok && String(res.error || '').includes('tidak dikenali')) {
+    return pullChangesFromAppsScript(true, deep);
+  }
+
+  if (!res.ok || !Array.isArray(res.users)) {
+    return false;
+  }
+
+  const seen = new Set<string>();
+  const cleanUsers = res.users.filter((u) => {
+    if (!u || !u.id || u.status === 'dihapus' || isDemoUserRecord(u)) return false;
+    const key = String(u.id);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  localStorage.setItem(TABLE_STORAGE_MAP.Users, JSON.stringify(cleanUsers));
+  window.dispatchEvent(new CustomEvent('kitarajin_cloud_sync', { detail: { collection: 'users' } }));
+  return true;
+}
+
 export async function pullChangesFromAppsScript(forceFull = false, deepCheck = false): Promise<boolean> {
   if (!isAppsScriptConfigured()) return false;
   if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
@@ -1129,7 +1229,6 @@ export async function pullChangesFromAppsScript(forceFull = false, deepCheck = f
   const runPull = async (): Promise<boolean> => {
     try {
       const sinceVersion = forceFull ? '' : localStorage.getItem(LAST_VERSION_KEY) || '';
-      const shouldScanDrive = forceFull && !hasDoneSessionDriveScan;
       const queryParams: Record<string, string> = {
         action: forceFull ? 'getAll' : 'getChanges',
         sinceVersion,
@@ -1137,27 +1236,15 @@ export async function pullChangesFromAppsScript(forceFull = false, deepCheck = f
       if (deepCheck) {
         queryParams.deep = '1';
       }
-      if (shouldScanDrive) {
-        queryParams.scanDrive = '1';
-      }
 
-      const timeoutMs = forceFull ? 35000 : deepCheck ? 25000 : 18000;
-      let res = await getFromAppsScript<{
+      const timeoutMs = forceFull ? 25000 : deepCheck ? 20000 : 15000;
+      const res = await getFromAppsScript<{
         unchanged?: boolean;
         version?: string;
         serverTime?: string;
         tables?: Record<string, any[]>;
         sheetTotalRows?: Record<string, number>;
-      }>(queryParams, timeoutMs, 1);
-
-      // Fallback aman: jika scanDrive=1 lambat/gagal, langsung muat Sheets saja tanpa menunggu Drive scan
-      if (!res.ok && shouldScanDrive) {
-        res = await getFromAppsScript(
-          deepCheck ? { action: 'getAll', sinceVersion: '', deep: '1' } : { action: 'getAll', sinceVersion: '' },
-          30000,
-          0
-        );
-      }
+      }>(queryParams, timeoutMs, 2);
 
       if (!res.ok) {
         consecutivePollFailures++;
@@ -1169,9 +1256,6 @@ export async function pullChangesFromAppsScript(forceFull = false, deepCheck = f
       }
 
       consecutivePollFailures = 0;
-      if (shouldScanDrive) {
-        hasDoneSessionDriveScan = true;
-      }
 
       const now = new Date().toISOString();
       if (!res.unchanged && res.tables) {

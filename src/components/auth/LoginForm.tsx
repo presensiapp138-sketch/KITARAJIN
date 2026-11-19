@@ -25,7 +25,7 @@ import {
 } from '../../services/storage';
 import {
   isAppsScriptConfigured,
-  pullChangesFromAppsScript,
+  pullUsersForLogin,
 } from '../../services/appsScriptSync';
 import { User as UserType } from '../../types';
 
@@ -74,7 +74,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
     window.addEventListener('storage', syncState);
 
     if (isAppsScriptConfigured()) {
-      pullChangesFromAppsScript(false, false)
+      pullUsersForLogin(false)
         .then(() => {
           syncState();
         })
@@ -374,9 +374,6 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
               <div className="mb-6 flex items-start justify-between gap-2">
                 <div>
                   <h2 className="text-xl font-bold text-slate-900">Masuk Akun</h2>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Gunakan Username dan Password sesuai baris database Google Sheet.
-                  </p>
                 </div>
                 <button
                   type="button"
@@ -402,7 +399,7 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
                       required
                       value={identifier}
                       onChange={(e) => setIdentifier(e.target.value)}
-                      placeholder="Masukkan Username sesuai Sheet"
+                      placeholder="Masukkan Username"
                       className="w-full pl-10 pr-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 transition-all placeholder:text-slate-400"
                     />
                   </div>

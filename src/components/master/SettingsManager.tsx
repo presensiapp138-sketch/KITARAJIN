@@ -60,6 +60,7 @@ import {
   SyncUiState,
   runSystemCheck,
   repairSheetSync,
+  buildConnectedShareUrl,
 } from '../../services/appsScriptSync';
 import { APPS_SCRIPT_CODE, APPS_SCRIPT_DEPLOY_STEPS } from '../../config/appsScriptTemplate';
 
@@ -86,6 +87,8 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [systemCheckResult, setSystemCheckResult] = useState<SystemCheckResult | null>(null);
   const [showCodePanel, setShowCodePanel] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
+  const [copiedShareLink, setCopiedShareLink] = useState(false);
+  const [copiedVercelEnv, setCopiedVercelEnv] = useState(false);
 
   // Kepala Sekolah Profile Form State
   const [ksName, setKsName] = useState(currentUser.name);
@@ -283,6 +286,34 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       setFeedback({
         type: 'error',
         message: 'Browser menolak akses clipboard otomatis. Buka panel kode dan salin secara manual.',
+      });
+    }
+  };
+
+  const handleCopyConnectedShareLink = async () => {
+    try {
+      const shareUrl = buildConnectedShareUrl();
+      await navigator.clipboard.writeText(shareUrl);
+      setCopiedShareLink(true);
+      setTimeout(() => setCopiedShareLink(false), 2500);
+    } catch {
+      setFeedback({
+        type: 'error',
+        message: 'Gagal menyalin tautan terhubung otomatis.',
+      });
+    }
+  };
+
+  const handleCopyVercelEnv = async () => {
+    try {
+      const envText = `VITE_APPS_SCRIPT_URL=${webAppUrlInput.trim()}\nVITE_APPS_SCRIPT_TOKEN=${apiTokenInput.trim()}`;
+      await navigator.clipboard.writeText(envText);
+      setCopiedVercelEnv(true);
+      setTimeout(() => setCopiedVercelEnv(false), 2500);
+    } catch {
+      setFeedback({
+        type: 'error',
+        message: 'Gagal menyalin Environment Variables Vercel.',
       });
     }
   };
@@ -692,25 +723,50 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 : 'Setelah disimpan, URL & Token langsung dikunci dan sinkronisasi otomatis aktif tanpa tombol manual.'}
             </span>
 
-            {gasConfig.isLocked && syncUiState.isConfigured ? (
-              <button
-                type="button"
-                onClick={handleUnlockConfig}
-                className="px-4 py-2 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-              >
-                <Unlock className="w-3.5 h-3.5" />
-                <span>Buka Kunci untuk Ubah URL/Token</span>
-              </button>
-            ) : (
-              <button
-                type="submit"
-                disabled={isTestingConnection}
-                className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-50"
-              >
-                <Lock className="w-3.5 h-3.5" />
-                <span>{isTestingConnection ? 'Menghubungkan & Mengunci...' : 'Simpan & Kunci Konfigurasi'}</span>
-              </button>
-            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {syncUiState.isConfigured && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleCopyConnectedShareLink}
+                    className="px-3.5 py-2 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                    title="Bagikan link ini ke karyawan agar perangkat mereka langsung terhubung ke Sheet & Drive"
+                  >
+                    {copiedShareLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedShareLink ? 'Link Terhubung Disalin!' : 'Salin Link Akses Terhubung'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCopyVercelEnv}
+                    className="px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                    title="Tempel di Vercel -> Project Settings -> Environment Variables agar semua perangkat otomatis terhubung"
+                  >
+                    {copiedVercelEnv ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedVercelEnv ? 'Env Vercel Disalin!' : 'Salin Env Vercel'}</span>
+                  </button>
+                </>
+              )}
+
+              {gasConfig.isLocked && syncUiState.isConfigured ? (
+                <button
+                  type="button"
+                  onClick={handleUnlockConfig}
+                  className="px-4 py-2 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <Unlock className="w-3.5 h-3.5" />
+                  <span>Buka Kunci untuk Ubah URL/Token</span>
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={isTestingConnection}
+                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>{isTestingConnection ? 'Menghubungkan & Mengunci...' : 'Simpan & Kunci Konfigurasi'}</span>
+                </button>
+              )}
+            </div>
           </div>
         </form>
 
