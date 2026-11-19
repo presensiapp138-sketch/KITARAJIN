@@ -874,7 +874,7 @@ function deserializeCellValue_(colName, val) {
   if (BOOL_COLUMNS[colName]) {
     if (typeof val === 'boolean') return val;
     var lower = String(val).toLowerCase().trim();
-    return lower === 'true' || lower === 'ya' || lower === '1' || lower === 'aktif';
+    return lower === 'true' || lower === 'ya' || lower === '1' || lower === 'aktif' || lower === 'yes' || lower === 'active';
   }
   if (NUM_COLUMNS[colName]) {
     var n = Number(val);
@@ -948,6 +948,7 @@ var HEADER_ALIAS_MAP = {
   'user name': 'username',
   nama_pengguna: 'username',
   'nama pengguna': 'username',
+  userid: 'username',
   jabatan: 'position',
   posisi: 'position',
   departemen: 'departmentName',
@@ -962,6 +963,13 @@ var HEADER_ALIAS_MAP = {
   sandi: 'savedPassword',
   'kata sandi': 'savedPassword',
   kata_sandi: 'savedPassword',
+  savepassword: 'savedPassword',
+  savepasword: 'savedPassword',
+  savedpassword: 'savedPassword',
+  saved_password: 'savedPassword',
+  save_password: 'savedPassword',
+  'password login': 'savedPassword',
+  'kode akses': 'savedPassword',
   peran: 'role',
   role: 'role',
   tanggal: 'date',
@@ -1000,7 +1008,17 @@ function mapSheetRowToFrontendRecord_(tableName, headers, rowValues) {
     if (!Array.isArray(raw.assignedSessionIds) || raw.assignedSessionIds.length === 0) {
       raw.assignedSessionIds = ['sesi-1', 'sesi-2', 'sesi-3'];
     }
-    if (!raw.username && raw.nip) raw.username = String(raw.nip);
+    raw.nip = raw.nip !== undefined && raw.nip !== null ? String(raw.nip).trim() : '';
+    raw.username = raw.username !== undefined && raw.username !== null ? String(raw.username).trim() : '';
+    if (!raw.username && raw.nip) raw.username = raw.nip;
+    if (!raw.username && raw.email) raw.username = String(raw.email).trim();
+    raw.name = raw.name !== undefined && raw.name !== null ? String(raw.name).trim() : '';
+    if (!raw.name) raw.name = raw.username || String(raw.email || '').trim() || 'Pengguna';
+    if (raw.savedPassword !== undefined && raw.savedPassword !== null) {
+      raw.savedPassword = String(raw.savedPassword);
+    } else {
+      raw.savedPassword = '';
+    }
     if (!raw.departmentName && raw.departmentId) raw.departmentName = raw.departmentId;
     raw.status = 'aktif';
   } else if (tableName === 'Schedules') {

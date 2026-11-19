@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+// Sumber utama Code.gs untuk disalin ke Google Apps Script (Extensions -> Apps Script)
 export const APPS_SCRIPT_CODE = `/**
  * ============================================================================
  * KITARAJIN - Google Apps Script Web App Backend (Single Database: Sheets + Drive)
@@ -879,7 +880,7 @@ function deserializeCellValue_(colName, val) {
   if (BOOL_COLUMNS[colName]) {
     if (typeof val === 'boolean') return val;
     var lower = String(val).toLowerCase().trim();
-    return lower === 'true' || lower === 'ya' || lower === '1' || lower === 'aktif';
+    return lower === 'true' || lower === 'ya' || lower === '1' || lower === 'aktif' || lower === 'yes' || lower === 'active';
   }
   if (NUM_COLUMNS[colName]) {
     var n = Number(val);
@@ -953,6 +954,7 @@ var HEADER_ALIAS_MAP = {
   'user name': 'username',
   nama_pengguna: 'username',
   'nama pengguna': 'username',
+  userid: 'username',
   jabatan: 'position',
   posisi: 'position',
   departemen: 'departmentName',
@@ -967,6 +969,13 @@ var HEADER_ALIAS_MAP = {
   sandi: 'savedPassword',
   'kata sandi': 'savedPassword',
   kata_sandi: 'savedPassword',
+  savepassword: 'savedPassword',
+  savepasword: 'savedPassword',
+  savedpassword: 'savedPassword',
+  saved_password: 'savedPassword',
+  save_password: 'savedPassword',
+  'password login': 'savedPassword',
+  'kode akses': 'savedPassword',
   peran: 'role',
   role: 'role',
   tanggal: 'date',
@@ -1005,7 +1014,17 @@ function mapSheetRowToFrontendRecord_(tableName, headers, rowValues) {
     if (!Array.isArray(raw.assignedSessionIds) || raw.assignedSessionIds.length === 0) {
       raw.assignedSessionIds = ['sesi-1', 'sesi-2', 'sesi-3'];
     }
-    if (!raw.username && raw.nip) raw.username = String(raw.nip);
+    raw.nip = raw.nip !== undefined && raw.nip !== null ? String(raw.nip).trim() : '';
+    raw.username = raw.username !== undefined && raw.username !== null ? String(raw.username).trim() : '';
+    if (!raw.username && raw.nip) raw.username = raw.nip;
+    if (!raw.username && raw.email) raw.username = String(raw.email).trim();
+    raw.name = raw.name !== undefined && raw.name !== null ? String(raw.name).trim() : '';
+    if (!raw.name) raw.name = raw.username || String(raw.email || '').trim() || 'Pengguna';
+    if (raw.savedPassword !== undefined && raw.savedPassword !== null) {
+      raw.savedPassword = String(raw.savedPassword);
+    } else {
+      raw.savedPassword = '';
+    }
     if (!raw.departmentName && raw.departmentId) raw.departmentName = raw.departmentId;
     raw.status = 'aktif';
   } else if (tableName === 'Schedules') {
@@ -2808,27 +2827,28 @@ function handleRepairSheetSync_(ss, props, sheetsMap, payload) {
 export const APPS_SCRIPT_DEPLOY_STEPS = [
   {
     step: 1,
-    title: 'Buat Google Spreadsheet & Folder Drive Privat',
-    desc: 'Buat 1 Google Spreadsheet baru (kosong, tidak perlu buat tab manual karena skrip otomatis membuat 10 tab lengkap) dan 1 Folder Google Drive privat untuk foto database wajah & mirror JSON. Salin ID masing-masing dari URL browser.',
+    title: 'Buka Google Sheet & Apps Script',
+    desc: 'Buka Spreadsheet tujuan, lalu klik menu Extensions -> Apps Script.',
   },
   {
     step: 2,
-    title: 'Buka Google Apps Script & Tempel Kode Backend',
-    desc: 'Buka script.google.com -> Proyek Baru (atau Extensions -> Apps Script dari Spreadsheet), hapus isi default Code.gs lalu tempel seluruh kode Code.gs dari panel di bawah, lalu tekan Ctrl+S.',
+    title: 'Tempel Kode Code.gs',
+    desc: 'Hapus seluruh isi editor, salin Code.gs dari tombol di atas, lalu tempel & simpan.',
   },
   {
     step: 3,
-    title: 'Isi 3 Script Properties Rahasia',
-    desc: 'Di menu sebelah kiri Apps Script buka Project Settings (ikon gerigi) -> scroll ke Script Properties -> tambahkan 3 baris: SPREADSHEET_ID, DRIVE_FOLDER_ID, dan API_TOKEN (isi token rahasia bebas & panjang, misal: kitarajin-rahasia-2026-xyz).',
+    title: 'Isi Script Properties',
+    desc: 'Buka Project Settings -> Script Properties, lalu isi SPREADSHEET_ID, DRIVE_FOLDER_ID, dan API_TOKEN.',
   },
   {
     step: 4,
-    title: 'Deploy sebagai Web App (Tanpa Service Account / GCP)',
-    desc: 'Klik Deploy -> New deployment (atau Manage deployments -> New version jika memperbarui kode) -> pilih Web app -> Execute as: Me -> Who has access: Anyone -> salin Web app URL (/exec).',
+    title: 'Deploy Sebagai Web App',
+    desc: 'Klik Deploy -> New deployment -> Web app -> Execute as: Me, Who has access: Anyone.',
   },
   {
     step: 5,
-    title: 'Tempel URL & Token 1x di Aplikasi & Kunci',
-    desc: 'Tempel Web app URL dan API_TOKEN ke form Konfigurasi di Pengaturan (atau set VITE_APPS_SCRIPT_URL & VITE_APPS_SCRIPT_TOKEN di Environment Variables Vercel), lalu klik Simpan & Kunci agar sinkron otomatis dua arah berjalan.',
+    title: 'Tempel URL & Token',
+    desc: 'Salin URL Web App (/exec) dan API_TOKEN ke form Pengaturan & Sheets di atas, lalu klik Simpan & Uji Koneksi.',
   },
 ];
+

@@ -81,6 +81,8 @@ let batchFlushTimer: ReturnType<typeof setTimeout> | null = null;
 let isFlushingBatch = false;
 let isPullInFlight = false;
 let inFlightPullPromise: Promise<boolean> | null = null;
+let inFlightPullWasDeep = false;
+let inFlightPullWasForced = false;
 let consecutivePollFailures = 0;
 let hasDoneSessionDriveScan = false;
 let isSeedingEmptySheet = false;
@@ -193,6 +195,24 @@ export function getAppsScriptConfig(): AppsScriptConfig {
   };
 }
 
+function clearNonSuperadminStoredSessions(): void {
+  const clearIfNotSuperadmin = (store: Storage, key: string) => {
+    try {
+      const raw = store.getItem(key);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed?.role === 'superadmin' || parsed?.id === 'superadmin-local') return;
+      store.removeItem(key);
+    } catch {
+      store.removeItem(key);
+    }
+  };
+  clearIfNotSuperadmin(localStorage, 'kitarajin_session_user');
+  if (typeof sessionStorage !== 'undefined') {
+    clearIfNotSuperadmin(sessionStorage, 'kitarajin_tab_session_user');
+  }
+}
+
 export function isAppsScriptConfigured(): boolean {
   const cfg = getAppsScriptConfig();
   return Boolean(cfg.webAppUrl && cfg.apiToken);
@@ -224,11 +244,13 @@ export function saveAppsScriptConfig(params: {
         localStorage.setItem(TABLE_STORAGE_MAP[tbl], JSON.stringify([]));
       }
     });
-    localStorage.removeItem('kitarajin_session_user');
+    clearNonSuperadminStoredSessions();
     drivePhotoCache.clear();
   }
   isPullInFlight = false;
   inFlightPullPromise = null;
+  inFlightPullWasForced = false;
+  inFlightPullWasDeep = false;
   hasDoneSessionDriveScan = false;
   consecutivePollFailures = 0;
   setSyncUiState({ isConfigured: Boolean(cleanUrl && cleanToken) });
@@ -975,16 +997,25 @@ function mergeDownloadedTablesToLocalStorage(
       const cleanUsers = incoming.filter((u) => !isDemoUserRecord(u));
       localStorage.setItem(storageKey, JSON.stringify(cleanUsers));
 
-      try {
-        const rawSess = localStorage.getItem('kitarajin_session_user');
-        if (rawSess) {
+      const validateStoredSession = (store: Storage, key: string) => {
+        try {
+          const rawSess = store.getItem(key);
+          if (!rawSess) return;
           const sess = JSON.parse(rawSess);
-          if (!sess?.id || isDemoUserRecord(sess) || !cleanUsers.some((u) => u.id === sess.id)) {
-            localStorage.removeItem('kitarajin_session_user');
+          if (sess?.role === 'superadmin' || sess?.id === 'superadmin-local') {
+            return;
           }
+          if (!sess?.id || isDemoUserRecord(sess) || !cleanUsers.some((u) => u.id === sess.id)) {
+            store.removeItem(key);
+          }
+        } catch {
+          // ignore session parse errors
         }
-      } catch {
-        // ignore session parse errors
+      };
+
+      validateStoredSession(localStorage, 'kitarajin_session_user');
+      if (typeof sessionStorage !== 'undefined') {
+        validateStoredSession(sessionStorage, 'kitarajin_tab_session_user');
       }
       return;
     }
@@ -1084,10 +1115,17 @@ export async function pullChangesFromAppsScript(forceFull = false, deepCheck = f
   if (!isAppsScriptConfigured()) return false;
   if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
   if (isPullInFlight && inFlightPullPromise) {
-    return inFlightPullPromise;
+    const coveredForce = !forceFull || inFlightPullWasForced;
+    const coveredDeep = !deepCheck || inFlightPullWasDeep;
+    if (coveredForce && coveredDeep) {
+      return inFlightPullPromise;
+    }
+    await inFlightPullPromise.catch(() => false);
   }
 
   isPullInFlight = true;
+  inFlightPullWasForced = forceFull;
+  inFlightPullWasDeep = deepCheck;
   const runPull = async (): Promise<boolean> => {
     try {
       const sinceVersion = forceFull ? '' : localStorage.getItem(LAST_VERSION_KEY) || '';
@@ -1115,7 +1153,7 @@ export async function pullChangesFromAppsScript(forceFull = false, deepCheck = f
       // Fallback aman: jika scanDrive=1 lambat/gagal, langsung muat Sheets saja tanpa menunggu Drive scan
       if (!res.ok && shouldScanDrive) {
         res = await getFromAppsScript(
-          { action: 'getAll', sinceVersion: '' },
+          deepCheck ? { action: 'getAll', sinceVersion: '', deep: '1' } : { action: 'getAll', sinceVersion: '' },
           30000,
           0
         );
@@ -1164,6 +1202,8 @@ export async function pullChangesFromAppsScript(forceFull = false, deepCheck = f
     } finally {
       isPullInFlight = false;
       inFlightPullPromise = null;
+      inFlightPullWasForced = false;
+      inFlightPullWasDeep = false;
     }
   };
 
@@ -1433,7 +1473,7 @@ export async function updateSheetBinding(
   });
   localStorage.removeItem(LAST_VERSION_KEY);
   localStorage.removeItem(HAS_SYNCED_SHEET_KEY);
-  localStorage.removeItem('kitarajin_session_user');
+  clearNonSuperadminStoredSessions();
   hasDoneSessionDriveScan = false;
   drivePhotoCache.clear();
 

@@ -87,6 +87,7 @@ export const STORAGE_KEYS = {
   LEAVE_REQUESTS: 'kitarajin_table_leave_requests',
   ASSIGNMENTS: 'kitarajin_table_assignments',
   CURRENT_USER_SESSION: 'kitarajin_session_user',
+  TAB_USER_SESSION: 'kitarajin_tab_session_user',
   SUPERADMIN_PASSWORD_CACHE: 'kitarajin_superadmin_password_cache',
 };
 
@@ -319,7 +320,45 @@ export function getAllUsers(): User[] {
     safeReadArray<User>(STORAGE_KEYS.USERS).filter(
       (u) => u && u.status !== 'dihapus' && !isDemoAccount(u)
     )
-  );
+  ).map((u) => {
+    const cleanName = String(u.name || u.username || u.email || u.nip || 'Pengguna').trim();
+    const cleanUsername = String(u.username || u.nip || u.email || '').trim();
+    const cleanNip = String(u.nip || '').trim();
+    const rawRole = String(u.role || '').trim().toLowerCase();
+    const normalizedRole: User['role'] =
+      rawRole === 'kepala_sekolah' || rawRole === 'kepala sekolah' || rawRole === 'kepsek'
+        ? 'kepala_sekolah'
+        : rawRole === 'admin' || rawRole === 'administrator' || rawRole === 'tu'
+        ? 'admin'
+        : 'karyawan';
+    const isActiveBool =
+      u.isActive === undefined || u.isActive === null
+        ? true
+        : typeof u.isActive === 'boolean'
+        ? u.isActive
+        : !['false', '0', 'nonaktif', 'tidak', 'no'].includes(String(u.isActive).trim().toLowerCase());
+    return {
+      ...u,
+      id: String(u.id),
+      nip: cleanNip,
+      name: cleanName,
+      username: cleanUsername,
+      role: normalizedRole,
+      position: String(
+        u.position ||
+          (normalizedRole === 'kepala_sekolah'
+            ? 'Kepala Sekolah'
+            : normalizedRole === 'admin'
+            ? 'Administrator'
+            : 'Staff')
+      ).trim(),
+      isActive: isActiveBool,
+      assignedSessionIds:
+        Array.isArray(u.assignedSessionIds) && u.assignedSessionIds.length > 0
+          ? u.assignedSessionIds
+          : ['sesi-1', 'sesi-2', 'sesi-3'],
+    };
+  });
 }
 
 export function getAllDepartments(): Department[] {
@@ -332,12 +371,39 @@ export function getAuditLogs(): AuditLog[] {
   return dedupeById(safeReadArray<AuditLog>(STORAGE_KEYS.AUDIT_LOGS));
 }
 
+function readRawStoredSession(): User | null {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      const tabRaw = sessionStorage.getItem(STORAGE_KEYS.TAB_USER_SESSION);
+      if (tabRaw) {
+        return JSON.parse(tabRaw) as User;
+      }
+    }
+    const localRaw = localStorage.getItem(STORAGE_KEYS.CURRENT_USER_SESSION);
+    if (!localRaw) return null;
+    const parsed = JSON.parse(localRaw) as User;
+    if (parsed?.id && typeof sessionStorage !== 'undefined') {
+      sessionStorage.setItem(STORAGE_KEYS.TAB_USER_SESSION, localRaw);
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function hasActiveTabSession(): boolean {
+  try {
+    return typeof sessionStorage !== 'undefined' && Boolean(sessionStorage.getItem(STORAGE_KEYS.TAB_USER_SESSION));
+  } catch {
+    return false;
+  }
+}
+
 export function refreshCurrentSessionFromUsers(): User | null {
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.CURRENT_USER_SESSION);
-    if (!raw) return null;
-    const sessionUser = JSON.parse(raw);
+    const sessionUser = readRawStoredSession();
     if (!sessionUser?.id || isDemoAccount(sessionUser)) {
+      if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(STORAGE_KEYS.TAB_USER_SESSION);
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_SESSION);
       return null;
     }
@@ -348,10 +414,15 @@ export function refreshCurrentSessionFromUsers(): User | null {
     const allUsers = getAllUsers();
     const latest = allUsers.find((u) => u.id === sessionUser.id);
     if (latest) {
-      saveSession(latest);
+      const { passwordHash: _ph, ...safeLatest } = latest;
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem(STORAGE_KEYS.TAB_USER_SESSION, JSON.stringify(safeLatest));
+      }
+      localStorage.setItem(STORAGE_KEYS.CURRENT_USER_SESSION, JSON.stringify(safeLatest));
       return latest;
     }
     if (allUsers.length > 0 || isAppsScriptConfigured()) {
+      if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(STORAGE_KEYS.TAB_USER_SESSION);
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_SESSION);
       return null;
     }
@@ -539,14 +610,39 @@ export function logAuditAction(
 /**
  * Autentikasi Pengguna
  */
+function findMatchingUserByIdentifier(users: User[], cleanId: string): User | undefined {
+  return (
+    users.find((u) => String(u.username || '').trim().toLowerCase() === cleanId) ||
+    users.find(
+      (u) =>
+        (u.email && String(u.email).trim().toLowerCase() === cleanId) ||
+        String(u.nip || '').trim().toLowerCase() === cleanId
+    )
+  );
+}
+
+async function doesPasswordMatchUser(user: User, rawPassword: string): Promise<boolean> {
+  const sheetPlainPass =
+    user.savedPassword !== undefined && user.savedPassword !== null ? String(user.savedPassword) : '';
+  if (sheetPlainPass.trim() !== '') {
+    return sheetPlainPass === rawPassword || sheetPlainPass.trim() === rawPassword.trim();
+  }
+  if (user.passwordHash) {
+    return verifyPassword(rawPassword, user.passwordHash);
+  }
+  return false;
+}
+
 export async function authenticateUser(
   identifier: string,
   rawPassword: string
 ): Promise<{ success: boolean; user?: User; message: string }> {
   const cleanId = identifier.trim().toLowerCase();
+  const isOnline = typeof navigator === 'undefined' || navigator.onLine;
+  const gasConfigured = isAppsScriptConfigured();
 
-  // Wajib sinkronkan langsung dengan database Sheet ID yang ditempelkan saat online
-  if (isAppsScriptConfigured() && (typeof navigator === 'undefined' || navigator.onLine)) {
+  // Sinkronkan data dari Apps Script (jalur cepat terlebih dahulu)
+  if (gasConfigured && isOnline) {
     const synced = await pullChangesFromAppsScript(true, false).catch(() => false);
     if (!synced) {
       return {
@@ -557,15 +653,19 @@ export async function authenticateUser(
     }
   }
 
-  const users = getAllUsers();
-  // Prioritaskan pencocokan baris username dari Google Sheets, dengan fallback Email/NIP
-  const user =
-    users.find((u) => String(u.username || '').trim().toLowerCase() === cleanId) ||
-    users.find(
-      (u) =>
-        (u.email && String(u.email).trim().toLowerCase() === cleanId) ||
-        String(u.nip || '').trim().toLowerCase() === cleanId
-    );
+  let users = getAllUsers();
+  let user = findMatchingUserByIdentifier(users, cleanId);
+  let isMatch = user ? await doesPasswordMatchUser(user, rawPassword) : false;
+
+  // Jika pengguna baru ditambahkan/diubah manual langsung di Google Sheets dan belum masuk CacheService, lakukan deep sync langsung ke Sheet
+  if (gasConfigured && isOnline && (!user || !isMatch)) {
+    const deepSynced = await pullChangesFromAppsScript(true, true).catch(() => false);
+    if (deepSynced) {
+      users = getAllUsers();
+      user = findMatchingUserByIdentifier(users, cleanId);
+      isMatch = user ? await doesPasswordMatchUser(user, rawPassword) : false;
+    }
+  }
 
   if (!user) {
     return {
@@ -582,18 +682,6 @@ export async function authenticateUser(
       success: false,
       message: 'Akun ini sedang dinonaktifkan oleh pimpinan. Silakan hubungi Kepala Sekolah atau Admin.',
     };
-  }
-
-  const sheetPlainPass = user.savedPassword !== undefined && user.savedPassword !== null
-    ? String(user.savedPassword)
-    : '';
-  let isMatch = false;
-
-  if (sheetPlainPass.trim() !== '') {
-    // Jika password teks pada Sheet tersedia (termasuk yang diedit langsung di Google Sheets), cocokkan langsung
-    isMatch = sheetPlainPass === rawPassword || sheetPlainPass.trim() === rawPassword;
-  } else if (user.passwordHash) {
-    isMatch = await verifyPassword(rawPassword, user.passwordHash);
   }
 
   if (!isMatch) {
@@ -682,15 +770,19 @@ export async function bootstrapFirstKepalaSekolahAccount(params: {
 
 export function saveSession(user: User): void {
   const { passwordHash, ...safeUser } = user;
-  localStorage.setItem(STORAGE_KEYS.CURRENT_USER_SESSION, JSON.stringify(safeUser));
+  const serialized = JSON.stringify(safeUser);
+  if (typeof sessionStorage !== 'undefined') {
+    sessionStorage.setItem(STORAGE_KEYS.TAB_USER_SESSION, serialized);
+  }
+  localStorage.setItem(STORAGE_KEYS.CURRENT_USER_SESSION, serialized);
 }
 
 export function getCurrentSession(): User | null {
   try {
-    const data = localStorage.getItem(STORAGE_KEYS.CURRENT_USER_SESSION);
-    if (!data) return null;
-    const safeUser = JSON.parse(data);
+    const safeUser = readRawStoredSession();
+    if (!safeUser) return null;
     if (!safeUser?.id || isDemoAccount(safeUser)) {
+      if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(STORAGE_KEYS.TAB_USER_SESSION);
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_SESSION);
       return null;
     }
@@ -701,6 +793,7 @@ export function getCurrentSession(): User | null {
     const fullUser = allUsers.find((u) => u.id === safeUser.id);
     if (fullUser) return fullUser;
     if (allUsers.length > 0 || isAppsScriptConfigured()) {
+      if (typeof sessionStorage !== 'undefined') sessionStorage.removeItem(STORAGE_KEYS.TAB_USER_SESSION);
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_SESSION);
       return null;
     }
@@ -713,6 +806,9 @@ export function getCurrentSession(): User | null {
 export function clearSession(actor?: User): void {
   if (actor) {
     logAuditAction(actor, 'USER_LOGOUT', 'Users', actor.id, 'Pengguna keluar dari sistem (logout).', true);
+  }
+  if (typeof sessionStorage !== 'undefined') {
+    sessionStorage.removeItem(STORAGE_KEYS.TAB_USER_SESSION);
   }
   localStorage.removeItem(STORAGE_KEYS.CURRENT_USER_SESSION);
 }

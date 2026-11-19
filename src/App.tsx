@@ -12,6 +12,7 @@ import {
   refreshCurrentSessionFromUsers,
   reconcileUserReferences,
   getAllUsers,
+  hasActiveTabSession,
 } from './services/storage';
 import { LoginForm } from './components/auth/LoginForm';
 import { Shell } from './components/layout/Shell';
@@ -149,7 +150,12 @@ export default function App() {
     });
 
     const handleStorageEvent = (ev: StorageEvent) => {
-      if (!ev.key || ev.key === 'kitarajin_table_users' || ev.key === 'kitarajin_session_user') {
+      if (ev.key === 'kitarajin_session_user') {
+        // Pertahankan sesi multi-pengguna per tab jika tab ini sudah login dengan akun sendiri
+        if (!hasActiveTabSession()) {
+          syncSessionAndReferences('users');
+        }
+      } else if (!ev.key || ev.key === 'kitarajin_table_users') {
         syncSessionAndReferences('users');
       } else {
         scheduleSyncRender();
