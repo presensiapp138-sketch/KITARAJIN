@@ -23,6 +23,7 @@ import {
   pullChangesFromAppsScript,
   isAppsScriptConfigured,
   flushAttendanceBatch,
+  hydrateAppsScriptConfig,
   parseAndApplyAutoConnectUrlParams,
 } from './services/appsScriptSync';
 
@@ -96,6 +97,7 @@ export default function App() {
 
     async function init() {
       parseAndApplyAutoConnectUrlParams();
+      await hydrateAppsScriptConfig();
       await initializeDatabase();
       if (!isMounted) return;
 

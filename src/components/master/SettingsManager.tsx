@@ -32,6 +32,7 @@ import {
   Activity,
   Sparkles,
   Wrench,
+  RefreshCw,
 } from 'lucide-react';
 
 import { AppSettings, SystemCheckResult, User } from '../../types';
@@ -132,6 +133,10 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
 
     const handleSyncEvent = () => {
       const latestData = getAppSettings();
+      const latestGas = getAppsScriptConfig();
+      setGasConfig(latestGas);
+      if (latestGas.webAppUrl) setWebAppUrlInput(latestGas.webAppUrl);
+      if (latestGas.apiToken) setApiTokenInput(latestGas.apiToken);
       setSettings(latestData);
       setSchoolName(latestData.schoolName);
       setSchoolAddress(latestData.schoolAddress);
@@ -173,6 +178,36 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     );
   }, [currentUser]);
 
+  const persistAndLockConfig = async (cleanUrl: string, cleanToken: string) => {
+    const saved = saveAppsScriptConfig({
+      webAppUrl: cleanUrl,
+      apiToken: cleanToken,
+      isLocked: true,
+    });
+    setGasConfig(saved);
+    setShowToken(false);
+
+    setIsTestingConnection(true);
+    setFeedback(null);
+    try {
+      const check = await runSystemCheck();
+      setSystemCheckResult(check);
+      if (check.authorized && check.sheetsConnected && check.driveConnected) {
+        setFeedback({
+          type: 'success',
+          message: 'Tersimpan & Terkunci',
+        });
+      } else {
+        setFeedback({
+          type: 'error',
+          message: check.error || 'Konfigurasi tersimpan & terkunci, namun koneksi ke Sheets/Drive belum sepenuhnya valid. Periksa menu Cek Sistem.',
+        });
+      }
+    } finally {
+      setIsTestingConnection(false);
+    }
+  };
+
   // Simpan & Kunci URL + Token Apps Script (cukup tempel 1x, bertahan saat refresh & Vercel)
   const handleSaveAndLockAppsScript = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -194,32 +229,19 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       return;
     }
 
-    const saved = saveAppsScriptConfig({
-      webAppUrl: cleanUrl,
-      apiToken: cleanToken,
-      isLocked: true,
-    });
-    setGasConfig(saved);
-    setShowToken(false);
+    await persistAndLockConfig(cleanUrl, cleanToken);
+  };
 
-    setIsTestingConnection(true);
-    setFeedback(null);
-    try {
-      const check = await runSystemCheck();
-      setSystemCheckResult(check);
-      if (check.authorized && check.sheetsConnected && check.driveConnected) {
-        setFeedback({
-          type: 'success',
-          message: `Konfigurasi Apps Script disimpan & DIKUNCI! Terhubung ke Google Sheets "${check.sheetName || 'Database'}" & folder Drive "${check.driveFolderName || 'Privat'}". Sinkronisasi otomatis 2-arah aktif.`,
-        });
-      } else {
-        setFeedback({
-          type: 'error',
-          message: check.error || 'Konfigurasi terkunci, namun koneksi ke Sheets/Drive belum sepenuhnya valid. Periksa menu Cek Sistem.',
-        });
-      }
-    } finally {
-      setIsTestingConnection(false);
+  // Otomatis langsung simpan & kunci saat URL /exec & Token valid selesai ditempel/diisi
+  const tryAutoSaveAndLockOnComplete = (nextUrl: string, nextToken: string) => {
+    if (isTestingConnection) return;
+    const cleanUrl = nextUrl.trim();
+    const cleanToken = nextToken.trim();
+    const live = getAppsScriptConfig();
+    if (live.isLocked && live.webAppUrl === cleanUrl && live.apiToken === cleanToken) return;
+    const isValidExecUrl = /^https:\/\/script\.google\.com\/macros\/s\/[a-zA-Z0-9_-]{10,}\/exec(\?.*)?$/i.test(cleanUrl);
+    if (isValidExecUrl && cleanToken.length >= 6) {
+      persistAndLockConfig(cleanUrl, cleanToken);
     }
   };
 
@@ -361,7 +383,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       }
       setFeedback({
         type: 'success',
-        message: 'Profil Kepala Sekolah berhasil disimpan dan otomatis tersinkron ke Google Sheets.',
+        message: 'Tersimpan',
       });
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -396,7 +418,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       if (res.success) {
         setFeedback({
           type: 'success',
-          message: 'Password login Kepala Sekolah berhasil diperbarui ke Google Sheets.',
+          message: 'Tersimpan',
         });
         setKsPassword('');
         setKsConfirmPassword('');
@@ -427,7 +449,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
     }
     const res = updateSuperadminCachedPassword(saNewPassword);
     if (res.success) {
-      setFeedback({ type: 'success', message: res.message });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       setSaNewPassword('');
       setSaConfirmPassword('');
     } else {
@@ -455,7 +477,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       setSettings(getAppSettings());
       setFeedback({
         type: 'success',
-        message: 'Pengaturan identitas sekolah & kebijakan presensi berhasil disimpan ke Google Sheets.',
+        message: 'Tersimpan',
       });
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -517,6 +539,13 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           </span>
         </div>
       </div>
+
+      {(isUpdatingProfile || isUpdatingPassword || isSubmitting) && (
+        <div className="p-3.5 rounded-xl border bg-slate-50 border-slate-200 text-slate-800 flex items-center gap-2 text-xs sm:text-sm font-semibold">
+          <RefreshCw className="w-4 h-4 text-emerald-600 animate-spin shrink-0" />
+          <span>Menyimpan...</span>
+        </div>
+      )}
 
       {feedback && (
         <div
@@ -612,9 +641,9 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               />
               <span>
                 {syncUiState.kind === 'saving'
-                  ? 'Menyimpan ke Sheet...'
+                  ? 'Menyimpan...'
                   : syncUiState.kind === 'saved'
-                  ? 'Tersimpan ke Sheet'
+                  ? '✓ Tersimpan'
                   : syncUiState.kind === 'offline'
                   ? syncUiState.message
                   : syncUiState.kind === 'error'
@@ -676,6 +705,13 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 disabled={gasConfig.isLocked && syncUiState.isConfigured}
                 value={webAppUrlInput}
                 onChange={(e) => setWebAppUrlInput(e.target.value)}
+                onPaste={(e) => {
+                  const pasted = e.clipboardData.getData('text');
+                  if (pasted) {
+                    setTimeout(() => tryAutoSaveAndLockOnComplete(pasted, apiTokenInput), 120);
+                  }
+                }}
+                onBlur={() => tryAutoSaveAndLockOnComplete(webAppUrlInput, apiTokenInput)}
                 placeholder="https://script.google.com/macros/s/.../exec"
                 className="w-full px-3 py-2.5 rounded-xl border border-slate-300 text-xs font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-600"
               />
@@ -696,6 +732,13 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                   disabled={gasConfig.isLocked && syncUiState.isConfigured}
                   value={apiTokenInput}
                   onChange={(e) => setApiTokenInput(e.target.value)}
+                  onPaste={(e) => {
+                    const pasted = e.clipboardData.getData('text');
+                    if (pasted) {
+                      setTimeout(() => tryAutoSaveAndLockOnComplete(webAppUrlInput, pasted), 120);
+                    }
+                  }}
+                  onBlur={() => tryAutoSaveAndLockOnComplete(webAppUrlInput, apiTokenInput)}
                   placeholder="Harus sama dengan Script Property API_TOKEN"
                   className="w-full pl-3 pr-10 py-2.5 rounded-xl border border-slate-300 text-xs font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none disabled:bg-slate-100 disabled:text-slate-600"
                 />
@@ -719,8 +762,8 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
             <span className="text-[11px] text-slate-500">
               {gasConfig.isLocked && syncUiState.isConfigured
-                ? 'Konfigurasi sedang dikunci agar tidak berubah saat refresh atau digunakan di Vercel.'
-                : 'Setelah disimpan, URL & Token langsung dikunci dan sinkronisasi otomatis aktif tanpa tombol manual.'}
+                ? 'URL & Token tersimpan dan terkunci permanen. Pengguna lain langsung login tanpa memasukkan URL & Token.'
+                : 'Setelah URL (/exec) & Token diisi atau ditempel, sistem otomatis menyimpan dan menguncinya.'}
             </span>
 
             <div className="flex flex-wrap items-center gap-2">
@@ -739,7 +782,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                     type="button"
                     onClick={handleCopyVercelEnv}
                     className="px-3.5 py-2 rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-                    title="Tempel di Vercel -> Project Settings -> Environment Variables agar semua perangkat otomatis terhubung"
+                    title="Tempel di Vercel -> Project Settings -> Environment Variables agar semua perangkat otomatis terhubung tanpa input URL/Token"
                   >
                     {copiedVercelEnv ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
                     <span>{copiedVercelEnv ? 'Env Vercel Disalin!' : 'Salin Env Vercel'}</span>
@@ -1150,7 +1193,7 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
               className="px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-md transition-colors flex items-center gap-2 disabled:opacity-50 cursor-pointer"
             >
               <Key className="w-3.5 h-3.5" />
-              <span>{isUpdatingPassword ? 'Memperbarui Password...' : 'Ubah Password Kepala Sekolah'}</span>
+              <span>{isUpdatingPassword ? 'Menyimpan...' : 'Ubah Password Kepala Sekolah'}</span>
             </button>
           </div>
         </form>

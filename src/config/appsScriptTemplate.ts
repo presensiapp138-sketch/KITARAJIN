@@ -51,8 +51,8 @@ var SCHEMAS = {
   Attendance: [
     'id', 'userId', 'nip', 'userName', 'role', 'date', 'type', 'timestamp',
     'attendanceStatus', 'latitude', 'longitude', 'distanceFromLocationMeters',
-    'isLocationValid', 'isFaceValid', 'faceSimilarityScore', 'deviceInfo',
-    'notes', 'sessionId', 'sessionName', 'diubah_pada', 'status'
+    'locationName', 'isLocationValid', 'isFaceValid', 'faceSimilarityScore',
+    'deviceInfo', 'notes', 'sessionId', 'sessionName', 'diubah_pada', 'status'
   ],
   LeaveRequests: [
     'id', 'userId', 'nip', 'userName', 'type', 'startDate', 'endDate',
@@ -215,7 +215,7 @@ function doPost(e) {
 
     // Semua operasi penulisan dibungkus LockService agar aman multi-pengguna
     var lock = LockService.getScriptLock();
-    var locked = lock.tryLock(25000);
+    var locked = lock.tryLock(28000);
     if (!locked) {
       return jsonResponse_({
         ok: false,
@@ -283,8 +283,11 @@ function doPost(e) {
 
       if (result && result.ok) {
         if (didMutate) {
+          SpreadsheetApp.flush();
           bumpDataVersion_();
-          syncDatabaseSnapshotToDrive_(ss, props, sheetsMap);
+          if (action === 'repairSheetSync' || action === 'seedInitialIfEmpty') {
+            syncDatabaseSnapshotToDrive_(ss, props, sheetsMap);
+          }
         }
         result.version = getDataVersion_();
       }
@@ -643,6 +646,7 @@ function getColumnWidthPreset_(colName) {
     assignedToName: 185,
     assignedByName: 185,
     actorName: 185,
+    locationName: 185,
     sessionName: 145,
     title: 200,
     schoolName: 210,
@@ -739,7 +743,7 @@ function ensureAllSheets_(ss, sheetsMap) {
   var map = sheetsMap || getSheetsMap_(ss);
   var names = Object.keys(SCHEMAS);
   var sp = PropertiesService.getScriptProperties();
-  var schemaKey = ss.getId() + ':v4';
+  var schemaKey = ss.getId() + ':v5';
   var schemaCached = sp.getProperty('SCHEMA_INIT_KEY') === schemaKey;
 
   var allExist = true;
@@ -2323,6 +2327,8 @@ function handleRecordAttendanceBatch_(ss, payload) {
 
   var lastRow = sheet.getLastRow();
   var existingKeys = {};
+  var existingIds = {};
+  var colId = headers.indexOf('id');
   var colUserId = headers.indexOf('userId');
   var colDate = headers.indexOf('date');
   var colType = headers.indexOf('type');
@@ -2334,6 +2340,8 @@ function handleRecordAttendanceBatch_(ss, payload) {
     for (var r = 0; r < rows.length; r++) {
       if (!rows[r][0]) continue;
       if (colStatus !== -1 && String(rows[r][colStatus]).toLowerCase() === 'dihapus') continue;
+      var rId = colId !== -1 ? String(rows[r][colId] || '').trim() : String(rows[r][0] || '').trim();
+      if (rId) existingIds[rId] = true;
       var rDate = colDate !== -1 ? String(deserializeCellValue_('date', rows[r][colDate]) || '') : '';
       var rUid = colUserId !== -1 ? String(rows[r][colUserId] || '') : '';
       var rType = colType !== -1 ? String(rows[r][colType] || '') : '';
@@ -2344,6 +2352,8 @@ function handleRecordAttendanceBatch_(ss, payload) {
 
   var accepted = [];
   var rejected = [];
+  var rowsToInsert = [];
+  var logPayloads = [];
 
   for (var i = 0; i < items.length; i++) {
     var item = items[i];
@@ -2359,6 +2369,35 @@ function handleRecordAttendanceBatch_(ss, payload) {
     var effectiveTimestamp = serverIso;
     var sessKey = String(item.sessionId || 'default');
     var dupKey = String(item.userId) + '|' + effectiveDate + '|' + String(item.type) + '|' + sessKey;
+    var reqId = item.id ? String(item.id).trim() : '';
+
+    // Idempoten jika client retry mengirim ulang batch ID yang sama persis
+    if (reqId && existingIds[reqId]) {
+      accepted.push({
+        id: reqId,
+        userId: item.userId,
+        nip: item.nip || '',
+        userName: item.userName || '',
+        role: item.role || 'karyawan',
+        date: effectiveDate,
+        type: item.type,
+        timestamp: effectiveTimestamp,
+        status: item.status || 'tepat_waktu',
+        latitude: Number(item.latitude || 0),
+        longitude: Number(item.longitude || 0),
+        distanceFromLocationMeters: Number(item.distanceFromLocationMeters || 0),
+        locationName: String(item.locationName || ''),
+        isLocationValid: item.isLocationValid !== false,
+        isFaceValid: item.isFaceValid !== false,
+        faceSimilarityScore: Number(item.faceSimilarityScore || 0),
+        deviceInfo: String(item.deviceInfo || ''),
+        notes: String(item.notes || ''),
+        sessionId: String(item.sessionId || ''),
+        sessionName: String(item.sessionName || ''),
+        photoRef: ''
+      });
+      continue;
+    }
 
     if (existingKeys[dupKey]) {
       rejected.push({
@@ -2373,7 +2412,9 @@ function handleRecordAttendanceBatch_(ss, payload) {
 
     existingKeys[dupKey] = true;
 
-    var recId = item.id || ('att-' + Date.now() + '-' + i + '-' + Math.floor(Math.random() * 1000));
+    var recId = reqId || ('att-' + Date.now() + '-' + i + '-' + Math.floor(Math.random() * 1000));
+    existingIds[recId] = true;
+
     var cleanRecord = {
       id: recId,
       userId: item.userId,
@@ -2387,6 +2428,7 @@ function handleRecordAttendanceBatch_(ss, payload) {
       latitude: Number(item.latitude || 0),
       longitude: Number(item.longitude || 0),
       distanceFromLocationMeters: Number(item.distanceFromLocationMeters || 0),
+      locationName: String(item.locationName || ''),
       isLocationValid: item.isLocationValid !== false,
       isFaceValid: item.isFaceValid !== false,
       faceSimilarityScore: Number(item.faceSimilarityScore || 0),
@@ -2403,21 +2445,65 @@ function handleRecordAttendanceBatch_(ss, payload) {
       rowVals.push(serializeCellValue_(headers[c], cleanRecord[headers[c]]));
     }
 
-    sheet.appendRow(rowVals);
-    var appendedAttRow = sheet.getLastRow();
-    applyTextFormatting_(sheet, appendedAttRow, headers);
-    formatSingleRowTidy_(sheet, appendedAttRow, headers);
-
-    appendLogEntry_(
-      ss,
-      { id: item.userId, name: item.userName, role: item.role },
-      'ATTENDANCE_' + String(item.type).toUpperCase(),
-      'Attendance',
-      recId,
-      'Presensi ' + String(item.type).toUpperCase() + ' oleh ' + item.userName + ' (NIP: ' + item.nip + ') | Sesi: ' + (item.sessionName || '-') + ' | Cocok Wajah: ' + Math.round(Number(item.faceSimilarityScore || 0) * 100) + '% | Jarak: ' + Number(item.distanceFromLocationMeters || 0) + 'm'
-    );
+    rowsToInsert.push(rowVals);
+    logPayloads.push({
+      id: 'log-' + Date.now() + '-' + i + '-' + Math.floor(Math.random() * 10000),
+      actorUserId: item.userId || 'system',
+      actorName: item.userName || 'Sistem',
+      actorRole: item.role || 'karyawan',
+      action: 'ATTENDANCE_' + String(item.type).toUpperCase(),
+      targetEntity: 'Attendance',
+      targetId: recId,
+      details: 'Presensi ' + String(item.type).toUpperCase() + ' oleh ' + item.userName + ' (NIP: ' + item.nip + ') | Lokasi: ' + (item.locationName || '-') + ' (' + Number(item.distanceFromLocationMeters || 0) + 'm) | Sesi: ' + (item.sessionName || '-') + ' | Cocok Wajah: ' + Math.round(Number(item.faceSimilarityScore || 0) * 100) + '%',
+      timestamp: serverIso,
+      diubah_pada: serverIso,
+      status: 'aktif'
+    });
 
     accepted.push(mapSheetRowToFrontendRecord_('Attendance', headers, rowVals));
+  }
+
+  // Batch write seluruh baris presensi dalam 1 panggilan range agar presensi bersamaan cepat & bebas error
+  if (rowsToInsert.length > 0) {
+    var startRow = Math.max(2, sheet.getLastRow() + 1);
+    var writeRange = sheet.getRange(startRow, 1, rowsToInsert.length, headers.length);
+    for (var tc = 0; tc < headers.length; tc++) {
+      if (TEXT_COLUMNS[headers[tc]]) {
+        sheet.getRange(startRow, tc + 1, rowsToInsert.length, 1).setNumberFormat('@');
+      }
+    }
+    writeRange.setValues(rowsToInsert);
+    try {
+      writeRange.setVerticalAlignment('middle').setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+      sheet.setRowHeights(startRow, rowsToInsert.length, 24);
+    } catch (fmtErr) {}
+
+    // Batch write Log aktivitas
+    var logSheet = ensureSheet_(ss, 'Log');
+    var logHeaders = getHeadersForSheet_(logSheet, 'Log');
+    var logRowsToInsert = [];
+    for (var li = 0; li < logPayloads.length; li++) {
+      var lObj = logPayloads[li];
+      var lRow = [];
+      for (var lc = 0; lc < logHeaders.length; lc++) {
+        lRow.push(serializeCellValue_(logHeaders[lc], lObj[logHeaders[lc]]));
+      }
+      logRowsToInsert.push(lRow);
+    }
+    if (logRowsToInsert.length > 0) {
+      var logStartRow = Math.max(2, logSheet.getLastRow() + 1);
+      var logWriteRange = logSheet.getRange(logStartRow, 1, logRowsToInsert.length, logHeaders.length);
+      for (var ltc = 0; ltc < logHeaders.length; ltc++) {
+        if (TEXT_COLUMNS[logHeaders[ltc]]) {
+          logSheet.getRange(logStartRow, ltc + 1, logRowsToInsert.length, 1).setNumberFormat('@');
+        }
+      }
+      logWriteRange.setValues(logRowsToInsert);
+      try {
+        logWriteRange.setVerticalAlignment('middle').setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
+        logSheet.setRowHeights(logStartRow, logRowsToInsert.length, 24);
+      } catch (lFmtErr) {}
+    }
   }
 
   return {
@@ -2619,7 +2705,7 @@ function handleRepairSheetSync_(ss, props, sheetsMap, payload) {
       report.headersAdded.push({ table: tName, columns: missingCols });
     }
   }
-  sp.setProperty('SCHEMA_INIT_KEY', ss.getId() + ':v4');
+  sp.setProperty('SCHEMA_INIT_KEY', ss.getId() + ':v5');
   map = getSheetsMap_(ss);
 
   // 2. Hitung total baris sebelum impor legacy + foto wajah kosong sebelum scan Drive

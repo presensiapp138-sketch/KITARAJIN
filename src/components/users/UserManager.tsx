@@ -280,7 +280,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
         });
 
         if (res.success) {
-          setFeedback({ type: 'success', message: res.message });
+          setFeedback({ type: 'success', message: 'Tersimpan' });
           setIsUserModalOpen(false);
           loadData();
         } else {
@@ -309,7 +309,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
         });
 
         if (res.success) {
-          setFeedback({ type: 'success', message: res.message });
+          setFeedback({ type: 'success', message: 'Tersimpan' });
           setIsUserModalOpen(false);
           loadData();
         } else {
@@ -326,7 +326,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
   const handleToggleUserStatus = (targetUser: User) => {
     const res = toggleUserStatus(currentUser, targetUser.id);
     if (res.success) {
-      setFeedback({ type: 'success', message: res.message });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -341,7 +341,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
     setConfirmModal(null);
     const res = await deleteUser(currentUser, targetUser.id);
     if (res.success) {
-      setFeedback({ type: 'success', message: res.message });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -367,7 +367,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
 
     const res = updateUserSessions(currentUser, targetUser.id, updated);
     if (res.success) {
-      setFeedback({ type: 'success', message: res.message });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -451,7 +451,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
     if (res.success) {
       setFeedback({
         type: 'success',
-        message: `Jam ${sched.sessionName || sched.name} berhasil disimpan! Buka Masuk: ${times.checkInStart} WIB, Batas Masuk: ${times.checkInDeadline} WIB, Buka Pulang: ${times.checkOutStart} WIB, Batas Pulang: ${times.checkOutEnd} WIB. Terhubung langsung ke HP seluruh karyawan.`,
+        message: 'Tersimpan',
       });
       loadData();
     } else {
@@ -462,6 +462,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
   const handleToggleEmployeeInSession = (userId: string, sessionId: string, currentAssigned: boolean) => {
     const res = toggleUserSession(currentUser, userId, sessionId, !currentAssigned);
     if (res.success) {
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -474,7 +475,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
       : users.filter((u) => u.role === 'karyawan').map((u) => u.id);
     const res = assignUsersToSession(currentUser, sessionId, targetIds);
     if (res.success) {
-      setFeedback({ type: 'success', message: res.message });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -484,7 +485,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
   const handleClearAllEmployeesFromSession = (sessionId: string) => {
     const res = assignUsersToSession(currentUser, sessionId, []);
     if (res.success) {
-      setFeedback({ type: 'success', message: `Seluruh penugasan karyawan pada sesi ini telah dikosongkan.` });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -515,7 +516,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
       });
 
       if (res.success) {
-        setFeedback({ type: 'success', message: res.message });
+        setFeedback({ type: 'success', message: 'Tersimpan' });
         setIsSessionModalOpen(false);
         loadData();
       } else {
@@ -535,7 +536,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
       });
 
       if (res.success) {
-        setFeedback({ type: 'success', message: res.message });
+        setFeedback({ type: 'success', message: 'Tersimpan' });
         setIsSessionModalOpen(false);
         loadData();
         if (res.schedule) {
@@ -555,7 +556,7 @@ export const UserManager: React.FC<UserManagerProps> = ({
   const executeConfirmDeleteSession = (sched: Schedule) => {
     const res = deleteSchedule(currentUser, sched.id);
     if (res.success) {
-      setFeedback({ type: 'success', message: res.message });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -609,10 +610,18 @@ export const UserManager: React.FC<UserManagerProps> = ({
         </div>
       </div>
 
+      {/* Saving Indicator */}
+      {(isSubmittingUser || isSubmittingSession || Boolean(savingSessionId)) && (
+        <div className="p-3.5 rounded-xl border bg-slate-50 border-slate-200 text-slate-800 flex items-center gap-2 text-xs sm:text-sm font-semibold">
+          <RefreshCw className="w-4 h-4 text-emerald-600 animate-spin shrink-0" />
+          <span>Menyimpan...</span>
+        </div>
+      )}
+
       {/* Feedback Banner */}
       {feedback && (
         <div
-          className={`p-4 rounded-xl border flex items-center justify-between text-xs sm:text-sm ${
+          className={`p-3.5 rounded-xl border flex items-center justify-between text-xs sm:text-sm font-semibold ${
             feedback.type === 'success'
               ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
               : 'bg-rose-50 border-rose-200 text-rose-900'

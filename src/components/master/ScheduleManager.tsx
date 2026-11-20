@@ -229,7 +229,7 @@ export const ScheduleManager: React.FC<ScheduleManagerProps> = ({ currentUser })
       });
 
       if (res.success) {
-        setFeedback({ type: 'success', message: res.message });
+        setFeedback({ type: 'success', message: 'Tersimpan' });
         setIsModalOpen(false);
         loadData();
       } else {
@@ -250,7 +250,7 @@ export const ScheduleManager: React.FC<ScheduleManagerProps> = ({ currentUser })
       });
 
       if (res.success) {
-        setFeedback({ type: 'success', message: res.message });
+        setFeedback({ type: 'success', message: 'Tersimpan' });
         setIsModalOpen(false);
         loadData();
       } else {
@@ -269,7 +269,7 @@ export const ScheduleManager: React.FC<ScheduleManagerProps> = ({ currentUser })
     if (!deleteTarget) return;
     const res = deleteSchedule(currentUser, deleteTarget.id);
     if (res.success) {
-      setFeedback({ type: 'success', message: res.message });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -280,7 +280,7 @@ export const ScheduleManager: React.FC<ScheduleManagerProps> = ({ currentUser })
   const handleToggleActive = (sch: Schedule) => {
     const res = updateSchedule(currentUser, sch.id, { isActive: !sch.isActive });
     if (res.success) {
-      setFeedback({ type: 'success', message: res.message });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });

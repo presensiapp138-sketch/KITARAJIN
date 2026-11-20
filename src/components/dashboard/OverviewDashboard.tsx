@@ -725,7 +725,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                               WIB
                             </div>
                             <div className="text-slate-600 text-[10px]">
-                              Jarak: {pair.masukRecord.distanceFromLocationMeters ?? 0}m &bull; Wajah: {Math.round((pair.masukRecord.faceSimilarityScore ?? 0) * 100)}%
+                              Lokasi: <strong>{pair.masukRecord.locationName || 'Lokasi Sekolah'}</strong> ({pair.masukRecord.distanceFromLocationMeters ?? 0}m) &bull; Scan Wajah: <strong>{Math.round(Number(pair.masukRecord.faceSimilarityScore ?? 0) <= 1 ? Number(pair.masukRecord.faceSimilarityScore ?? 0) * 100 : Number(pair.masukRecord.faceSimilarityScore ?? 0))}%</strong>
                             </div>
                           </div>
                         </div>
@@ -790,7 +790,7 @@ export const OverviewDashboard: React.FC<OverviewDashboardProps> = ({
                               WIB
                             </div>
                             <div className="text-slate-600 text-[10px]">
-                              Jarak: {pair.pulangRecord.distanceFromLocationMeters ?? 0}m &bull; Wajah: {Math.round((pair.pulangRecord.faceSimilarityScore ?? 0) * 100)}%
+                              Lokasi: <strong>{pair.pulangRecord.locationName || 'Lokasi Sekolah'}</strong> ({pair.pulangRecord.distanceFromLocationMeters ?? 0}m) &bull; Scan Wajah: <strong>{Math.round(Number(pair.pulangRecord.faceSimilarityScore ?? 0) <= 1 ? Number(pair.pulangRecord.faceSimilarityScore ?? 0) * 100 : Number(pair.pulangRecord.faceSimilarityScore ?? 0))}%</strong>
                             </div>
                           </div>
                         </div>

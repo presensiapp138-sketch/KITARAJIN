@@ -21,6 +21,7 @@ import { hashPassword, verifyPassword } from './crypto';
 import {
   ActorPayload,
   enqueueAttendanceScan,
+  hydrateAppsScriptConfig,
   isAppsScriptConfigured,
   pullChangesFromAppsScript,
   pullUsersForLogin,
@@ -469,7 +470,7 @@ export function reconcileUserReferences(
     // ignore
   }
 
-  // 2. Attendance
+  // 2. Attendance (perbarui cache lokal; riwayat presensi selalu menyelaraskan Nama/NIP dari tabel Users)
   try {
     const rawAtt = localStorage.getItem(STORAGE_KEYS.ATTENDANCE);
     if (rawAtt) {
@@ -479,11 +480,7 @@ export function reconcileUserReferences(
         const u = userById.get(r.userId);
         if (u && (r.userName !== u.name || r.nip !== u.nip)) {
           changed = true;
-          const item = { ...r, userName: u.name, nip: u.nip };
-          if (syncChangedToServer && r.syncState === 'synced') {
-            syncUpdateRow('Attendance', item.id, { userName: u.name, nip: u.nip }, item.diubah_pada, ksUser ? toActor(ksUser) : undefined).catch(() => {});
-          }
-          return item;
+          return { ...r, userName: u.name, nip: u.nip };
         }
         return r;
       });
@@ -500,6 +497,7 @@ export function reconcileUserReferences(
   try {
     const leaves = getAllLeaveRequests();
     let changed = false;
+    let syncedLeaves = 0;
     const updated = leaves.map((l) => {
       const u = userById.get(l.userId);
       let nextReviewedBy = l.reviewedBy;
@@ -519,7 +517,8 @@ export function reconcileUserReferences(
           nip: u ? u.nip : l.nip,
           reviewedBy: nextReviewedBy,
         };
-        if (syncChangedToServer) {
+        if (syncChangedToServer && syncedLeaves < 3) {
+          syncedLeaves++;
           syncUpdateRow(
             'LeaveRequests',
             item.id,
@@ -544,6 +543,7 @@ export function reconcileUserReferences(
   try {
     const tasks = getAllAssignments();
     let changed = false;
+    let syncedTasks = 0;
     const updated = tasks.map((t) => {
       const toUser = userById.get(t.assignedToUserId);
       const byUser = userById.get(t.assignedByUserId);
@@ -552,7 +552,8 @@ export function reconcileUserReferences(
       if (nextToName !== t.assignedToName || nextByName !== t.assignedByName) {
         changed = true;
         const item = { ...t, assignedToName: nextToName, assignedByName: nextByName };
-        if (syncChangedToServer) {
+        if (syncChangedToServer && syncedTasks < 3) {
+          syncedTasks++;
           syncUpdateRow(
             'Assignments',
             item.id,
@@ -640,6 +641,9 @@ export async function authenticateUser(
 ): Promise<{ success: boolean; user?: User; message: string }> {
   const cleanId = identifier.trim().toLowerCase();
   const isOnline = typeof navigator === 'undefined' || navigator.onLine;
+  if (!isAppsScriptConfigured()) {
+    await hydrateAppsScriptConfig().catch(() => false);
+  }
   const gasConfigured = isAppsScriptConfigured();
 
   // Jalur login ultra-cepat (<150ms) melalui CacheService tab Users tanpa memblokir pengguna lain
@@ -669,6 +673,13 @@ export async function authenticateUser(
   }
 
   if (!user) {
+    if (!gasConfigured && users.length === 0) {
+      return {
+        success: false,
+        message:
+          'Aplikasi di perangkat ini belum terhubung ke database sekolah. Silakan buka melalui Link Akses Terhubung dari Superadmin atau pastikan Env Vercel sudah terpasang.',
+      };
+    }
     return {
       success: false,
       message:
@@ -1044,8 +1055,8 @@ export async function updateUser(
     }
   }
 
-  reconcileUserReferences(getAllUsers(), true, oldNameHints);
-  return { success: true, message: `Data akun ${targetUser.name} berhasil tersimpan di Google Sheets.` };
+  reconcileUserReferences(getAllUsers(), oldNameHints.size > 0 || updates.nip !== undefined, oldNameHints);
+  return { success: true, message: 'Tersimpan' };
 }
 
 export function toggleUserStatus(
@@ -2012,7 +2023,11 @@ export function recordAttendance(
   }
 
   const isOfflineNow = typeof navigator !== 'undefined' && !navigator.onLine;
-  // PRESENSI TIDAK MENYIMPAN FOTO: hanya menyimpan nama, NIP, kecocokan wajah, GPS, dan sesi
+  const locationsList = getAllLocations();
+  const activeLoc = locationsList.find((l) => l.isActive) || locationsList[0];
+  const resolvedLocationName = recordData.locationName?.trim() || activeLoc?.name || '';
+
+  // PRESENSI TIDAK MENYIMPAN FOTO: hanya menyimpan nama, NIP, kecocokan wajah, GPS, lokasi, dan sesi
   const newRecord: AttendanceRecord = {
     id: `att-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
     userId: recordData.userId,
@@ -2026,6 +2041,7 @@ export function recordAttendance(
     latitude: recordData.latitude,
     longitude: recordData.longitude,
     distanceFromLocationMeters: recordData.distanceFromLocationMeters,
+    locationName: resolvedLocationName,
     isLocationValid: recordData.isLocationValid,
     isFaceValid: recordData.isFaceValid,
     faceSimilarityScore: recordData.faceSimilarityScore,

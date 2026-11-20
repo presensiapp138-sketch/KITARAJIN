@@ -111,6 +111,7 @@ export interface AttendanceRecord {
   latitude: number;
   longitude: number;
   distanceFromLocationMeters: number;
+  locationName?: string;
   isLocationValid: boolean;
   isFaceValid: boolean;
   faceSimilarityScore: number;

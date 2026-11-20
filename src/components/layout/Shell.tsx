@@ -35,6 +35,7 @@ import {
   EyeOff,
   Lock,
   Activity,
+  AlertCircle,
 } from 'lucide-react';
 
 import { User, UserRole, AppSettings } from '../../types';
@@ -155,9 +156,9 @@ export const Shell: React.FC<ShellProps> = ({
         phone: editPhone.trim(),
       };
       if (onUpdateCurrentUser) onUpdateCurrentUser(updated);
-      setProfileMsg({ type: 'success', text: editPassword.trim() ? 'Profil dan Password login berhasil diperbarui!' : 'Profil berhasil diperbarui!' });
+      setProfileMsg({ type: 'success', text: 'Tersimpan' });
       setEditPassword('');
-      setTimeout(() => setProfileModalOpen(false), 350);
+      setTimeout(() => setProfileModalOpen(false), 550);
     } else {
       setProfileMsg({ type: 'error', text: res.message });
     }
@@ -504,15 +505,26 @@ export const Shell: React.FC<ShellProps> = ({
               </button>
             </div>
 
+            {isSaving && (
+              <div className="p-3 rounded-xl text-xs flex items-center gap-2 bg-slate-50 text-slate-700 border border-slate-200 font-semibold">
+                <Activity className="w-4 h-4 shrink-0 text-emerald-600 animate-spin" />
+                <span>Menyimpan...</span>
+              </div>
+            )}
+
             {profileMsg && (
               <div
-                className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
+                className={`p-3 rounded-xl text-xs flex items-center gap-2 font-semibold ${
                   profileMsg.type === 'success'
                     ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
                     : 'bg-rose-50 text-rose-800 border border-rose-200'
                 }`}
               >
-                <CheckCircle className="w-4 h-4 shrink-0 text-emerald-600" />
+                {profileMsg.type === 'success' ? (
+                  <CheckCircle className="w-4 h-4 shrink-0 text-emerald-600" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                )}
                 <span>{profileMsg.text}</span>
               </div>
             )}

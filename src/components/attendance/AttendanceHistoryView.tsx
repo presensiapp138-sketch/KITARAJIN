@@ -28,12 +28,13 @@ import {
   FileDown,
   Trash2,
 } from 'lucide-react';
-import { User, DailyAttendancePair, AttendanceRecord } from '../../types';
+import { User, DailyAttendancePair, AttendanceRecord, LocationConfig } from '../../types';
 import {
   getAllAttendanceRecords,
   getAttendanceForUser,
   groupAttendanceByDateAndUser,
   getAllUsers,
+  getAllLocations,
   getLocalDateString,
   deleteAttendanceRecord,
 } from '../../services/storage';
@@ -51,6 +52,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
   onNavigateTo,
 }) => {
   const [pairs, setPairs] = useState<DailyAttendancePair[]>([]);
+  const [locations, setLocations] = useState<LocationConfig[]>([]);
   const [scopeFilter, setScopeFilter] = useState<'my' | 'all'>(
     currentUser.role === 'karyawan' ? 'my' : 'all'
   );
@@ -69,6 +71,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
   } | null>(null);
 
   const loadData = () => {
+    setLocations(getAllLocations());
     let rawRecords: AttendanceRecord[] = [];
     if (currentUser.role === 'karyawan' || scopeFilter === 'my') {
       rawRecords = getAttendanceForUser(currentUser.id);
@@ -153,7 +156,18 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
     return { label: 'Karyawan / Guru', cls: 'bg-emerald-100 text-emerald-800 border-emerald-200' };
   };
 
-  // Ringkasan riwayat presensi & kecocokan wajah per masing-masing staff (termasuk KS & Admin)
+  const resolveLocationName = (rec?: AttendanceRecord): string => {
+    if (!rec) return '-';
+    if (rec.locationName && rec.locationName.trim()) return rec.locationName.trim();
+    const activeLoc = locations.find((l) => l.isActive) || locations[0];
+    if (activeLoc?.name) return activeLoc.name;
+    if (rec.latitude || rec.longitude) {
+      return `${Number(rec.latitude).toFixed(5)}, ${Number(rec.longitude).toFixed(5)}`;
+    }
+    return 'Lokasi Sekolah';
+  };
+
+  // Ringkasan riwayat presensi, lokasi & scan wajah per masing-masing staff (termasuk KS & Admin)
   const allUsersForSummary = getAllUsers();
   const perStaffSummaries = (() => {
     const targetUsers =
@@ -171,20 +185,27 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
     return targetUsers
       .map((u) => {
         const staffPairs = filteredPairs.filter((p) => p.userId === u.id);
-        const faceScores: Array<{ date: string; type: 'Masuk' | 'Pulang'; score: number }> = [];
+        const faceScores: Array<{ date: string; type: 'Masuk' | 'Pulang'; score: number; location: string }> = [];
+        let lastLocationLabel = '-';
         staffPairs.forEach((p) => {
           if (p.masukRecord) {
+            const locLabel = `${resolveLocationName(p.masukRecord)} (${p.masukRecord.distanceFromLocationMeters ?? 0}m)`;
+            if (lastLocationLabel === '-') lastLocationLabel = locLabel;
             faceScores.push({
               date: p.date,
               type: 'Masuk',
               score: formatFaceScorePct(p.masukRecord.faceSimilarityScore),
+              location: locLabel,
             });
           }
           if (p.pulangRecord) {
+            const locLabel = `${resolveLocationName(p.pulangRecord)} (${p.pulangRecord.distanceFromLocationMeters ?? 0}m)`;
+            if (lastLocationLabel === '-') lastLocationLabel = locLabel;
             faceScores.push({
               date: p.date,
               type: 'Pulang',
               score: formatFaceScorePct(p.pulangRecord.faceSimilarityScore),
+              location: locLabel,
             });
           }
         });
@@ -198,6 +219,7 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
           faceScores: faceScores.slice(0, 4),
           totalScanWajah: faceScores.length,
           avgFaceScore,
+          lastLocationLabel,
         };
       })
       .sort((a, b) => {
@@ -301,94 +323,11 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
               <CalendarCheck className="w-3.5 h-3.5" />
               <span>Histori Kehadiran &bull; Absen Masuk &amp; Pulang</span>
             </div>
-
-      {/* Ringkasan Nama, NIP & Riwayat Kecocokan Wajah Per Pegawai (Termasuk KS & Admin) */}
-      {perStaffSummaries.length > 0 && (
-        <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-3">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <h2 className="text-sm font-extrabold text-slate-900">
-                Riwayat Kecocokan Wajah Per Staf (Kepala Sekolah, Admin &amp; Karyawan)
-              </h2>
-              <p className="text-[11px] text-slate-500">
-                Menampilkan Nama, NIP, peran, jumlah hari hadir, dan skor kecocokan wajah tiap individu pada periode terpilih.
-              </p>
-            </div>
-            <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full self-start sm:self-auto">
-              {perStaffSummaries.length} Pegawai Terdaftar
-            </span>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs border-collapse">
-              <thead>
-                <tr className="bg-slate-50 border-y border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-600">
-                  <th className="py-2.5 px-3">Nama &amp; NIP</th>
-                  <th className="py-2.5 px-3">Peran</th>
-                  <th className="py-2.5 px-3">Total Presensi</th>
-                  <th className="py-2.5 px-3">Rata-Rata Wajah</th>
-                  <th className="py-2.5 px-3">Riwayat Kecocokan Wajah Terbaru</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {perStaffSummaries.map((item, sIdx) => {
-                  const roleMeta = getRoleBadge(item.user.role);
-                  return (
-                    <tr key={`staff-sum-${item.user.id}-${sIdx}`} className="hover:bg-slate-50/70">
-                      <td className="py-2.5 px-3">
-                        <div className="font-bold text-slate-900">{item.user.name}</div>
-                        <div className="text-[11px] font-mono text-slate-500">
-                          NIP: {item.user.nip || '-'}
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3">
-                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border ${roleMeta.cls}`}>
-                          {roleMeta.label}
-                        </span>
-                      </td>
-                      <td className="py-2.5 px-3 font-semibold text-slate-800">
-                        {item.totalHadirHari} Hari ({item.totalScanWajah} Scan)
-                      </td>
-                      <td className="py-2.5 px-3">
-                        {item.avgFaceScore !== null ? (
-                          <span className="font-mono font-extrabold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
-                            {item.avgFaceScore}%
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 italic">Belum ada scan</span>
-                        )}
-                      </td>
-                      <td className="py-2.5 px-3">
-                        {item.faceScores.length > 0 ? (
-                          <div className="flex flex-wrap gap-1">
-                            {item.faceScores.map((sc, scIdx) => (
-                              <span
-                                key={`sc-${item.user.id}-${scIdx}`}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-[10px] font-mono text-slate-700"
-                              >
-                                <span>{sc.date.slice(5)}</span>
-                                <span className="font-sans font-semibold">{sc.type}:</span>
-                                <strong className="text-emerald-700">{sc.score}%</strong>
-                              </span>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className="text-[11px] text-slate-400">-</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
               Riwayat Presensi Masuk &amp; Pulang
             </h1>
             <p className="text-emerald-100/80 text-xs sm:text-sm mt-1 max-w-xl leading-relaxed">
-              Daftar rekapitulasi kehadiran harian yang memuat <strong>Nama</strong>, <strong>NIP</strong>, dan riwayat <strong>Kecocokan Wajah</strong> saat <strong>Absen Masuk</strong> maupun <strong>Absen Pulang</strong> untuk seluruh staf, Admin, dan Kepala Sekolah.
+              Daftar rekapitulasi kehadiran harian yang memuat <strong>Nama</strong>, <strong>NIP</strong>, <strong>Lokasi</strong>, dan riwayat <strong>Scan Wajah</strong> saat <strong>Absen Masuk</strong> maupun <strong>Absen Pulang</strong> untuk seluruh staf, Admin, dan Kepala Sekolah.
             </p>
           </div>
 
@@ -428,6 +367,97 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Ringkasan Nama, NIP, Lokasi & Riwayat Scan Wajah Per Pegawai (Termasuk KS & Admin) */}
+      {perStaffSummaries.length > 0 && (
+        <div className="bg-white rounded-2xl border border-slate-200/80 p-5 shadow-xs space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <h2 className="text-sm font-extrabold text-slate-900">
+                Riwayat Lokasi &amp; Scan Wajah Per Staf (Kepala Sekolah, Admin &amp; Karyawan)
+              </h2>
+              <p className="text-[11px] text-slate-500">
+                Menampilkan Nama, NIP, peran, lokasi presensi, jumlah hadir, dan riwayat skor scan wajah tiap individu.
+              </p>
+            </div>
+            <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full self-start sm:self-auto">
+              {perStaffSummaries.length} Pegawai Terdaftar
+            </span>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-50 border-y border-slate-200 text-[10px] font-bold uppercase tracking-wider text-slate-600">
+                  <th className="py-2.5 px-3">Nama &amp; NIP</th>
+                  <th className="py-2.5 px-3">Peran</th>
+                  <th className="py-2.5 px-3">Lokasi Presensi</th>
+                  <th className="py-2.5 px-3">Total Presensi</th>
+                  <th className="py-2.5 px-3">Rata-Rata Scan Wajah</th>
+                  <th className="py-2.5 px-3">Riwayat Scan Wajah Terbaru</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {perStaffSummaries.map((item, sIdx) => {
+                  const roleMeta = getRoleBadge(item.user.role);
+                  return (
+                    <tr key={`staff-sum-${item.user.id}-${sIdx}`} className="hover:bg-slate-50/70">
+                      <td className="py-2.5 px-3">
+                        <div className="font-bold text-slate-900">{item.user.name}</div>
+                        <div className="text-[11px] font-mono text-slate-500">
+                          NIP: {item.user.nip || '-'}
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3">
+                        <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold border ${roleMeta.cls}`}>
+                          {roleMeta.label}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-slate-700">
+                        <div className="flex items-center gap-1 text-[11px] font-medium">
+                          <MapPin className="w-3 h-3 text-emerald-600 shrink-0" />
+                          <span>{item.lastLocationLabel}</span>
+                        </div>
+                      </td>
+                      <td className="py-2.5 px-3 font-semibold text-slate-800">
+                        {item.totalHadirHari} Hari ({item.totalScanWajah} Scan)
+                      </td>
+                      <td className="py-2.5 px-3">
+                        {item.avgFaceScore !== null ? (
+                          <span className="font-mono font-extrabold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                            {item.avgFaceScore}%
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 italic">Belum ada scan</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-3">
+                        {item.faceScores.length > 0 ? (
+                          <div className="flex flex-wrap gap-1">
+                            {item.faceScores.map((sc, scIdx) => (
+                              <span
+                                key={`sc-${item.user.id}-${scIdx}`}
+                                title={`${sc.date} ${sc.type} • Lokasi: ${sc.location}`}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-[10px] font-mono text-slate-700"
+                              >
+                                <span>{sc.date.slice(5)}</span>
+                                <span className="font-sans font-semibold">{sc.type}:</span>
+                                <strong className="text-emerald-700">{sc.score}%</strong>
+                              </span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span className="text-[11px] text-slate-400">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {actionFeedback && (
         <div
@@ -797,18 +827,23 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                             </span>
                           </div>
 
-                          <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                            <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                            <span>Jarak: <strong>{pair.masukRecord.distanceFromLocationMeters ?? 0} meter</strong> (Sah)</span>
+                          <div className="text-[11px] text-slate-600 flex items-start gap-1">
+                            <MapPin className="w-3 h-3 text-emerald-600 shrink-0 mt-0.5" />
+                            <span>
+                              Lokasi: <strong>{resolveLocationName(pair.masukRecord)}</strong> &bull; Jarak{' '}
+                              <strong>{pair.masukRecord.distanceFromLocationMeters ?? 0} m</strong>{' '}
+                              ({pair.masukRecord.isLocationValid !== false ? 'Sah' : 'Luar Radius'})
+                            </span>
                           </div>
 
-                          <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                            <Camera className="w-3 h-3 text-slate-400 shrink-0" />
+                          <div className="text-[11px] text-slate-600 flex items-center gap-1">
+                            <Camera className="w-3 h-3 text-emerald-600 shrink-0" />
                             <span>
-                              Kecocokan Wajah:{' '}
+                              Riwayat Scan Wajah:{' '}
                               <strong className="text-emerald-700">
                                 {formatFaceScorePct(pair.masukRecord.faceSimilarityScore)}%
-                              </strong>
+                              </strong>{' '}
+                              ({pair.masukRecord.isFaceValid !== false ? 'Cocok ✓' : 'Tidak Cocok'})
                             </span>
                           </div>
                         </div>
@@ -905,18 +940,23 @@ export const AttendanceHistoryView: React.FC<AttendanceHistoryViewProps> = ({
                             </span>
                           </div>
 
-                          <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                            <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                            <span>Jarak: <strong>{pair.pulangRecord.distanceFromLocationMeters ?? 0} meter</strong> (Sah)</span>
+                          <div className="text-[11px] text-slate-600 flex items-start gap-1">
+                            <MapPin className="w-3 h-3 text-indigo-600 shrink-0 mt-0.5" />
+                            <span>
+                              Lokasi: <strong>{resolveLocationName(pair.pulangRecord)}</strong> &bull; Jarak{' '}
+                              <strong>{pair.pulangRecord.distanceFromLocationMeters ?? 0} m</strong>{' '}
+                              ({pair.pulangRecord.isLocationValid !== false ? 'Sah' : 'Luar Radius'})
+                            </span>
                           </div>
 
-                          <div className="text-[11px] text-slate-500 flex items-center gap-1">
-                            <Camera className="w-3 h-3 text-slate-400 shrink-0" />
+                          <div className="text-[11px] text-slate-600 flex items-center gap-1">
+                            <Camera className="w-3 h-3 text-indigo-600 shrink-0" />
                             <span>
-                              Kecocokan Wajah:{' '}
+                              Riwayat Scan Wajah:{' '}
                               <strong className="text-indigo-700">
                                 {formatFaceScorePct(pair.pulangRecord.faceSimilarityScore)}%
-                              </strong>
+                              </strong>{' '}
+                              ({pair.pulangRecord.isFaceValid !== false ? 'Cocok ✓' : 'Tidak Cocok'})
                             </span>
                           </div>
                         </div>

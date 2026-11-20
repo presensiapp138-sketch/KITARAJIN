@@ -298,7 +298,7 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
     });
 
     if (res.success) {
-      setFeedback({ type: 'success', message: res.message });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       closeCameraModal();
       loadData();
     } else {
@@ -309,7 +309,7 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
   const handleToggleStatus = (item: FaceRegistryItem) => {
     const res = toggleFaceStatus(currentUser, item.id);
     if (res.success) {
-      setFeedback({ type: 'success', message: res.message });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -320,7 +320,7 @@ export const FaceRegistryManager: React.FC<FaceRegistryManagerProps> = ({ curren
     if (!deleteTargetItem) return;
     const res = deleteFaceRegistry(currentUser, deleteTargetItem.id);
     if (res.success) {
-      setFeedback({ type: 'success', message: res.message });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });

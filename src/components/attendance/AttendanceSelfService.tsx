@@ -211,8 +211,8 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
       setIsQuickSessionEditOpen(false);
       setResultMessage({
         type: 'success',
-        title: 'Jam Sesi Berhasil Disimpan',
-        description: `Jam ${userSchedule.sessionName || userSchedule.name} berhasil diperbarui: Masuk (${quickCheckInStart} - ${quickCheckInDeadline} WIB), Pulang (${quickCheckOutStart} - ${quickCheckOutEnd} WIB). Langsung aktif di sistem.`,
+        title: 'Tersimpan',
+        description: 'Tersimpan',
       });
     } else {
       setResultMessage({
@@ -710,7 +710,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
         }
       }
 
-      // 6. Simpan Transaksi Presensi (TANPA menyimpan foto - hanya nama, NIP, kecocokan wajah & GPS)
+      // 6. Simpan Transaksi Presensi (TANPA menyimpan foto - hanya nama, NIP, lokasi, kecocokan wajah & GPS)
       const res = recordAttendance({
         userId: currentUser.id,
         nip: currentUser.nip,
@@ -722,6 +722,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
         latitude: deviceCoords ? deviceCoords.lat : 0,
         longitude: deviceCoords ? deviceCoords.lng : 0,
         distanceFromLocationMeters: gpsDistance || 0,
+        locationName: activeLocation?.name || '',
         isLocationValid: isInsideRadius,
         isFaceValid: true,
         faceSimilarityScore: similarityScore,
@@ -815,7 +816,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
               Presensi Kehadiran Civitas Sekolah
             </h1>
             <p className="text-emerald-100/80 text-xs sm:text-sm mt-1 max-w-xl leading-relaxed">
-              Pilih Sesi 1, Sesi 2, atau Sesi 3 sesuai penugasan Anda. Aturan jam mulai masuk dan kepulangan diatur secara terpusat oleh Admin &amp; Kepala Sekolah.
+              Pilih sesi presensi sesuai penugasan Anda untuk melakukan presensi masuk maupun pulang.
             </p>
           </div>
 
@@ -901,7 +902,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                 </div>
               </div>
 
-              {/* PILIH SESI ANDA (LANGSUNG TAMPIL KETIKA KLIK PRESENSI MANDIRI) */}
+              {/* PILIH SESI ANDA (TAMPILKAN PILIHAN SESI SAJA TANPA KETERANGAN WAKTU) */}
               <div className="p-4 bg-slate-50/90 rounded-2xl border border-slate-200 space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200">
                   <div className="flex items-center gap-2">
@@ -911,7 +912,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                         Pilih Sesi Anda
                       </h3>
                       <p className="text-[10px] text-slate-500">
-                        Klik sesi yang Anda ikuti hari ini (Sesi 1, Sesi 2, atau Sesi 3)
+                        Pilih sesi presensi yang Anda ikuti hari ini
                       </p>
                     </div>
                   </div>
@@ -921,10 +922,10 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                         type="button"
                         onClick={() => openQuickSessionEdit(userSchedule)}
                         className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
-                        title="Ubah jam buka presensi masuk & jam pulang untuk sesi ini"
+                        title="Ubah pengaturan sesi ini"
                       >
                         <Sliders className="w-3 h-3" />
-                        <span>Atur Jam {userSchedule?.sessionName || 'Sesi'}</span>
+                        <span>Atur {userSchedule?.sessionName || 'Sesi'}</span>
                       </button>
                     )}
                     <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/80 px-2 py-0.5 rounded-full border border-emerald-200">
@@ -949,9 +950,6 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                         (r) => r.date === todayIso && r.type === 'pulang' && r.sessionId === sch.id
                       );
                       const isSelected = userSchedule?.id === sch.id;
-                      const curTime = `${String(currentNow.getHours()).padStart(2, '0')}:${String(currentNow.getMinutes()).padStart(2, '0')}`;
-                      const isOpenWindow =
-                        curTime >= sch.checkInStart && curTime <= (sch.checkOutEnd || '23:59');
 
                       return (
                         <button
@@ -971,11 +969,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                               </span>
                               {isSelected ? (
                                 <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-white text-emerald-800">
-                                  ✓ Aktif
-                                </span>
-                              ) : isOpenWindow ? (
-                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
-                                  Buka
+                                  ✓ Dipilih
                                 </span>
                               ) : (
                                 <span className="text-[10px] text-slate-400 font-medium">
@@ -985,7 +979,7 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                             </div>
                           </div>
 
-                          {/* Status Presensi Hari Ini */}
+                          {/* Status Presensi Hari Ini (Tanpa Keterangan Waktu Sesi) */}
                           <div className={`mt-2 pt-1.5 border-t text-[10px] space-y-0.5 ${isSelected ? 'border-white/20 text-white' : 'border-slate-100 text-slate-600'}`}>
                             <div className="flex items-center justify-between">
                               <span>Masuk:</span>
@@ -1388,27 +1382,25 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
               )}
             </div>
 
-            {/* Jadwal Sesi Terpilih Card */}
+            {/* Sesi Terpilih Card (Hanya Tampilkan Pilihan Sesi Saja) */}
             <div className="bg-white rounded-3xl border border-slate-200/80 p-5 shadow-xs space-y-3">
               <div className="flex items-center justify-between pb-3 border-b border-slate-100">
                 <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-700">
                   <Clock className="w-4 h-4 text-emerald-600" />
-                  <span>Rincian Sesi Aktif</span>
+                  <span>Sesi Dipilih</span>
                 </div>
                 {userSchedule && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
-                    {userSchedule.sessionName || 'Sesi 1'}
+                  <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+                    {userSchedule.sessionName || userSchedule.name}
                   </span>
                 )}
               </div>
 
               {userSchedule ? (
                 <div className="space-y-3 text-xs">
-                  <div className="font-bold text-slate-900 text-sm">{userSchedule.name}</div>
-
                   <div className="p-3 rounded-2xl bg-emerald-50/70 border border-emerald-100 text-xs space-y-1">
                     <div className="font-bold text-emerald-900 flex items-center justify-between">
-                      <span>Status Sesi</span>
+                      <span>{userSchedule.sessionName || userSchedule.name}</span>
                       <span className="font-bold text-emerald-700 bg-white px-2 py-0.5 rounded-md border border-emerald-200 text-[10px]">
                         ✓ Aktif Digunakan
                       </span>
@@ -1417,15 +1409,9 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                       Sesi ini dipilih untuk presensi Anda hari ini. Gunakan tombol <strong>Masuk</strong> atau <strong>Pulang</strong> lalu verifikasi melalui kamera dan titik lokasi sekolah.
                     </p>
                   </div>
-
-                  {userSchedule.ruleNotes && (
-                    <p className="text-[10px] text-slate-500 italic bg-slate-50 p-2.5 rounded-xl border border-slate-200/50">
-                      &bull; {userSchedule.ruleNotes}
-                    </p>
-                  )}
                 </div>
               ) : (
-                <div className="text-xs text-slate-400">Jadwal belum ditentukan.</div>
+                <div className="text-xs text-slate-400">Sesi belum dipilih.</div>
               )}
             </div>
           </div>
@@ -1678,8 +1664,11 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                                 WIB
                               </div>
                               <div className="text-slate-600 text-[10px]">
-                                Jarak: {pair.masukRecord.distanceFromLocationMeters ?? 0}m &bull; Wajah:{' '}
-                                {Math.round((pair.masukRecord.faceSimilarityScore ?? 0) * 100)}%
+                                Lokasi: <strong>{pair.masukRecord.locationName || activeLocation?.name || 'Lokasi Sekolah'}</strong> ({pair.masukRecord.distanceFromLocationMeters ?? 0}m)
+                              </div>
+                              <div className="text-slate-600 text-[10px]">
+                                Scan Wajah: <strong className="text-emerald-700">{Math.round((Number(pair.masukRecord.faceSimilarityScore ?? 0) <= 1 ? Number(pair.masukRecord.faceSimilarityScore ?? 0) * 100 : Number(pair.masukRecord.faceSimilarityScore ?? 0)))}%</strong>{' '}
+                                ({pair.masukRecord.isFaceValid !== false ? 'Cocok ✓' : 'Tidak Cocok'})
                               </div>
                               {pair.masukRecord.sessionName && (
                                 <div className="text-[10px] text-emerald-700 font-semibold">
@@ -1750,8 +1739,11 @@ export const AttendanceSelfService: React.FC<AttendanceSelfServiceProps> = ({
                                 WIB
                               </div>
                               <div className="text-slate-600 text-[10px]">
-                                Jarak: {pair.pulangRecord.distanceFromLocationMeters ?? 0}m &bull; Wajah:{' '}
-                                {Math.round((pair.pulangRecord.faceSimilarityScore ?? 0) * 100)}%
+                                Lokasi: <strong>{pair.pulangRecord.locationName || activeLocation?.name || 'Lokasi Sekolah'}</strong> ({pair.pulangRecord.distanceFromLocationMeters ?? 0}m)
+                              </div>
+                              <div className="text-slate-600 text-[10px]">
+                                Scan Wajah: <strong className="text-indigo-700">{Math.round((Number(pair.pulangRecord.faceSimilarityScore ?? 0) <= 1 ? Number(pair.pulangRecord.faceSimilarityScore ?? 0) * 100 : Number(pair.pulangRecord.faceSimilarityScore ?? 0)))}%</strong>{' '}
+                                ({pair.pulangRecord.isFaceValid !== false ? 'Cocok ✓' : 'Tidak Cocok'})
                               </div>
                               {pair.pulangRecord.sessionName && (
                                 <div className="text-[10px] text-indigo-700 font-semibold">

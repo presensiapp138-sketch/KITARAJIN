@@ -802,7 +802,7 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                                   </span>
                                 </div>
                                 <div className="text-[10px] text-slate-500">
-                                  Jarak: <strong>{p.masukRecord.distanceFromLocationMeters}m</strong> &bull; Wajah: <strong>{Math.round(p.masukRecord.faceSimilarityScore * 100)}%</strong>
+                                  Lokasi: <strong>{p.masukRecord.locationName || 'Lokasi Sekolah'}</strong> ({p.masukRecord.distanceFromLocationMeters}m) &bull; Scan Wajah: <strong>{Math.round(Number(p.masukRecord.faceSimilarityScore ?? 0) <= 1 ? Number(p.masukRecord.faceSimilarityScore ?? 0) * 100 : Number(p.masukRecord.faceSimilarityScore ?? 0))}%</strong>
                                 </div>
                               </div>
                             </div>
@@ -850,7 +850,7 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                                   </span>
                                 </div>
                                 <div className="text-[10px] text-slate-500">
-                                  Jarak: <strong>{p.pulangRecord.distanceFromLocationMeters}m</strong> &bull; Wajah: <strong>{Math.round(p.pulangRecord.faceSimilarityScore * 100)}%</strong>
+                                  Lokasi: <strong>{p.pulangRecord.locationName || 'Lokasi Sekolah'}</strong> ({p.pulangRecord.distanceFromLocationMeters}m) &bull; Scan Wajah: <strong>{Math.round(Number(p.pulangRecord.faceSimilarityScore ?? 0) <= 1 ? Number(p.pulangRecord.faceSimilarityScore ?? 0) * 100 : Number(p.pulangRecord.faceSimilarityScore ?? 0))}%</strong>
                                 </div>
                               </div>
                             </div>
@@ -997,10 +997,10 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                                 r.isFaceValid ? 'text-emerald-700' : 'text-rose-600'
                               }`}
                             >
-                              {Math.round(r.faceSimilarityScore * 100)}%
+                              {Math.round(Number(r.faceSimilarityScore ?? 0) <= 1 ? Number(r.faceSimilarityScore ?? 0) * 100 : Number(r.faceSimilarityScore ?? 0))}%
                             </span>
                             <span className="text-[10px] text-slate-400">
-                              {r.isFaceValid ? '(Cocok)' : '(Tolak)'}
+                              {r.isFaceValid ? '(Cocok ✓)' : '(Tolak)'}
                             </span>
                           </div>
                         </td>
@@ -1008,9 +1008,10 @@ export const ReportManager: React.FC<ReportManagerProps> = ({ currentUser }) => 
                         <td className="py-3 px-4 whitespace-nowrap">
                           <div className="flex items-center gap-1 text-[11px] text-slate-600">
                             <MapPin className="w-3 h-3 text-emerald-600 shrink-0" />
-                            <span className="font-mono font-bold text-slate-800">{r.distanceFromLocationMeters}m</span>
+                            <span className="font-semibold text-slate-800">{r.locationName || 'Lokasi Sekolah'}</span>
+                            <span className="font-mono font-bold text-slate-700">({r.distanceFromLocationMeters}m)</span>
                             <span className="text-[10px] text-slate-400">
-                              {r.isLocationValid ? '(Radius Valid)' : '(Luar Radius)'}
+                              {r.isLocationValid ? '• Sah' : '• Luar Radius'}
                             </span>
                           </div>
                         </td>

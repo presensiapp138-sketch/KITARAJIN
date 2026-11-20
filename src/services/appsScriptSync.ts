@@ -164,8 +164,123 @@ function markOffline(message = 'Mode Offline — scan disimpan sementara') {
 }
 
 // ============================================================================
-// URL & TOKEN CONFIG (TEMPPEL 1X, TERSIMPAN & TERKUNCI PERMANEN DI BROWSER/VERCEL)
+// URL & TOKEN CONFIG (TEMPEL 1X, TERSIMPAN & TERKUNCI PERMANEN DI BROWSER/VERCEL)
 // ============================================================================
+
+const GAS_IDB_NAME = 'kitarajin_meta_db';
+const GAS_IDB_STORE = 'config';
+const GAS_IDB_KEY = 'gas_config';
+const GAS_CHANNEL_NAME = 'kitarajin_gas_channel';
+
+let gasBroadcastChannel: BroadcastChannel | null = null;
+let hydrateConfigPromise: Promise<boolean> | null = null;
+
+function openGasConfigIdb(): Promise<IDBDatabase | null> {
+  if (typeof indexedDB === 'undefined') return Promise.resolve(null);
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(GAS_IDB_NAME, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(GAS_IDB_STORE)) {
+          db.createObjectStore(GAS_IDB_STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function writeGasConfigToIdb(cfg: AppsScriptConfig): Promise<void> {
+  const db = await openGasConfigIdb();
+  if (!db) return;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(GAS_IDB_STORE, 'readwrite');
+      tx.objectStore(GAS_IDB_STORE).put(cfg, GAS_IDB_KEY);
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => {
+        db.close();
+        resolve();
+      };
+    } catch {
+      db.close();
+      resolve();
+    }
+  });
+}
+
+async function readGasConfigFromIdb(): Promise<AppsScriptConfig | null> {
+  const db = await openGasConfigIdb();
+  if (!db) return null;
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(GAS_IDB_STORE, 'readonly');
+      const req = tx.objectStore(GAS_IDB_STORE).get(GAS_IDB_KEY);
+      req.onsuccess = () => {
+        const val = req.result as Partial<AppsScriptConfig> | undefined;
+        db.close();
+        if (val && val.webAppUrl && val.apiToken) {
+          resolve({
+            webAppUrl: String(val.webAppUrl).trim(),
+            apiToken: String(val.apiToken).trim(),
+            isLocked: true,
+            updatedAt: val.updatedAt,
+          });
+        } else {
+          resolve(null);
+        }
+      };
+      req.onerror = () => {
+        db.close();
+        resolve(null);
+      };
+    } catch {
+      db.close();
+      resolve(null);
+    }
+  });
+}
+
+function getGasBroadcastChannel(): BroadcastChannel | null {
+  if (typeof BroadcastChannel === 'undefined') return null;
+  if (!gasBroadcastChannel) {
+    try {
+      gasBroadcastChannel = new BroadcastChannel(GAS_CHANNEL_NAME);
+      gasBroadcastChannel.onmessage = (ev) => {
+        const data = ev.data as Partial<AppsScriptConfig> | undefined;
+        if (data?.webAppUrl && data?.apiToken) {
+          try {
+            localStorage.setItem(GAS_CONFIG_KEY, JSON.stringify({
+              webAppUrl: String(data.webAppUrl).trim(),
+              apiToken: String(data.apiToken).trim(),
+              isLocked: data.isLocked ?? true,
+              updatedAt: data.updatedAt || new Date().toISOString(),
+            }));
+            setSyncUiState({ isConfigured: true });
+            window.dispatchEvent(new CustomEvent('kitarajin_settings_updated'));
+            pullChangesFromAppsScript(true, false).catch(() => {});
+          } catch {
+            // ignore
+          }
+        }
+      };
+    } catch {
+      gasBroadcastChannel = null;
+    }
+  }
+  return gasBroadcastChannel;
+}
+
+if (typeof window !== 'undefined') {
+  getGasBroadcastChannel();
+}
 
 export function getAppsScriptConfig(): AppsScriptConfig {
   const envUrl = String((import.meta as any).env?.VITE_APPS_SCRIPT_URL || '').trim();
@@ -216,6 +331,85 @@ function clearNonSuperadminStoredSessions(): void {
 export function isAppsScriptConfigured(): boolean {
   const cfg = getAppsScriptConfig();
   return Boolean(cfg.webAppUrl && cfg.apiToken);
+}
+
+/**
+ * Muat dan kunci otomatis konfigurasi Apps Script dari:
+ * 1) Parameter URL (?gas=...), 2) VITE_* Env Vercel, 3) localStorage,
+ * 4) Backup IndexedDB, atau 5) Runtime endpoint /api/gas-config di Vercel.
+ */
+export async function hydrateAppsScriptConfig(): Promise<boolean> {
+  if (hydrateConfigPromise) return hydrateConfigPromise;
+
+  hydrateConfigPromise = (async () => {
+    try {
+      parseAndApplyAutoConnectUrlParams();
+
+      const cur = getAppsScriptConfig();
+      if (cur.webAppUrl && cur.apiToken) {
+        if (!localStorage.getItem(GAS_CONFIG_KEY)) {
+          const lockedCfg: AppsScriptConfig = {
+            webAppUrl: cur.webAppUrl,
+            apiToken: cur.apiToken,
+            isLocked: true,
+            updatedAt: new Date().toISOString(),
+          };
+          localStorage.setItem(GAS_CONFIG_KEY, JSON.stringify(lockedCfg));
+          writeGasConfigToIdb(lockedCfg).catch(() => {});
+        } else {
+          writeGasConfigToIdb({ ...cur, isLocked: true }).catch(() => {});
+        }
+        setSyncUiState({ isConfigured: true });
+        return true;
+      }
+
+      // Coba pulihkan dari IndexedDB (jika PWA/browser membersihkan localStorage)
+      const idbCfg = await readGasConfigFromIdb();
+      if (idbCfg?.webAppUrl && idbCfg?.apiToken) {
+        saveAppsScriptConfig({
+          webAppUrl: idbCfg.webAppUrl,
+          apiToken: idbCfg.apiToken,
+          isLocked: true,
+        });
+        return true;
+      }
+
+      // Coba ambil dari endpoint runtime Vercel /api/gas-config (env APPS_SCRIPT_URL & APPS_SCRIPT_TOKEN)
+      if (typeof fetch !== 'undefined') {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 3500);
+        try {
+          const res = await fetch('/api/gas-config', {
+            method: 'GET',
+            cache: 'no-store',
+            signal: controller.signal,
+          });
+          const ct = res.headers.get('content-type') || '';
+          if (res.ok && ct.includes('application/json')) {
+            const data = await res.json();
+            if (data?.configured && data?.webAppUrl && data?.apiToken) {
+              saveAppsScriptConfig({
+                webAppUrl: String(data.webAppUrl).trim(),
+                apiToken: String(data.apiToken).trim(),
+                isLocked: true,
+              });
+              return true;
+            }
+          }
+        } catch {
+          // ignore if endpoint unavailable
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+
+      return isAppsScriptConfigured();
+    } finally {
+      hydrateConfigPromise = null;
+    }
+  })();
+
+  return hydrateConfigPromise;
 }
 
 /**
@@ -300,6 +494,13 @@ export function saveAppsScriptConfig(params: {
     updatedAt: new Date().toISOString(),
   };
   localStorage.setItem(GAS_CONFIG_KEY, JSON.stringify(next));
+  writeGasConfigToIdb(next).catch(() => {});
+  try {
+    getGasBroadcastChannel()?.postMessage(next);
+  } catch {
+    // ignore broadcast errors
+  }
+
   // Reset versi agar sinkron dua arah segera memuat seluruh data dari Sheet & Drive terbaru
   localStorage.removeItem(LAST_VERSION_KEY);
   localStorage.removeItem(HAS_SYNCED_SHEET_KEY);
@@ -334,6 +535,7 @@ export function setAppsScriptConfigLocked(isLocked: boolean): AppsScriptConfig {
     updatedAt: new Date().toISOString(),
   };
   localStorage.setItem(GAS_CONFIG_KEY, JSON.stringify(next));
+  writeGasConfigToIdb(next).catch(() => {});
   window.dispatchEvent(new CustomEvent('kitarajin_settings_updated'));
   return next;
 }
@@ -355,8 +557,9 @@ export function clearAppsScriptConfig(): void {
 
 export async function postToAppsScript<T = any>(
   payload: Record<string, any>,
-  timeoutMs = 30000
-): Promise<T & { ok: boolean; error?: string; conflict?: boolean; serverRecord?: any }> {
+  timeoutMs = 30000,
+  retries = 2
+): Promise<T & { ok: boolean; error?: string; conflict?: boolean; serverRecord?: any; code?: number }> {
   const cfg = getAppsScriptConfig();
   if (!cfg.webAppUrl || !cfg.apiToken) {
     return {
@@ -365,55 +568,84 @@ export async function postToAppsScript<T = any>(
     } as any;
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let attempt = 0;
+  let lastError: any = null;
 
-  try {
-    const res = await fetch(cfg.webAppUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'text/plain;charset=utf-8',
-      },
-      body: JSON.stringify({
-        token: cfg.apiToken,
-        ...payload,
-      }),
-      redirect: 'follow',
-      cache: 'no-store',
-      signal: controller.signal,
-    });
+  while (attempt <= retries) {
+    attempt++;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    const text = await res.text();
-    let data: any;
     try {
-      data = JSON.parse(text);
-    } catch {
+      const res = await fetch(cfg.webAppUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain;charset=utf-8',
+        },
+        body: JSON.stringify({
+          token: cfg.apiToken,
+          ...payload,
+        }),
+        redirect: 'follow',
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+
+      const text = await res.text();
+      let data: any;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        lastError = {
+          ok: false,
+          error: `Respons Apps Script bukan JSON valid (HTTP ${res.status}). Pastikan Web App di-deploy "Who has access: Anyone".`,
+        };
+        if (attempt <= retries && res.status >= 500 && typeof navigator !== 'undefined' && navigator.onLine) {
+          clearTimeout(timer);
+          await new Promise((r) => setTimeout(r, 400 * attempt + Math.floor(Math.random() * 400)));
+          continue;
+        }
+        return lastError as any;
+      }
+
+      const isServerBusy = res.status === 503 || data?.code === 503;
+      if (isServerBusy && attempt <= retries && typeof navigator !== 'undefined' && navigator.onLine) {
+        clearTimeout(timer);
+        await new Promise((r) => setTimeout(r, 450 * attempt + Math.floor(Math.random() * 550)));
+        continue;
+      }
+
+      if (!res.ok || data?.ok === false) {
+        return {
+          ok: false,
+          ...data,
+          error: data?.error || `HTTP Error ${res.status}`,
+        };
+      }
+
+      return data;
+    } catch (err: any) {
+      const isOnline = typeof navigator === 'undefined' || navigator.onLine;
+      const isTransient = err?.name === 'AbortError' || err?.name === 'TypeError';
+      const allowTimeoutRetry = err?.name === 'TypeError' || payload?.action === 'recordAttendanceBatch';
+      if (attempt <= retries && isOnline && isTransient && allowTimeoutRetry) {
+        clearTimeout(timer);
+        await new Promise((r) => setTimeout(r, 450 * attempt + Math.floor(Math.random() * 500)));
+        continue;
+      }
+      if (err?.name === 'AbortError') {
+        return { ok: false, error: 'Koneksi ke Apps Script melebihi batas waktu (timeout).' } as any;
+      }
       return {
         ok: false,
-        error: `Respons Apps Script bukan JSON valid (HTTP ${res.status}). Pastikan Web App di-deploy "Who has access: Anyone".`,
+        error: err?.message || 'Gagal menghubungi Google Apps Script.',
       } as any;
+    } finally {
+      clearTimeout(timer);
     }
-
-    if (!res.ok || data?.ok === false) {
-      return {
-        ok: false,
-        ...data,
-        error: data?.error || `HTTP Error ${res.status}`,
-      };
-    }
-
-    return data;
-  } catch (err: any) {
-    if (err?.name === 'AbortError') {
-      return { ok: false, error: 'Koneksi ke Apps Script melebihi batas waktu (timeout).' } as any;
-    }
-    return {
-      ok: false,
-      error: err?.message || 'Gagal menghubungi Google Apps Script.',
-    } as any;
-  } finally {
-    clearTimeout(timer);
   }
+
+  return (lastError || { ok: false, error: 'Gagal menghubungi Google Apps Script.' }) as any;
 }
 
 export async function getFromAppsScript<T = any>(
@@ -531,14 +763,14 @@ export function enqueueAttendanceScan(record: AttendanceRecord): void {
     return;
   }
 
-  markSaving(`Mengirim batch presensi (${queue.length} scan)...`);
+  markSaving(`Menyimpan (${queue.length} presensi)...`);
 
-  // Aturan: scan beruntun dari satu perangkat dikirim batch tiap 3 detik
+  // Batch cepat tiap 700ms agar presensi langsung masuk ke database tanpa menumpuk lama
   if (!batchFlushTimer) {
     batchFlushTimer = setTimeout(() => {
       batchFlushTimer = null;
       flushAttendanceBatch().catch(() => {});
-    }, 3000);
+    }, 700);
   }
 }
 
@@ -567,7 +799,7 @@ export async function flushAttendanceBatch(): Promise<{
   }
 
   isFlushingBatch = true;
-  markSaving(`Menyimpan ${queue.length} presensi ke Sheets...`);
+  markSaving(`Menyimpan ${queue.length} presensi...`);
 
   try {
     const cleanItems = queue.map((item) => ({
@@ -579,16 +811,27 @@ export async function flushAttendanceBatch(): Promise<{
       accepted?: AttendanceRecord[];
       rejected?: Array<{ clientId?: string; userId?: string; type?: string; sessionId?: string; reason: string }>;
       version?: string;
-    }>({
-      action: 'recordAttendanceBatch',
-      items: cleanItems,
-    });
+    }>(
+      {
+        action: 'recordAttendanceBatch',
+        items: cleanItems,
+      },
+      30000,
+      3
+    );
 
     if (!res.ok) {
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
         markOffline(`Mode Offline (${queue.length} scan tersimpan sementara)`);
       } else {
-        markSyncError(res.error || 'Gagal mengirim batch presensi.');
+        // Jadwalkan retry otomatis dengan jitter bila server masih sibuk
+        if (!batchFlushTimer) {
+          batchFlushTimer = setTimeout(() => {
+            batchFlushTimer = null;
+            flushAttendanceBatch().catch(() => {});
+          }, 1500 + Math.floor(Math.random() * 1500));
+        }
+        markSaving(`Mengirim ulang antrean (${queue.length} presensi)...`);
       }
       return { ok: false, acceptedCount: 0, rejectedReasons: [] };
     }
@@ -640,8 +883,8 @@ export async function flushAttendanceBatch(): Promise<{
       batchFlushTimer = setTimeout(() => {
         batchFlushTimer = null;
         flushAttendanceBatch().catch(() => {});
-      }, 3000);
-      markSaving(`Mengirim sisa ${remainingQueue.length} scan...`);
+      }, 700);
+      markSaving(`Menyimpan sisa ${remainingQueue.length} scan...`);
     } else {
       markSaved('Tersimpan');
     }
@@ -1310,6 +1553,9 @@ export function startAppsScriptRealtimeSync(onDataUpdated?: (col?: string) => vo
       if (stopped) return;
       if (document.visibilityState !== 'hidden' && isAppsScriptConfigured() && navigator.onLine) {
         pollCount++;
+        if (pollCount % 3 === 0 && getOfflineAttendanceQueue().length > 0 && !isFlushingBatch) {
+          flushAttendanceBatch().catch(() => {});
+        }
         // Poll super cepat tiap ~0.9s (via CacheService <100ms), dan deep check tiap ~11s untuk edit manual langsung di Google Sheets
         await pullChangesFromAppsScript(false, pollCount % 12 === 0).catch(() => {});
       }

@@ -43,16 +43,35 @@ const pwaManifest = {
 };
 
 function devManifestFallbackPlugin(isHmrDisabled: boolean): Plugin | null {
-  if (!isHmrDisabled) return null;
   return {
-    name: 'pwa-manifest-dev-fallback',
+    name: 'kitarajin-dev-endpoints',
     apply: 'serve',
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
-        if (req.url === '/manifest.webmanifest') {
+        if (isHmrDisabled && req.url === '/manifest.webmanifest') {
           res.statusCode = 200;
           res.setHeader('Content-Type', 'application/manifest+json');
           res.end(JSON.stringify(pwaManifest));
+          return;
+        }
+        if (req.url === '/api/gas-config') {
+          const webAppUrl = String(
+            process.env.APPS_SCRIPT_URL || process.env.VITE_APPS_SCRIPT_URL || ''
+          ).trim();
+          const apiToken = String(
+            process.env.APPS_SCRIPT_TOKEN || process.env.VITE_APPS_SCRIPT_TOKEN || ''
+          ).trim();
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-store');
+          res.end(
+            JSON.stringify({
+              configured: Boolean(webAppUrl && apiToken),
+              webAppUrl,
+              apiToken,
+              isLocked: Boolean(webAppUrl && apiToken),
+            })
+          );
           return;
         }
         next();
@@ -78,6 +97,7 @@ export default defineConfig(() => {
         workbox: {
           globPatterns: ['**/*.{js,css,html,ico,png,svg,webp}'],
           maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
+          navigateFallbackDenylist: [/^\/api\//],
         },
       }),
       devManifestFallbackPlugin(isHmrDisabled),

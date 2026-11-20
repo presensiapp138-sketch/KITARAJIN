@@ -166,13 +166,12 @@ export const LocationManager: React.FC<LocationManagerProps> = ({ currentUser })
         setIsQuickSettingGps(false);
 
         if (res.success) {
-          const syncedRadius = activePrimary?.radiusMeters || defaultRadius;
           setLastCalibrationSuccess(true);
           loadData();
 
           setFeedback({
             type: 'success',
-            message: `BERHASIL 100% AKURAT! Titik koordinat sekolah otomatis terisi lengkap dari sensor GPS HP Anda (${latVal}, ${lngVal}). Radius geofence ${syncedRadius}m tersinkron aktif untuk seluruh civitas sekolah!`,
+            message: 'Tersimpan',
           });
         } else {
           setFeedback({ type: 'error', message: res.message });
@@ -335,7 +334,7 @@ export const LocationManager: React.FC<LocationManagerProps> = ({ currentUser })
       });
 
       if (res.success) {
-        setFeedback({ type: 'success', message: res.message });
+        setFeedback({ type: 'success', message: 'Tersimpan' });
         setIsModalOpen(false);
         loadData();
       } else {
@@ -351,7 +350,7 @@ export const LocationManager: React.FC<LocationManagerProps> = ({ currentUser })
       });
 
       if (res.success) {
-        setFeedback({ type: 'success', message: res.message });
+        setFeedback({ type: 'success', message: 'Tersimpan' });
         setIsModalOpen(false);
         loadData();
       } else {
@@ -370,7 +369,7 @@ export const LocationManager: React.FC<LocationManagerProps> = ({ currentUser })
     if (!deleteTargetLoc) return;
     const res = deleteLocation(currentUser, deleteTargetLoc.id);
     if (res.success) {
-      setFeedback({ type: 'success', message: res.message });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });
@@ -381,7 +380,7 @@ export const LocationManager: React.FC<LocationManagerProps> = ({ currentUser })
   const handleToggleActive = (loc: LocationConfig) => {
     const res = updateLocation(currentUser, loc.id, { isActive: !loc.isActive });
     if (res.success) {
-      setFeedback({ type: 'success', message: res.message });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });

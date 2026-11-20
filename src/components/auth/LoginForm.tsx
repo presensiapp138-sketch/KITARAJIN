@@ -24,6 +24,7 @@ import {
   getSuperadminCachedPassword,
 } from '../../services/storage';
 import {
+  hydrateAppsScriptConfig,
   isAppsScriptConfigured,
   pullUsersForLogin,
 } from '../../services/appsScriptSync';
@@ -73,13 +74,16 @@ export const LoginForm: React.FC<LoginFormProps> = ({ onLoginSuccess }) => {
     window.addEventListener('kitarajin_settings_updated', syncState);
     window.addEventListener('storage', syncState);
 
-    if (isAppsScriptConfigured()) {
-      pullUsersForLogin(false)
-        .then(() => {
-          syncState();
-        })
-        .catch(() => {});
-    }
+    hydrateAppsScriptConfig()
+      .then((configured) => {
+        if (configured || isAppsScriptConfigured()) {
+          return pullUsersForLogin(false).then(() => {
+            syncState();
+          });
+        }
+        return undefined;
+      })
+      .catch(() => {});
 
     return () => {
       window.removeEventListener('kitarajin_cloud_sync', syncState);

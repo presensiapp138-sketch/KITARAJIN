@@ -99,7 +99,7 @@ export const DepartmentManager: React.FC<DepartmentManagerProps> = ({ currentUse
         headName: formHeadName,
       });
       if (res.success) {
-        setFeedback({ type: 'success', message: res.message });
+        setFeedback({ type: 'success', message: 'Tersimpan' });
         setIsModalOpen(false);
         loadData();
       } else {
@@ -113,7 +113,7 @@ export const DepartmentManager: React.FC<DepartmentManagerProps> = ({ currentUse
         headName: formHeadName,
       });
       if (res.success) {
-        setFeedback({ type: 'success', message: res.message });
+        setFeedback({ type: 'success', message: 'Tersimpan' });
         setIsModalOpen(false);
         loadData();
       } else {
@@ -132,7 +132,7 @@ export const DepartmentManager: React.FC<DepartmentManagerProps> = ({ currentUse
     if (!deleteTarget) return;
     const res = deleteDepartment(currentUser, deleteTarget.id);
     if (res.success) {
-      setFeedback({ type: 'success', message: res.message });
+      setFeedback({ type: 'success', message: 'Tersimpan' });
       loadData();
     } else {
       setFeedback({ type: 'error', message: res.message });
